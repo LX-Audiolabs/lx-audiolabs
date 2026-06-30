@@ -30,3 +30,6 @@ shared-analysis = { path = "../shared-analysis", features = ["dev-logging"] }
 shared-ui       = { path = "../shared-ui" }
 tracing         = "0.1"
 realfft         = "3"
+
+[dev-dependencies]
+truce-test = "1.0.1"

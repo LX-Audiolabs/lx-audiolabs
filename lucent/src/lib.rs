@@ -511,3 +511,25 @@ truce::plugin! {
     logic: Lucent,
     params: LucentParams,
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::Plugin;
+    use std::time::Duration;
+
+    #[test]
+    fn renders_pass_through() {
+        use truce_test::{InputSource, assertions, driver};
+        let result = driver!(Plugin)
+            .duration(Duration::from_millis(50))
+            .input(InputSource::Constant(0.5))
+            .run();
+        assertions::assert_no_nans(&result);
+        assertions::assert_nonzero(&result);
+    }
+
+    #[test]
+    fn state_round_trips() {
+        truce_test::assert_state_round_trip::<Plugin>();
+    }
+}
