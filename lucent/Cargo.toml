@@ -12,6 +12,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 [features]
 default = ["clap"]
 clap = ["dep:truce-clap", "dep:clap-sys"]
+vst3 = ["dep:truce-vst3"]
 shell = ["truce/shell", "clap"]
 
 [dependencies]
@@ -19,6 +20,7 @@ truce        = { version = "1.0.1", default-features = false }
 truce-core   = "1.0.1"
 truce-params = "1.0.1"
 truce-clap   = { version = "1.0.1", optional = true }
+truce-vst3   = { version = "1.0.1", optional = true }
 truce-loader = "1.0.1"
 truce-iced   = "1.0.1"
 clap-sys     = { version = "0.5", optional = true }

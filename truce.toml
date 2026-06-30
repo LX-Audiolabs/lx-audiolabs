@@ -10,6 +10,7 @@ bundle_id = "lucent-relay"
 crate = "lucent-relay"
 category = "effect"
 fourcc = "LRly"
+vst3_subcategory = "Analyzer"
 description = "FFT spectrum relay — sends track analysis to Lucent"
 
 [[plugin]]
@@ -18,4 +19,5 @@ bundle_id = "lucent"
 crate = "lucent"
 category = "effect"
 fourcc = "Lcnt"
+vst3_subcategory = "Analyzer"
 description = "FFT spectrum analyser — receives relay data and displays masking"
