@@ -99,6 +99,14 @@ impl IcedPlugin<crate::LucentParams> for LucentEditor {
         })
     }
 
+    /// Streaming editor: spectrum, masking, resonance, relay feeds, and
+    /// meters update continuously from the audio thread via lock-free
+    /// atomics and shared state. The idle gate would otherwise skip
+    /// frames when no UI input or param change fires.
+    fn needs_redraw(&self) -> bool {
+        true
+    }
+
     fn update(
         &mut self,
         message: Message<LucentMsg>,
