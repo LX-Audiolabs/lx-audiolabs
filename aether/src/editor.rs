@@ -66,7 +66,6 @@ pub enum AetherMsg {
     Tick,
     EqTextChanged(usize, usize, String),
     EqTypeCycled(usize),
-    AdvanceField(usize, usize),
     BlendGesture(Gesture),
     CfAngleGesture(Gesture),
     CfAmountGesture(Gesture),
@@ -171,16 +170,11 @@ impl AetherEditor {
     fn band_column<'a>(&'a self, i: usize, _params: &'a ParamCache<AetherParams>) -> Element<'a, Message<AetherMsg>> {
         let tcode = self.eq_type(i);
         let lbl = |t: &'static str| Text::new(t).size(9).font(bold_font()).color(Color::from_rgb(0.6, 0.6, 0.6));
-        let next_f = |f: usize| -> Message<AetherMsg> {
-            if f < 2 { Message::Plugin(AetherMsg::AdvanceField(i, f + 1)) }
-            else if i < 4 { Message::Plugin(AetherMsg::AdvanceField(i + 1, 0)) }
-            else { Message::Plugin(AetherMsg::AdvanceField(0, 0)) }
-        };
         column![
             toggle_button(crate::band_type_label(tcode), tcode != 0, Message::Plugin(AetherMsg::EqTypeCycled(i))),
-            column![lbl("FREQ"), text_input("", &self.eq_text[i][0]).id(eq_field_id(i, 0)).on_input(move |s| Message::Plugin(AetherMsg::EqTextChanged(i, 0, s))).on_submit(next_f(0)).size(12).padding(4).width(Length::Fixed(56.0))].spacing(2).align_x(Alignment::Center),
-            column![lbl("GAIN"), text_input("", &self.eq_text[i][1]).id(eq_field_id(i, 1)).on_input(move |s| Message::Plugin(AetherMsg::EqTextChanged(i, 1, s))).on_submit(next_f(1)).size(12).padding(4).width(Length::Fixed(56.0))].spacing(2).align_x(Alignment::Center),
-            column![lbl("Q"),    text_input("", &self.eq_text[i][2]).id(eq_field_id(i, 2)).on_input(move |s| Message::Plugin(AetherMsg::EqTextChanged(i, 2, s))).on_submit(next_f(2)).size(12).padding(4).width(Length::Fixed(56.0))].spacing(2).align_x(Alignment::Center),
+            column![lbl("FREQ"), text_input("", &self.eq_text[i][0]).id(eq_field_id(i, 0)).on_input(move |s| Message::Plugin(AetherMsg::EqTextChanged(i, 0, s))).size(12).padding(4).width(Length::Fixed(56.0))].spacing(2).align_x(Alignment::Center),
+            column![lbl("GAIN"), text_input("", &self.eq_text[i][1]).id(eq_field_id(i, 1)).on_input(move |s| Message::Plugin(AetherMsg::EqTextChanged(i, 1, s))).size(12).padding(4).width(Length::Fixed(56.0))].spacing(2).align_x(Alignment::Center),
+            column![lbl("Q"),    text_input("", &self.eq_text[i][2]).id(eq_field_id(i, 2)).on_input(move |s| Message::Plugin(AetherMsg::EqTextChanged(i, 2, s))).size(12).padding(4).width(Length::Fixed(56.0))].spacing(2).align_x(Alignment::Center),
         ].spacing(4).align_x(Alignment::Center).into()
     }
 
@@ -190,21 +184,30 @@ impl AetherEditor {
     }
     fn set_eq_freq(&self, i: usize, v: f32, ctx: &PluginContext<AetherParams>) {
         let ids = [AetherParamsParamId::Eq1Freq, AetherParamsParamId::Eq2Freq, AetherParamsParamId::Eq3Freq, AetherParamsParamId::Eq4Freq, AetherParamsParamId::Eq5Freq];
-        ctx.begin_edit(ids[i]); ctx.set_param(ids[i], v as f64); ctx.end_edit(ids[i]);
+        // log(20, 20000): normalized = log10(v/20) / log10(1000)
+        let norm = ((v / 20.0).log10() / 3.0).clamp(0.0, 1.0);
+        ctx.begin_edit(ids[i]); ctx.set_param(ids[i], norm as f64); ctx.end_edit(ids[i]);
     }
     fn set_eq_gain(&self, i: usize, v: f32, ctx: &PluginContext<AetherParams>) {
         let ids = [AetherParamsParamId::Eq1Gain, AetherParamsParamId::Eq2Gain, AetherParamsParamId::Eq3Gain, AetherParamsParamId::Eq4Gain, AetherParamsParamId::Eq5Gain];
-        ctx.begin_edit(ids[i]); ctx.set_param(ids[i], v as f64); ctx.end_edit(ids[i]);
+        // linear(-12, 12): normalized = (v+12)/24
+        let norm = ((v + 12.0) / 24.0).clamp(0.0, 1.0);
+        ctx.begin_edit(ids[i]); ctx.set_param(ids[i], norm as f64); ctx.end_edit(ids[i]);
     }
     fn set_eq_q(&self, i: usize, v: f32, ctx: &PluginContext<AetherParams>) {
         let ids = [AetherParamsParamId::Eq1Q, AetherParamsParamId::Eq2Q, AetherParamsParamId::Eq3Q, AetherParamsParamId::Eq4Q, AetherParamsParamId::Eq5Q];
-        ctx.begin_edit(ids[i]); ctx.set_param(ids[i], v as f64); ctx.end_edit(ids[i]);
+        // log(0.3, 8): normalized = log10(v/0.3) / log10(8/0.3)
+        let norm = ((v / 0.3).log10() / (8.0_f32 / 0.3).log10()).clamp(0.0, 1.0);
+        ctx.begin_edit(ids[i]); ctx.set_param(ids[i], norm as f64); ctx.end_edit(ids[i]);
     }
 
-    fn gesture_f(&self, id: AetherParamsParamId, g: Gesture, ctx: &PluginContext<AetherParams>) {
+    fn gesture_f(&self, id: AetherParamsParamId, g: Gesture, min: f32, max: f32, ctx: &PluginContext<AetherParams>) {
         match g {
             Gesture::Start => ctx.begin_edit(id),
-            Gesture::Change(v) => { ctx.set_param(id, v as f64); }
+            Gesture::Change(v) => {
+                let norm = if max > min { ((v - min) / (max - min)).clamp(0.0, 1.0) } else { 0.0 };
+                ctx.set_param(id, norm as f64);
+            }
             Gesture::End => ctx.end_edit(id),
         }
     }
@@ -217,11 +220,11 @@ impl AetherEditor {
             self.set_eq_q(i, qdef, ctx);
             self.set_eq_type(i, tdef, ctx);
         }
-        ctx.begin_edit(AetherParamsParamId::Blend); ctx.set_param(AetherParamsParamId::Blend, 100.0); ctx.end_edit(AetherParamsParamId::Blend);
-        ctx.begin_edit(AetherParamsParamId::CfAngle); ctx.set_param(AetherParamsParamId::CfAngle, 60.0); ctx.end_edit(AetherParamsParamId::CfAngle);
+        ctx.begin_edit(AetherParamsParamId::Blend); ctx.set_param(AetherParamsParamId::Blend, 1.0); ctx.end_edit(AetherParamsParamId::Blend);
+        ctx.begin_edit(AetherParamsParamId::CfAngle); ctx.set_param(AetherParamsParamId::CfAngle, (30.0/45.0) as f64); ctx.end_edit(AetherParamsParamId::CfAngle);
         ctx.begin_edit(AetherParamsParamId::CfAmount); ctx.set_param(AetherParamsParamId::CfAmount, 0.0); ctx.end_edit(AetherParamsParamId::CfAmount);
         ctx.begin_edit(AetherParamsParamId::CfRealism); ctx.set_param(AetherParamsParamId::CfRealism, 0.0); ctx.end_edit(AetherParamsParamId::CfRealism);
-        ctx.begin_edit(AetherParamsParamId::Gain); ctx.set_param(AetherParamsParamId::Gain, 0.0); ctx.end_edit(AetherParamsParamId::Gain);
+        ctx.begin_edit(AetherParamsParamId::Gain); ctx.set_param(AetherParamsParamId::Gain, 0.5); ctx.end_edit(AetherParamsParamId::Gain);
     }
 
     fn apply_profile(&self, p: &AetherProfile, ctx: &PluginContext<AetherParams>) {
@@ -230,11 +233,11 @@ impl AetherEditor {
             self.set_eq_freq(i, fc, ctx); self.set_eq_gain(i, gn, ctx); self.set_eq_q(i, q, ctx);
             self.set_eq_type(i, tc, ctx);
         }
-        ctx.begin_edit(AetherParamsParamId::Blend); ctx.set_param(AetherParamsParamId::Blend, p.blend as f64); ctx.end_edit(AetherParamsParamId::Blend);
-        ctx.begin_edit(AetherParamsParamId::CfAngle); ctx.set_param(AetherParamsParamId::CfAngle, p.cf_angle as f64); ctx.end_edit(AetherParamsParamId::CfAngle);
-        ctx.begin_edit(AetherParamsParamId::CfAmount); ctx.set_param(AetherParamsParamId::CfAmount, p.cf_amount as f64); ctx.end_edit(AetherParamsParamId::CfAmount);
+        ctx.begin_edit(AetherParamsParamId::Blend); ctx.set_param(AetherParamsParamId::Blend, (p.blend as f64 / 100.0).clamp(0.0, 1.0)); ctx.end_edit(AetherParamsParamId::Blend);
+        ctx.begin_edit(AetherParamsParamId::CfAngle); ctx.set_param(AetherParamsParamId::CfAngle, ((p.cf_angle as f64 - 30.0) / 45.0).clamp(0.0, 1.0)); ctx.end_edit(AetherParamsParamId::CfAngle);
+        ctx.begin_edit(AetherParamsParamId::CfAmount); ctx.set_param(AetherParamsParamId::CfAmount, (p.cf_amount as f64 / 100.0).clamp(0.0, 1.0)); ctx.end_edit(AetherParamsParamId::CfAmount);
         ctx.begin_edit(AetherParamsParamId::CfRealism); ctx.set_param(AetherParamsParamId::CfRealism, p.cf_realism as f64 / 2.0); ctx.end_edit(AetherParamsParamId::CfRealism);
-        ctx.begin_edit(AetherParamsParamId::Gain); ctx.set_param(AetherParamsParamId::Gain, p.gain as f64); ctx.end_edit(AetherParamsParamId::Gain);
+        ctx.begin_edit(AetherParamsParamId::Gain); ctx.set_param(AetherParamsParamId::Gain, ((p.gain as f64 + 12.0) / 24.0).clamp(0.0, 1.0)); ctx.end_edit(AetherParamsParamId::Gain);
     }
 
     fn build_profile(&self) -> AetherProfile {
@@ -470,20 +473,17 @@ impl IcedPlugin<AetherParams> for AetherEditor {
                     }
                 }
             }
-            AetherMsg::AdvanceField(b, f) => {
-                return truce_iced::iced::widget::operation::focus(eq_field_id(b, f));
-            }
             AetherMsg::EqTypeCycled(i) => { let n = (self.eq_type(i) + 1) % 4; self.set_eq_type(i, n, ctx); }
-            AetherMsg::BlendGesture(g) => self.gesture_f(AetherParamsParamId::Blend, g, ctx),
-            AetherMsg::CfAngleGesture(g) => self.gesture_f(AetherParamsParamId::CfAngle, g, ctx),
-            AetherMsg::CfAmountGesture(g) => self.gesture_f(AetherParamsParamId::CfAmount, g, ctx),
+            AetherMsg::BlendGesture(g) => self.gesture_f(AetherParamsParamId::Blend, g, 0.0, 100.0, ctx),
+            AetherMsg::CfAngleGesture(g) => self.gesture_f(AetherParamsParamId::CfAngle, g, 30.0, 75.0, ctx),
+            AetherMsg::CfAmountGesture(g) => self.gesture_f(AetherParamsParamId::CfAmount, g, 0.0, 100.0, ctx),
             AetherMsg::RealismCycled => {
                 let n = (self.params.cf_realism.value_i32() + 1) % 3;
                 ctx.begin_edit(AetherParamsParamId::CfRealism);
                 ctx.set_param(AetherParamsParamId::CfRealism, n as f64 / 2.0);
                 ctx.end_edit(AetherParamsParamId::CfRealism);
             }
-            AetherMsg::GainGesture(g) => self.gesture_f(AetherParamsParamId::Gain, g, ctx),
+            AetherMsg::GainGesture(g) => self.gesture_f(AetherParamsParamId::Gain, g, -12.0, 12.0, ctx),
             AetherMsg::BypassToggled => {
                 let v = !self.params.bypass.value();
                 ctx.begin_edit(AetherParamsParamId::Bypass);
