@@ -506,4 +506,29 @@ mod tests {
 
     #[test]
     fn state_round_trips() { truce_test::assert_state_round_trip::<Plugin>(); }
+
+    #[test]
+    fn screenshot_shape_tab() {
+        truce_test::screenshot!(Plugin, "screenshots/aurum-shape.png")
+            .tolerance(200)
+            .run();
+    }
+
+    #[test]
+    fn screenshot_color_tab() {
+        truce_test::screenshot!(Plugin, "screenshots/aurum-color.png")
+            .set_param(crate::AurumParamsParamId::CompSplit, 0.5)
+            .set_param(crate::AurumParamsParamId::SatDriveStereo, 0.3)
+            .tolerance(200)
+            .run();
+    }
+
+    #[test]
+    fn screenshot_limit_tab() {
+        truce_test::screenshot!(Plugin, "screenshots/aurum-limit.png")
+            .set_param(crate::AurumParamsParamId::MbThreshMidLo, 0.4)
+            .set_param(crate::AurumParamsParamId::LimCeiling, 0.7)
+            .tolerance(200)
+            .run();
+    }
 }
