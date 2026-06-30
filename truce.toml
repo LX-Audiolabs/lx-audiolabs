@@ -1,0 +1,21 @@
+[vendor]
+name = "LX Audiolabs"
+id = "be.lxndr"
+url = "https://lx-audiolabs.be"
+au_manufacturer = "LxAL"
+
+[[plugin]]
+name = "Lucent Relay"
+bundle_id = "lucent-relay"
+crate = "lucent-relay"
+category = "effect"
+fourcc = "LRly"
+description = "FFT spectrum relay — sends track analysis to Lucent"
+
+[[plugin]]
+name = "Lucent"
+bundle_id = "lucent"
+crate = "lucent"
+category = "effect"
+fourcc = "Lcnt"
+description = "FFT spectrum analyser — receives relay data and displays masking"

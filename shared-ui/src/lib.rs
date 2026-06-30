@@ -1,9 +1,6 @@
-pub mod editor;
 pub mod widgets;
 pub mod canvas;
 pub mod panels;
-
-pub use editor::{create_lx_editor, LxEditorApp, CommonEditorState, gui_timer};
 
 pub use widgets::{
     bold_font, reset_slider, toggle_button, monitor_strip, header_brand,
