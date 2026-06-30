@@ -1,12 +1,14 @@
-name: Build All Plugins (truce)
+name: Build All Plugins
 
 on:
   workflow_dispatch:
 
 jobs:
-  build-linux:
-    name: Linux (x86_64)
-    runs-on: ubuntu-latest
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -17,60 +19,34 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target/
-          key: linux-all-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: linux-all-
-      - name: Install system deps
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y pkg-config libx11-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev libwayland-dev libxkbcommon-dev libegl-dev libgl-dev
+          key: ${{ runner.os }}-all-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-all-
+
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -y && sudo apt-get install -y pkg-config libx11-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev libwayland-dev libxkbcommon-dev libegl-dev libgl-dev
+
       - name: Install cargo-truce
         run: cargo install --git https://github.com/truce-audio/truce cargo-truce
+
       - name: Build all plugins
         run: cargo truce build --clap
-      - name: Bundle for distribution
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
         run: |
           mkdir -p dist
-          for clap in target/bundles/*.clap; do
-            name=$(basename "$clap" .clap | sed 's/ /-/g')
-            cp "$clap" "dist/${name}-linux-x86_64.clap"
-          done
-          ls -la dist/
-      - uses: actions/upload-artifact@v5
-        with:
-          name: clap-plugins-linux
-          path: dist/*.clap
-          if-no-files-found: error
+          cp target/bundles/*.clap dist/
 
-  build-windows:
-    name: Windows (x86_64)
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/cache@v5
-        with:
-          path: |
-            ~\.cargo\registry\index
-            ~\.cargo\registry\cache
-            ~\.cargo\git\db
-            target\
-          key: windows-all-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: windows-all-
-      - name: Install cargo-truce
-        run: cargo install --git https://github.com/truce-audio/truce cargo-truce
-      - name: Build all plugins
-        run: cargo truce build --clap
-      - name: Bundle for distribution
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Get-ChildItem target\bundles\*.clap | ForEach-Object {
-            $name = $_.BaseName -replace ' ', '-'
-            Copy-Item $_.FullName "dist\$name-win-x86_64.clap"
-          }
-          Get-ChildItem dist\
+          Copy-Item target\bundles\*.clap dist\
+
       - uses: actions/upload-artifact@v5
         with:
-          name: clap-plugins-win
-          path: dist\*.clap
+          name: clap-plugins-${{ runner.os == 'Linux' && 'linux' || 'win' }}
+          path: dist/
           if-no-files-found: error

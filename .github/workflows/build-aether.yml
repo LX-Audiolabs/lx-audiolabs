@@ -15,9 +15,11 @@ on:
       - 'Cargo.lock'
 
 jobs:
-  build-linux:
-    name: Linux (x86_64)
-    runs-on: ubuntu-latest
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -28,56 +30,41 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target/
-          key: linux-aether-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: linux-aether-
-      - name: Install system deps
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y pkg-config libx11-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev libwayland-dev libxkbcommon-dev libegl-dev libgl-dev
-      - name: Install cargo-truce
-        run: cargo install --git https://github.com/truce-audio/truce cargo-truce
-      - name: Build Aether
-        run: cargo truce build --clap -p aether
-      - name: Rename for distribution
-        run: |
-          VERSION=$(grep '^version' aether/Cargo.toml | head -1 | sed 's/.*= "\(.*\)"/\1/')
-          mkdir -p dist
-          cp target/bundles/Aether.clap "dist/Aether-v${VERSION}-linux-x86_64.clap"
-          echo "Built: dist/Aether-v${VERSION}-linux-x86_64.clap"
-      - uses: actions/upload-artifact@v5
-        with:
-          name: Aether-linux
-          path: dist/Aether-v*-linux-x86_64.clap
-          if-no-files-found: error
+          key: ${{ runner.os }}-aether-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-aether-
 
-  build-windows:
-    name: Windows (x86_64)
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/cache@v5
-        with:
-          path: |
-            ~\.cargo\registry\index
-            ~\.cargo\registry\cache
-            ~\.cargo\git\db
-            target\
-          key: windows-aether-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: windows-aether-
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -y && sudo apt-get install -y pkg-config libx11-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev libwayland-dev libxkbcommon-dev libegl-dev libgl-dev
+
       - name: Install cargo-truce
         run: cargo install --git https://github.com/truce-audio/truce cargo-truce
+
       - name: Build Aether
         run: cargo truce build --clap -p aether
-      - name: Rename for distribution
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: echo "version=$(grep '^version' aether/Cargo.toml | head -1 | sed 's/.*\"\(.*\)\"/\1/')" >> $GITHUB_OUTPUT
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist
+          cp target/bundles/Aether.clap dist/
+          echo "Aether v${{ steps.version.outputs.version }} — Linux"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $version = (Select-String -Path aether\Cargo.toml -Pattern '^version' | Select-Object -First 1).Line -replace '.*"(.*)"', '$1'
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item target\bundles\Aether.clap "dist\Aether-v$version-win-x86_64.clap"
-          Write-Host "Built: dist\Aether-v$version-win-x86_64.clap"
+          Copy-Item target\bundles\Aether.clap dist\
+          Write-Host "Aether v${{ steps.version.outputs.version }} — Windows"
+
       - uses: actions/upload-artifact@v5
         with:
-          name: Aether-win
-          path: dist/Aether-v*-win-x86_64.clap
+          name: Aether-v${{ steps.version.outputs.version }}-${{ runner.os == 'Linux' && 'linux' || 'win' }}
+          path: dist/
           if-no-files-found: error
