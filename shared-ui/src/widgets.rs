@@ -1,11 +1,11 @@
-use nice_plug_iced::iced::widget::canvas::{self, Geometry, Path, Stroke};
-use nice_plug_iced::iced::widget::{button, canvas as canvas_widget, column, container, row, Space, Text};
-use nice_plug_iced::iced::{Alignment, Background, Border, Color, Element, Font, Length, Point, Rectangle};
-use nice_plug_iced::iced::mouse::Cursor;
+use truce_iced::iced::widget::canvas::{self, Geometry, Path, Stroke};
+use truce_iced::iced::widget::{button, canvas as canvas_widget, column, container, row, Space, Text};
+use truce_iced::iced::{Alignment, Border, Color, Element, Font, Length, Point, Rectangle};
+use truce_iced::iced::mouse::Cursor;
 
 pub fn bold_font() -> Font {
     Font {
-        weight: nice_plug_iced::iced::font::Weight::Bold,
+        weight: truce_iced::iced::font::Weight::Bold,
         ..Font::default()
     }
 }
@@ -106,7 +106,7 @@ pub fn toggle_button<'a, Message: Clone + 'a>(
                 Color::from_rgb(0.15, 0.15, 0.15)
             };
             button::Style {
-                background: Some(Background::Color(bg)),
+                background: Some(bg.into()),
                 text_color: Color::WHITE,
                 border: Border { radius: 2.0.into(), ..Default::default() },
                 ..Default::default()
@@ -147,7 +147,7 @@ pub fn header_brand<'a, Message: 'a>(
             .width(Length::Fixed(1.0))
             .height(Length::Fixed(28.0))
             .style(|_theme| container::Style {
-                background: Some(Background::Color(Color::from_rgb(0.18, 0.22, 0.22))),
+                background: Some(Color::from_rgb(0.18, 0.22, 0.22).into()),
                 ..Default::default()
             }),
         Space::new().width(Length::Fixed(14.0)),
@@ -168,13 +168,11 @@ pub fn output_tools_strip<'a, Message: Clone + 'a>(
         .on_press(on_reset)
         .padding([5, 8])
         .style(|_theme, status| button::Style {
-            background: Some(Background::Color(
-                if status == button::Status::Hovered {
-                    Color::from_rgb(0.4, 0.1, 0.1)
-                } else {
-                    Color::from_rgb(0.2, 0.08, 0.08)
-                }
-            )),
+            background: Some((if status == button::Status::Hovered {
+                Color::from_rgb(0.4, 0.1, 0.1)
+            } else {
+                Color::from_rgb(0.2, 0.08, 0.08)
+            }).into()),
             text_color: Color::from_rgb(0.9, 0.5, 0.5),
             border: Border { radius: 2.0.into(), ..Default::default() },
             ..Default::default()
@@ -225,7 +223,7 @@ pub fn auto_loud_button<'a, Message: Clone + 'a>(
     let btn = if disabled { btn_base } else { btn_base.on_press(on_press) };
     btn.padding([3, 6])
         .style(move |_theme, _status| button::Style {
-            background: Some(Background::Color(if disabled { Color::from_rgb(0.1, 0.1, 0.1) } else { color })),
+            background: Some((if disabled { Color::from_rgb(0.1, 0.1, 0.1) } else { color }).into()),
             text_color: if disabled { Color::from_rgb(0.35, 0.35, 0.35) } else { Color::WHITE },
             border: Border { radius: 2.0.into(), ..Default::default() },
             ..Default::default()
@@ -695,13 +693,13 @@ impl<'a, Message: Clone> canvas::Program<Message> for KnobProgram<'a, Message> {
     fn update(
         &self,
         state: &mut KnobState,
-        event: &nice_plug_iced::iced::Event,
+        event: &truce_iced::iced::Event,
         bounds: Rectangle,
         cursor: Cursor,
-    ) -> Option<nice_plug_iced::iced::widget::Action<Message>> {
-        use nice_plug_iced::iced::Event;
-        use nice_plug_iced::iced::mouse;
-        use nice_plug_iced::iced::widget::Action;
+    ) -> Option<truce_iced::iced::widget::Action<Message>> {
+        use truce_iced::iced::Event;
+        use truce_iced::iced::mouse;
+        use truce_iced::iced::widget::Action;
 
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
@@ -753,8 +751,8 @@ impl<'a, Message: Clone> canvas::Program<Message> for KnobProgram<'a, Message> {
     fn draw(
         &self,
         _state: &KnobState,
-        renderer: &nice_plug_iced::iced::Renderer,
-        _theme: &nice_plug_iced::iced::Theme,
+        renderer: &truce_iced::iced::Renderer,
+        _theme: &truce_iced::iced::Theme,
         bounds: Rectangle,
         cursor: Cursor,
     ) -> Vec<Geometry> {
@@ -832,13 +830,13 @@ impl<'a, Message: Clone> canvas::Program<Message> for KnobProgram<'a, Message> {
         state: &KnobState,
         bounds: Rectangle,
         cursor: Cursor,
-    ) -> nice_plug_iced::iced::mouse::Interaction {
+    ) -> truce_iced::iced::mouse::Interaction {
         // Pointer (finger) over the knob, matching the sliders — not the
         // resize/grab cursor which read as "drag to resize".
         if state.dragging || cursor.is_over(bounds) {
-            nice_plug_iced::iced::mouse::Interaction::Pointer
+            truce_iced::iced::mouse::Interaction::Pointer
         } else {
-            nice_plug_iced::iced::mouse::Interaction::default()
+            truce_iced::iced::mouse::Interaction::default()
         }
     }
 }
@@ -867,13 +865,13 @@ impl<'a, Message: Clone> canvas::Program<Message> for SliderProgram<'a, Message>
     fn update(
         &self,
         state: &mut SliderState,
-        event: &nice_plug_iced::iced::Event,
+        event: &truce_iced::iced::Event,
         bounds: Rectangle,
         cursor: Cursor,
-    ) -> Option<nice_plug_iced::iced::widget::Action<Message>> {
-        use nice_plug_iced::iced::Event;
-        use nice_plug_iced::iced::mouse;
-        use nice_plug_iced::iced::widget::Action;
+    ) -> Option<truce_iced::iced::widget::Action<Message>> {
+        use truce_iced::iced::Event;
+        use truce_iced::iced::mouse;
+        use truce_iced::iced::widget::Action;
 
         let val_at = |x: f32| {
             let n = ((x - bounds.x) / bounds.width).clamp(0.0, 1.0);
@@ -924,8 +922,8 @@ impl<'a, Message: Clone> canvas::Program<Message> for SliderProgram<'a, Message>
     fn draw(
         &self,
         _state: &SliderState,
-        renderer: &nice_plug_iced::iced::Renderer,
-        _theme: &nice_plug_iced::iced::Theme,
+        renderer: &truce_iced::iced::Renderer,
+        _theme: &truce_iced::iced::Theme,
         bounds: Rectangle,
         cursor: Cursor,
     ) -> Vec<Geometry> {
@@ -938,7 +936,7 @@ impl<'a, Message: Clone> canvas::Program<Message> for SliderProgram<'a, Message>
 
         // Track background.
         frame.fill(
-            &Path::rectangle(Point::new(0.0, ty), nice_plug_iced::iced::Size::new(w, track_h)),
+            &Path::rectangle(Point::new(0.0, ty), truce_iced::iced::Size::new(w, track_h)),
             Color::from_rgb(0.22, 0.22, 0.22),
         );
 
@@ -953,7 +951,7 @@ impl<'a, Message: Clone> canvas::Program<Message> for SliderProgram<'a, Message>
             };
             if width > 0.5 {
                 frame.fill(
-                    &Path::rectangle(Point::new(left, ty), nice_plug_iced::iced::Size::new(width, track_h)),
+                    &Path::rectangle(Point::new(left, ty), truce_iced::iced::Size::new(width, track_h)),
                     amber,
                 );
             }
@@ -961,7 +959,7 @@ impl<'a, Message: Clone> canvas::Program<Message> for SliderProgram<'a, Message>
             let fill_w = (self.value_norm * w).clamp(0.0, w);
             if fill_w > 0.5 {
                 frame.fill(
-                    &Path::rectangle(Point::new(0.0, ty), nice_plug_iced::iced::Size::new(fill_w, track_h)),
+                    &Path::rectangle(Point::new(0.0, ty), truce_iced::iced::Size::new(fill_w, track_h)),
                     amber,
                 );
             }
@@ -989,11 +987,11 @@ impl<'a, Message: Clone> canvas::Program<Message> for SliderProgram<'a, Message>
         state: &SliderState,
         bounds: Rectangle,
         cursor: Cursor,
-    ) -> nice_plug_iced::iced::mouse::Interaction {
+    ) -> truce_iced::iced::mouse::Interaction {
         if state.dragging || cursor.is_over(bounds) {
-            nice_plug_iced::iced::mouse::Interaction::Pointer
+            truce_iced::iced::mouse::Interaction::Pointer
         } else {
-            nice_plug_iced::iced::mouse::Interaction::default()
+            truce_iced::iced::mouse::Interaction::default()
         }
     }
 }
@@ -1020,13 +1018,13 @@ impl<'a, Message: Clone> canvas::Program<Message> for HSliderProgram<'a, Message
     fn update(
         &self,
         state: &mut HSliderState,
-        event: &nice_plug_iced::iced::Event,
+        event: &truce_iced::iced::Event,
         bounds: Rectangle,
         cursor: Cursor,
-    ) -> Option<nice_plug_iced::iced::widget::Action<Message>> {
-        use nice_plug_iced::iced::Event;
-        use nice_plug_iced::iced::mouse;
-        use nice_plug_iced::iced::widget::Action;
+    ) -> Option<truce_iced::iced::widget::Action<Message>> {
+        use truce_iced::iced::Event;
+        use truce_iced::iced::mouse;
+        use truce_iced::iced::widget::Action;
 
         let val_at = |x: f32| {
             let n = ((x - bounds.x) / bounds.width).clamp(0.0, 1.0);
@@ -1074,8 +1072,8 @@ impl<'a, Message: Clone> canvas::Program<Message> for HSliderProgram<'a, Message
     fn draw(
         &self,
         _state: &HSliderState,
-        renderer: &nice_plug_iced::iced::Renderer,
-        _theme: &nice_plug_iced::iced::Theme,
+        renderer: &truce_iced::iced::Renderer,
+        _theme: &truce_iced::iced::Theme,
         bounds: Rectangle,
         cursor: Cursor,
     ) -> Vec<Geometry> {
@@ -1087,7 +1085,7 @@ impl<'a, Message: Clone> canvas::Program<Message> for HSliderProgram<'a, Message
 
         // Track background.
         frame.fill(
-            &Path::rectangle(Point::new(0.0, ty), nice_plug_iced::iced::Size::new(w, track_h)),
+            &Path::rectangle(Point::new(0.0, ty), truce_iced::iced::Size::new(w, track_h)),
             Color::from_rgb(0.22, 0.22, 0.22),
         );
         let amber = Color::from_rgb(1.0, 0.45, 0.1);
@@ -1097,7 +1095,7 @@ impl<'a, Message: Clone> canvas::Program<Message> for HSliderProgram<'a, Message
             let (left, width) = if hx_val >= cx { (cx, hx_val - cx) } else { (hx_val, cx - hx_val) };
             if width > 0.5 {
                 frame.fill(
-                    &Path::rectangle(Point::new(left, ty), nice_plug_iced::iced::Size::new(width, track_h)),
+                    &Path::rectangle(Point::new(left, ty), truce_iced::iced::Size::new(width, track_h)),
                     amber,
                 );
             }
@@ -1105,7 +1103,7 @@ impl<'a, Message: Clone> canvas::Program<Message> for HSliderProgram<'a, Message
             let fill_w = (self.value_norm * w).clamp(0.0, w);
             if fill_w > 0.5 {
                 frame.fill(
-                    &Path::rectangle(Point::new(0.0, ty), nice_plug_iced::iced::Size::new(fill_w, track_h)),
+                    &Path::rectangle(Point::new(0.0, ty), truce_iced::iced::Size::new(fill_w, track_h)),
                     amber,
                 );
             }
@@ -1132,11 +1130,11 @@ impl<'a, Message: Clone> canvas::Program<Message> for HSliderProgram<'a, Message
         state: &HSliderState,
         bounds: Rectangle,
         cursor: Cursor,
-    ) -> nice_plug_iced::iced::mouse::Interaction {
+    ) -> truce_iced::iced::mouse::Interaction {
         if state.dragging || cursor.is_over(bounds) {
-            nice_plug_iced::iced::mouse::Interaction::Pointer
+            truce_iced::iced::mouse::Interaction::Pointer
         } else {
-            nice_plug_iced::iced::mouse::Interaction::default()
+            truce_iced::iced::mouse::Interaction::default()
         }
     }
 }

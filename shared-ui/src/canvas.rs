@@ -1,7 +1,7 @@
-use nice_plug_iced::iced::widget::canvas::{self, Geometry, Path, Stroke};
-use nice_plug_iced::iced::widget::{button, canvas as canvas_widget, column, container, Text};
-use nice_plug_iced::iced::{Alignment, Background, Color, Element, Length, Padding, Point, Rectangle, Size};
-use nice_plug_iced::iced::mouse::Cursor;
+use truce_iced::iced::widget::canvas::{self, Geometry, Path, Stroke};
+use truce_iced::iced::widget::{button, canvas as canvas_widget, column, container, Text};
+use truce_iced::iced::{Alignment, Color, Element, Length, Padding, Point, Rectangle, Size};
+use truce_iced::iced::mouse::Cursor;
 use std::sync::{Arc, Mutex};
 
 use crate::widgets::bold_font;
@@ -132,8 +132,8 @@ impl<Message> canvas::Program<Message> for CorrelationCanvas {
     fn draw(
         &self,
         _state: &Self::State,
-        renderer: &nice_plug_iced::iced::Renderer,
-        _theme: &nice_plug_iced::iced::Theme,
+        renderer: &truce_iced::iced::Renderer,
+        _theme: &truce_iced::iced::Theme,
         bounds: Rectangle,
         _cursor: Cursor,
     ) -> Vec<Geometry> {
@@ -208,8 +208,8 @@ impl<Message> canvas::Program<Message> for BalanceCanvas {
     fn draw(
         &self,
         _state: &Self::State,
-        renderer: &nice_plug_iced::iced::Renderer,
-        _theme: &nice_plug_iced::iced::Theme,
+        renderer: &truce_iced::iced::Renderer,
+        _theme: &truce_iced::iced::Theme,
         bounds: Rectangle,
         _cursor: Cursor,
     ) -> Vec<Geometry> {
@@ -261,11 +261,11 @@ pub fn balance_correlation_block<'a, Message: 'a>(
     correlation: f32,
 ) -> Element<'a, Message> {
     column![
-        nice_plug_iced::iced::widget::Text::new("Balance").size(10).color(Color::from_rgb(0.6, 0.6, 0.6)),
+        truce_iced::iced::widget::Text::new("Balance").size(10).color(Color::from_rgb(0.6, 0.6, 0.6)),
         canvas_widget(BalanceCanvas::new(balance))
             .width(Length::Fill)
             .height(Length::Fixed(20.0)),
-        nice_plug_iced::iced::widget::Text::new("Correlation").size(10).color(Color::from_rgb(0.6, 0.6, 0.6)),
+        truce_iced::iced::widget::Text::new("Correlation").size(10).color(Color::from_rgb(0.6, 0.6, 0.6)),
         canvas_widget(CorrelationCanvas::new(correlation))
             .width(Length::Fill)
             .height(Length::Fixed(20.0)),
@@ -295,8 +295,8 @@ impl<Message> canvas::Program<Message> for OutputPeakCanvas {
     fn draw(
         &self,
         _state: &Self::State,
-        renderer: &nice_plug_iced::iced::Renderer,
-        _theme: &nice_plug_iced::iced::Theme,
+        renderer: &truce_iced::iced::Renderer,
+        _theme: &truce_iced::iced::Theme,
         bounds: Rectangle,
         _cursor: Cursor,
     ) -> Vec<Geometry> {
@@ -361,8 +361,8 @@ impl<Message> canvas::Program<Message> for StereoMeterCanvas {
     fn draw(
         &self,
         _state: &Self::State,
-        renderer: &nice_plug_iced::iced::Renderer,
-        _theme: &nice_plug_iced::iced::Theme,
+        renderer: &truce_iced::iced::Renderer,
+        _theme: &truce_iced::iced::Theme,
         bounds: Rectangle,
         _cursor: Cursor,
     ) -> Vec<Geometry> {
@@ -405,7 +405,7 @@ impl<Message> canvas::Program<Message> for StereoMeterCanvas {
                 content: label_txt.to_string(),
                 position: Point::new(x + bar_w * 0.5 - 3.0, h - 14.0),
                 color: Color::from_rgba(1.0, 1.0, 1.0, 0.45),
-                size: nice_plug_iced::iced::Pixels(9.0),
+                size: truce_iced::iced::Pixels(9.0),
                 ..canvas::Text::default()
             });
         }
@@ -424,7 +424,7 @@ impl<Message> canvas::Program<Message> for StereoMeterCanvas {
                 content: label.to_string(),
                 position: Point::new(gx + 1.0, y - 5.0),
                 color: Color::from_rgba(1.0, 1.0, 1.0, 0.60),
-                size: nice_plug_iced::iced::Pixels(8.0),
+                size: truce_iced::iced::Pixels(8.0),
                 ..canvas::Text::default()
             });
         }
@@ -468,13 +468,13 @@ pub fn output_level_block<'a, Message: Clone + 'a>(
 ) -> Element<'a, Message> {
     let fmt_db = |v: f32| if v <= -60.0 { "-inf".to_string() } else { format!("{:.1}", v) };
 
-    let readout_row = nice_plug_iced::iced::widget::row![
+    let readout_row = truce_iced::iced::widget::row![
         button(Text::new(fmt_db(hold_l)).size(11).font(bold_font()))
             .on_press(on_reset.clone())
             .padding(Padding::ZERO)
             .style(|_theme, status| {
                 let c = if status == button::Status::Hovered { Color::WHITE } else { Color::from_rgb(1.0, 0.45, 0.1) };
-                button::Style { background: Some(Background::Color(Color::TRANSPARENT)), text_color: c, ..Default::default() }
+                button::Style { background: Some(Color::TRANSPARENT.into()), text_color: c, ..Default::default() }
             }),
         container(Text::new("dB").size(10).font(bold_font()).color(Color::from_rgb(0.8, 0.8, 0.8)))
             .width(Length::Fill)
@@ -484,7 +484,7 @@ pub fn output_level_block<'a, Message: Clone + 'a>(
             .padding(Padding::ZERO)
             .style(|_theme, status| {
                 let c = if status == button::Status::Hovered { Color::WHITE } else { Color::from_rgb(1.0, 0.45, 0.1) };
-                button::Style { background: Some(Background::Color(Color::TRANSPARENT)), text_color: c, ..Default::default() }
+                button::Style { background: Some(Color::TRANSPARENT.into()), text_color: c, ..Default::default() }
             }),
     ]
     .align_y(Alignment::Center)
@@ -519,8 +519,8 @@ impl<Message> canvas::Program<Message> for GoniometerCanvas {
     fn draw(
         &self,
         _state: &Self::State,
-        renderer: &nice_plug_iced::iced::Renderer,
-        _theme: &nice_plug_iced::iced::Theme,
+        renderer: &truce_iced::iced::Renderer,
+        _theme: &truce_iced::iced::Theme,
         bounds: Rectangle,
         _cursor: Cursor,
     ) -> Vec<Geometry> {
@@ -594,7 +594,7 @@ impl<Message> canvas::Program<Message> for GoniometerCanvas {
             content: format!("{}{:.2}", sign, corr),
             position: Point::new(dot_x + 7.0, dot_y - 5.5),
             color: Color::from_rgb(1.0, 0.65, 0.3),
-            size: nice_plug_iced::iced::Pixels(9.0),
+            size: truce_iced::iced::Pixels(9.0),
             ..canvas::Text::default()
         });
 
@@ -692,8 +692,8 @@ impl<Message> canvas::Program<Message> for SpectrumCanvas {
     fn draw(
         &self,
         _state: &Self::State,
-        renderer: &nice_plug_iced::iced::Renderer,
-        _theme: &nice_plug_iced::iced::Theme,
+        renderer: &truce_iced::iced::Renderer,
+        _theme: &truce_iced::iced::Theme,
         bounds: Rectangle,
         _cursor: Cursor,
     ) -> Vec<Geometry> {

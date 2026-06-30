@@ -1,5 +1,5 @@
-use nice_plug_iced::iced::widget::{button, column, container, row, scrollable, Space, Text, text_input};
-use nice_plug_iced::iced::{Alignment, Background, Border, Color, Element, Length, Padding};
+use truce_iced::iced::widget::{button, column, container, row, scrollable, Space, Text, text_input};
+use truce_iced::iced::{Alignment, Border, Color, Element, Length, Padding};
 
 use crate::widgets::bold_font;
 
@@ -20,18 +20,18 @@ pub fn ai_preset_panel<'a, Message: Clone + 'a>(
 ) -> Element<'a, Message> {
     let title_text = Text::new(title)
         .font(bold_font())
-        .size(nice_plug_iced::iced::Pixels(14.0))
+        .size(truce_iced::iced::Pixels(14.0))
         .color(Color::WHITE);
 
     let name_input = text_input("Preset Name...", current_name_input)
         .on_input(on_name_change)
         .padding(6)
-        .size(nice_plug_iced::iced::Pixels(13.0))
+        .size(truce_iced::iced::Pixels(13.0))
         .style(|_theme, status| {
-            let focused = matches!(status, nice_plug_iced::iced::widget::text_input::Status::Focused { .. });
-            nice_plug_iced::iced::widget::text_input::Style {
-                background: Background::Color(Color::WHITE),
-                border: Border { color: Color::from_rgb(if focused { 0.55 } else { 0.4 }, if focused { 0.55 } else { 0.4 }, if focused { 0.55 } else { 0.4 }), width: 1.0, radius: nice_plug_iced::iced::border::Radius::from(3.0) },
+            let focused = matches!(status, truce_iced::iced::widget::text_input::Status::Focused { .. });
+            truce_iced::iced::widget::text_input::Style {
+                background: Color::WHITE.into(),
+                border: Border { color: Color::from_rgb(if focused { 0.55 } else { 0.4 }, if focused { 0.55 } else { 0.4 }, if focused { 0.55 } else { 0.4 }), width: 1.0, radius: truce_iced::iced::border::Radius::from(3.0) },
                 icon: Color::from_rgb(0.4, 0.4, 0.4),
                 placeholder: Color::from_rgb(0.5, 0.5, 0.5),
                 value: Color::BLACK,
@@ -39,12 +39,12 @@ pub fn ai_preset_panel<'a, Message: Clone + 'a>(
             }
         });
 
-    let btn_style = |_theme: &nice_plug_iced::iced::Theme, status: button::Status| {
+    let btn_style = |_theme: &truce_iced::iced::Theme, status: button::Status| {
         let bg = if status == button::Status::Hovered { Color::from_rgb(0.25, 0.25, 0.25) } else { Color::from_rgb(0.18, 0.18, 0.18) };
         button::Style {
-            background: Some(Background::Color(bg)),
+            background: Some(bg.into()),
             text_color: Color::WHITE,
-            border: Border { color: Color::from_rgb(0.3, 0.3, 0.3), width: 1.0, radius: nice_plug_iced::iced::border::Radius::from(3.0) },
+            border: Border { color: Color::from_rgb(0.3, 0.3, 0.3), width: 1.0, radius: truce_iced::iced::border::Radius::from(3.0) },
             ..Default::default()
         }
     };
@@ -53,7 +53,7 @@ pub fn ai_preset_panel<'a, Message: Clone + 'a>(
     let btn_pad = Padding { top: 7.0, bottom: 1.0, left: 0.0, right: 0.0 };
     let btn_h = Length::Fixed(34.0);
 
-    let snap_btn_style = move |_theme: &nice_plug_iced::iced::Theme, status: button::Status| {
+    let snap_btn_style = move |_theme: &truce_iced::iced::Theme, status: button::Status| {
         let (bg, border_col) = if snap_blink {
             (Color::from_rgb(0.55, 0.38, 0.05), Color::from_rgb(0.8, 0.55, 0.1))
         } else if status == button::Status::Hovered {
@@ -62,19 +62,19 @@ pub fn ai_preset_panel<'a, Message: Clone + 'a>(
             (Color::from_rgb(0.18, 0.18, 0.18), Color::from_rgb(0.3, 0.3, 0.3))
         };
         button::Style {
-            background: Some(Background::Color(bg)),
+            background: Some(bg.into()),
             // SNAP is the special feature → text always amber (brighter while blinking).
             text_color: if snap_blink { Color::from_rgb(1.0, 0.85, 0.3) } else { Color::from_rgb(1.0, 0.55, 0.1) },
-            border: Border { color: border_col, width: 1.0, radius: nice_plug_iced::iced::border::Radius::from(3.0) },
+            border: Border { color: border_col, width: 1.0, radius: truce_iced::iced::border::Radius::from(3.0) },
             ..Default::default()
         }
     };
     // SNAP + Vault buttons share the size-12 bold style (cross-plugin convention).
-    let btn_copy = button(Text::new(snap_label).font(bold_font()).size(nice_plug_iced::iced::Pixels(12.0)).width(Length::Fill).align_x(Alignment::Center))
+    let btn_copy = button(Text::new(snap_label).font(bold_font()).size(truce_iced::iced::Pixels(12.0)).width(Length::Fill).align_x(Alignment::Center))
         .on_press(on_copy_prompt).style(snap_btn_style).width(Length::Fill).height(btn_h).padding(btn_pad);
-    let btn_save = button(Text::new("SAVE").font(bold_font()).size(nice_plug_iced::iced::Pixels(12.0)).width(Length::Fill).align_x(Alignment::Center))
+    let btn_save = button(Text::new("SAVE").font(bold_font()).size(truce_iced::iced::Pixels(12.0)).width(Length::Fill).align_x(Alignment::Center))
         .on_press(on_save_vault).style(btn_style).width(Length::Fill).height(btn_h).padding(btn_pad);
-    let btn_setup = button(Text::new("VAULT SETUP").font(bold_font()).size(nice_plug_iced::iced::Pixels(12.0)).width(Length::Fill).align_x(Alignment::Center))
+    let btn_setup = button(Text::new("VAULT SETUP").font(bold_font()).size(truce_iced::iced::Pixels(12.0)).width(Length::Fill).align_x(Alignment::Center))
         .on_press(on_vault_setup).style(btn_style).width(Length::Fill).height(btn_h).padding(btn_pad);
 
     let mut controls = column![
@@ -85,14 +85,14 @@ pub fn ai_preset_panel<'a, Message: Clone + 'a>(
 
     if let Some(warn) = warning {
         let warn_el = container(
-            Text::new(warn).size(nice_plug_iced::iced::Pixels(9.0))
+            Text::new(warn).size(truce_iced::iced::Pixels(9.0))
                 .color(Color::from_rgb(1.0, 0.75, 0.2)),
         )
         .padding(Padding { top: 4.0, bottom: 4.0, left: 6.0, right: 6.0 })
         .width(Length::Fill)
         .style(|_theme| container::Style {
-            background: Some(Background::Color(Color::from_rgb(0.18, 0.13, 0.04))),
-            border: Border { color: Color::from_rgb(0.4, 0.3, 0.1), width: 1.0, radius: nice_plug_iced::iced::border::Radius::from(2.0) },
+            background: Some(Color::from_rgb(0.18, 0.13, 0.04).into()),
+            border: Border { color: Color::from_rgb(0.4, 0.3, 0.1), width: 1.0, radius: truce_iced::iced::border::Radius::from(2.0) },
             ..Default::default()
         });
         controls = controls.push(warn_el);
@@ -106,7 +106,7 @@ pub fn ai_preset_panel<'a, Message: Clone + 'a>(
     if !factory_items.is_empty() {
         let mut factory_col = column![
             Text::new("── Factory ──────────────────")
-                .size(nice_plug_iced::iced::Pixels(11.0))
+                .size(truce_iced::iced::Pixels(11.0))
                 .font(bold_font())
                 .color(Color::from_rgb(1.0, 0.55, 0.15))
         ].spacing(4);
@@ -123,7 +123,7 @@ pub fn ai_preset_panel<'a, Message: Clone + 'a>(
     if !user_items.is_empty() {
         let mut user_col = column![
             Text::new("── Vault Presets ────────────")
-                .size(nice_plug_iced::iced::Pixels(11.0))
+                .size(truce_iced::iced::Pixels(11.0))
                 .font(bold_font())
                 .color(Color::from_rgb(1.0, 0.55, 0.15))
         ].spacing(4);
@@ -148,7 +148,7 @@ pub fn ai_preset_panel<'a, Message: Clone + 'a>(
     .height(Length::Fill)
     .padding(10.0)
     .style(|_theme| container::Style {
-        background: Some(Background::Color(Color::from_rgb(0.1, 0.1, 0.1))),
+        background: Some(Color::from_rgb(0.1, 0.1, 0.1).into()),
         border: Border {
             color: Color::from_rgb(0.18, 0.18, 0.18),
             width: 1.0,
@@ -166,13 +166,13 @@ pub fn vault_setup_box<'a, Message: Clone + 'a>(
     on_save: Message,
     on_cancel: Message,
 ) -> Element<'a, Message> {
-    fn btn_style(_theme: &nice_plug_iced::iced::Theme, status: button::Status) -> button::Style {
+    fn btn_style(_theme: &truce_iced::iced::Theme, status: button::Status) -> button::Style {
         let bg = if status == button::Status::Hovered {
             Color::from_rgb(0.25, 0.25, 0.25)
         } else {
             Color::from_rgb(0.15, 0.15, 0.15)
         };
-        button::Style { background: Some(Background::Color(bg)), text_color: Color::WHITE, ..Default::default() }
+        button::Style { background: Some(bg.into()), text_color: Color::WHITE, ..Default::default() }
     }
 
     container(
@@ -200,7 +200,7 @@ pub fn vault_setup_box<'a, Message: Clone + 'a>(
     )
     .padding(20)
     .style(|_theme| container::Style {
-        background: Some(Background::Color(Color::from_rgb(0.15, 0.15, 0.15))),
+        background: Some(Color::from_rgb(0.15, 0.15, 0.15).into()),
         border: Border {
             color: Color::from_rgb(0.3, 0.3, 0.3),
             width: 1.0,
@@ -216,7 +216,7 @@ pub fn preset_list_item<'a, Message: Clone + 'a>(
     is_selected: bool,
     on_load: Message,
 ) -> Element<'a, Message> {
-    let name_btn = button(Text::new(format!("> {}", name)).font(bold_font()).size(nice_plug_iced::iced::Pixels(13.0)))
+    let name_btn = button(Text::new(format!("> {}", name)).font(bold_font()).size(truce_iced::iced::Pixels(13.0)))
         .style(move |_theme, status| {
             let color = if is_selected {
                 Color::from_rgb(1.0, 0.45, 0.1)
@@ -230,7 +230,7 @@ pub fn preset_list_item<'a, Message: Clone + 'a>(
             } else {
                 Color::TRANSPARENT
             };
-            button::Style { background: Some(Background::Color(bg)), text_color: color, ..Default::default() }
+            button::Style { background: Some(bg.into()), text_color: color, ..Default::default() }
         })
         .on_press(on_load)
         .width(Length::Fill);
