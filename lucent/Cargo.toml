@@ -12,6 +12,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 [features]
 default = ["clap"]
 clap = ["dep:truce-clap", "dep:clap-sys"]
+shell = ["truce/shell", "clap"]
 
 [dependencies]
 truce        = { version = "1.0.1", default-features = false }
