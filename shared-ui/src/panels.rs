@@ -196,7 +196,7 @@ pub fn vault_setup_box<'a, Message: Clone + 'a>(
             .spacing(10)
         ]
         .spacing(15)
-        .max_width(400.0)
+        .max_width(600.0)
     )
     .padding(20)
     .style(|_theme| container::Style {
