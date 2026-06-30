@@ -30,3 +30,12 @@ category = "effect"
 fourcc = "Aeth"
 vst3_subcategory = "Equalizer"
 description = "Headphone monitoring corrector — Harman 5-band EQ + crossfeed"
+
+[[plugin]]
+name = "Aurum"
+bundle_id = "aurum"
+crate = "aurum"
+category = "effect"
+fourcc = "Aurm"
+vst3_subcategory = "Mastering"
+description = "All-In-One Mastering — M/S EQ, Comp, Sat, MB Limiter, TP Limiter"
