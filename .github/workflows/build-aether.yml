@@ -1,7 +1,18 @@
-name: Build All Plugins (truce)
+name: Build Aether (CI)
 
 on:
   workflow_dispatch:
+  push:
+    branches: [develop]
+    paths:
+      - 'aether/**'
+      - 'shared-dsp/**'
+      - 'shared-analysis/**'
+      - 'shared-ui/**'
+      - 'shared-vault/**'
+      - 'truce.toml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
 
 jobs:
   build-linux:
@@ -17,28 +28,26 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target/
-          key: linux-all-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: linux-all-
+          key: linux-aether-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: linux-aether-
       - name: Install system deps
         run: |
           sudo apt-get update -y
           sudo apt-get install -y pkg-config libx11-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev libwayland-dev libxkbcommon-dev libegl-dev libgl-dev
       - name: Install cargo-truce
         run: cargo install --git https://github.com/truce-audio/truce cargo-truce
-      - name: Build all plugins
-        run: cargo truce build --clap
-      - name: Bundle for distribution
+      - name: Build Aether
+        run: cargo truce build --clap -p aether
+      - name: Rename for distribution
         run: |
+          VERSION=$(grep '^version' aether/Cargo.toml | head -1 | sed 's/.*= "\(.*\)"/\1/')
           mkdir -p dist
-          for clap in target/bundles/*.clap; do
-            name=$(basename "$clap" .clap | sed 's/ /-/g')
-            cp "$clap" "dist/${name}-linux-x86_64.clap"
-          done
-          ls -la dist/
+          cp target/bundles/Aether.clap "dist/Aether-v${VERSION}-linux-x86_64.clap"
+          echo "Built: dist/Aether-v${VERSION}-linux-x86_64.clap"
       - uses: actions/upload-artifact@v5
         with:
-          name: clap-plugins-linux
-          path: dist/*.clap
+          name: Aether-linux
+          path: dist/Aether-v*-linux-x86_64.clap
           if-no-files-found: error
 
   build-windows:
@@ -54,23 +63,21 @@ jobs:
             ~\.cargo\registry\cache
             ~\.cargo\git\db
             target\
-          key: windows-all-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: windows-all-
+          key: windows-aether-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: windows-aether-
       - name: Install cargo-truce
         run: cargo install --git https://github.com/truce-audio/truce cargo-truce
-      - name: Build all plugins
-        run: cargo truce build --clap
-      - name: Bundle for distribution
+      - name: Build Aether
+        run: cargo truce build --clap -p aether
+      - name: Rename for distribution
         shell: pwsh
         run: |
+          $version = (Select-String -Path aether\Cargo.toml -Pattern '^version' | Select-Object -First 1).Line -replace '.*"(.*)"', '$1'
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Get-ChildItem target\bundles\*.clap | ForEach-Object {
-            $name = $_.BaseName -replace ' ', '-'
-            Copy-Item $_.FullName "dist\$name-win-x86_64.clap"
-          }
-          Get-ChildItem dist\
+          Copy-Item target\bundles\Aether.clap "dist\Aether-v$version-win-x86_64.clap"
+          Write-Host "Built: dist\Aether-v$version-win-x86_64.clap"
       - uses: actions/upload-artifact@v5
         with:
-          name: clap-plugins-win
-          path: dist\*.clap
+          name: Aether-win
+          path: dist/Aether-v*-win-x86_64.clap
           if-no-files-found: error
