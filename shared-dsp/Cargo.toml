@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 ebur128 = "0.1"
+# ponytail: ebur128 removed — unused

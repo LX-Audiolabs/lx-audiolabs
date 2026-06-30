@@ -4,6 +4,7 @@ members = [
     "shared-analysis",
     "shared-vault",
     "shared-ui",
+    "shm-hub",
     "lucent",
     "lucent-relay",
 ]

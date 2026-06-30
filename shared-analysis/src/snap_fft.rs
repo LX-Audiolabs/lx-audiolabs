@@ -20,7 +20,6 @@ pub struct SnapFFT {
     fft_hann: Vec<f32>,
     fft_windowed: Vec<f32>,
     fft_output_cache: Vec<realfft::num_complex::Complex<f32>>,
-    fft_tilt_cache: Vec<f32>,  // Pre-computed tilt values per bin
 
     // SNAP accumulators (one per mode)
     snap_accum: [Vec<f32>; 3],  // [Stereo, Mono, Delta]
@@ -43,19 +42,6 @@ impl SnapFFT {
             })
             .collect::<Vec<_>>();
 
-        // Pre-compute tilt cache (frequency-dependent magnitude boost for brightness)
-        let sr = 48000.0;
-        let fft_tilt_cache = (0..n_bins)
-            .map(|k| {
-                let freq = k as f32 * sr / fft_size as f32;
-                if freq > 20.0 {
-                    4.5 * (freq / 1000.0).log2()
-                } else {
-                    0.0
-                }
-            })
-            .collect::<Vec<_>>();
-
         Self {
             fft_planner: realfft::RealFftPlanner::new(),
             fft_input: vec![0.0f32; fft_size],
@@ -63,7 +49,6 @@ impl SnapFFT {
             fft_hann,
             fft_windowed: vec![0.0f32; fft_size],
             fft_output_cache: vec![realfft::num_complex::Complex::new(0.0f32, 0.0f32); n_bins + 1],
-            fft_tilt_cache,
             snap_accum: [
                 vec![-90.0f32; SPECTRUM_BINS],
                 vec![-90.0f32; SPECTRUM_BINS],
@@ -87,8 +72,10 @@ impl SnapFFT {
         }
     }
 
-    /// Compute FFT and return frame (dB magnitudes)
-    pub fn compute_fft(&mut self, _sample_rate: f32) -> [f32; SPECTRUM_BINS] {
+    /// Compute FFT and return frame (dB magnitudes).
+    /// `sample_rate` must be the actual host sample rate — tilt is computed
+    /// per bin so the pink-noise reference stays flat independent of sample rate.
+    pub fn compute_fft(&mut self, sample_rate: f32) -> [f32; SPECTRUM_BINS] {
         // Window
         for i in 0..self.fft_input.len() {
             self.fft_windowed[i] = self.fft_input[i] * self.fft_hann[i];
@@ -98,7 +85,7 @@ impl SnapFFT {
         let fft = self.fft_planner.plan_fft_forward(self.fft_input.len());
         let _ = fft.process(&mut self.fft_windowed, &mut self.fft_output_cache);
 
-        // Convert to dB
+        // Convert to dB with per-bin tilt (4.5 dB/octave pink-noise compensation)
         let fft_size = self.fft_input.len() as f32;
         let inv_norm = 2.0 / fft_size;
         let mut frame = [-90.0f32; SPECTRUM_BINS];
@@ -110,9 +97,8 @@ impl SnapFFT {
             } else {
                 -90.0
             };
-            // Use cached tilt (computed once in new(), valid for 48kHz)
-            // TODO: Update tilt cache if sample_rate changes significantly
-            let tilt = self.fft_tilt_cache[k];
+            let freq = k as f32 * sample_rate / fft_size;
+            let tilt = if freq > 20.0 { 4.5 * (freq / 1000.0).log2() } else { 0.0 };
             *slot = (db + tilt).clamp(-90.0, 12.0);
         }
 

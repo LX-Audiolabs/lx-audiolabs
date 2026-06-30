@@ -3,10 +3,12 @@ use std::sync::{Arc, Mutex};
 use atomic_float::AtomicF32;
 
 pub mod dev_log;
-pub mod shm;
 pub mod snap_fft;
 pub use snap_fft::{SnapFFT, SnapMode};
-pub use shm::{relay_hub, RelayHub};
+
+// Re-export shm-hub transparently so existing callers keep working
+pub use shm_hub as shm;
+pub use shm_hub::{relay_hub, RelayHub, SPECTRUM_BINS, EQ_BANDS, MAX_NAME_LEN, STALE_MS, MAX_SLOTS, MAX_LUCENTS, now_ms, lucent_display_name};
 
 // Re-export vault/preset/config types so existing callers don't need to change imports
 pub use shared_vault::{
@@ -22,7 +24,6 @@ pub use shared_vault::{
     list_custom_presets,
 };
 
-pub const SPECTRUM_BINS: usize = 1024;
 pub const SCOPE_BUFFER_LEN: usize = 4096;
 
 /// Compute display-ready spectrum bins from raw FFT output.
@@ -41,7 +42,29 @@ pub fn compute_spectrum_bins(fft_output: &[realfft::num_complex::Complex<f32>], 
     }
 }
 
-/// Shared real-time analyzer values for the GUI
+/// Shared real-time analyzer values for the GUI.
+///
+/// ## Plugin ownership (ponytail: split into per-plugin state structs before
+/// multi-plugin migration — current monolith works but gets painful fast)
+///
+/// ── Equilibrium ──
+///   band_levels, target_levels, target_tolerances, listen_*,
+///   selected_preset_index
+///
+/// ── Meridian ──
+///   gain_reduction, EQ-curve fields (via params), reset_analysis,
+///   snap_*, sample_rate, auto_loud_*
+///
+/// ── Aether ──
+///   input_peak
+///
+/// ── All ──
+///   phase_correlation, output_peak[_l,_r], peak_hold[_l,_r],
+///   reset_peak, balance, spectrum_bins, spectrum_avg,
+///   scope_samples, scope_write_pos
+///
+/// ── Lucent ──
+///   masking_map, shm_slot, resonance (via resonance_hub)
 pub struct SharedState {
     pub band_levels: [Arc<AtomicF32>; 5],
     pub target_levels: [Arc<AtomicF32>; 5],

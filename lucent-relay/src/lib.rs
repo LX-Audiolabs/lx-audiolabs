@@ -235,7 +235,13 @@ impl PluginLogic for LucentRelay {
         }
     }
 
-    fn state_changed(&mut self) {}
+    fn state_changed(&mut self) {
+        // Preset recall / undo / session load — sync cached relay handle state.
+        if let Ok(g) = self.relay_handle.0.lock() {
+            self.cached_name = g.name.clone();
+            self.cached_target = g.target.clone();
+        }
+    }
 
     fn editor(&self) -> Box<dyn Editor> {
         IcedEditor::<LucentRelayParams, editor::RelayUi>::new(
