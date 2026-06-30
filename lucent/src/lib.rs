@@ -230,7 +230,7 @@ impl PluginLogic for Lucent {
 
         if self.claimed_lucent_slot.is_none() {
             if let Some(hub) = relay_hub() {
-                self.claimed_lucent_slot = hub.claim_lucent_slot(shared_analysis::shm::now_ms());
+                self.claimed_lucent_slot = hub.claim_consumer_slot(shared_analysis::shm::now_ms());
             }
         }
         self.params.shared.shm_slot.store(
@@ -252,8 +252,8 @@ impl PluginLogic for Lucent {
                 if slot < 0 { continue; }
                 if let Some(hub) = relay_hub() {
                     let raw = params.name.try_read().map(|n| n.clone()).unwrap_or_default();
-                    let name = shared_analysis::shm::lucent_display_name(&raw, slot as u8);
-                    hub.write_lucent_name(slot as u8, &name, shared_analysis::shm::now_ms());
+                    let name = shared_analysis::shm::display_name(&raw, slot as u8);
+                    hub.write_consumer_name(slot as u8, &name, shared_analysis::shm::now_ms());
                 }
             }
         });
@@ -271,7 +271,7 @@ impl PluginLogic for Lucent {
         // Re-claim slot if lost
         if self.claimed_lucent_slot.is_none() {
             if let Some(hub) = relay_hub() {
-                self.claimed_lucent_slot = hub.claim_lucent_slot(now_ms);
+                self.claimed_lucent_slot = hub.claim_consumer_slot(now_ms);
                 self.params.shared.shm_slot.store(
                     self.claimed_lucent_slot.map(|s| s as i32).unwrap_or(-1),
                     Ordering::Release,
@@ -285,8 +285,8 @@ impl PluginLogic for Lucent {
         }
         if let Some(slot) = self.claimed_lucent_slot {
             if let Some(hub) = relay_hub() {
-                let name = shared_analysis::shm::lucent_display_name(&self.cached_name, slot);
-                hub.write_lucent_name(slot, &name, now_ms);
+                let name = shared_analysis::shm::display_name(&self.cached_name, slot);
+                hub.write_consumer_name(slot, &name, now_ms);
             }
         }
 
@@ -381,7 +381,7 @@ impl PluginLogic for Lucent {
                             let last_resonances = self.peak_tracker.resonance_peaks();
                             if let Ok(mut peaks) = resonance_hub().lock() { *peaks = last_resonances; }
                             let my_name = self.claimed_lucent_slot
-                                .map(|s| shared_analysis::shm::lucent_display_name(&self.cached_name, s))
+                                .map(|s| shared_analysis::shm::display_name(&self.cached_name, s))
                                 .unwrap_or_else(|| self.cached_name.clone());
                             let relay_spectra: Vec<Vec<f32>> = relay_hub()
                                 .map(|hub| {
@@ -411,7 +411,7 @@ impl PluginLogic for Lucent {
                             }
                             if let Ok(mut peaks) = resonance_hub().lock() { peaks.clear(); }
                             let my_name = self.claimed_lucent_slot
-                                .map(|s| shared_analysis::shm::lucent_display_name(&self.cached_name, s))
+                                .map(|s| shared_analysis::shm::display_name(&self.cached_name, s))
                                 .unwrap_or_else(|| self.cached_name.clone());
                             let relay_spectra: Vec<Vec<f32>> = relay_hub()
                                 .map(|hub| {
@@ -501,7 +501,7 @@ impl Drop for Lucent {
         self.params.shared.shm_slot.store(-1, Ordering::Release);
         if let Some(slot) = self.claimed_lucent_slot.take() {
             if let Some(hub) = relay_hub() {
-                hub.release_lucent_slot(slot);
+                hub.release_consumer_slot(slot);
             }
         }
     }

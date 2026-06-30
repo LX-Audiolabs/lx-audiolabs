@@ -9,23 +9,41 @@
 //! Windows, `shm_open`+`mmap` on macOS via the `shared_memory` crate). All
 //! plugin instances in the host process map the SAME segment.
 //!
+//! ## Architecture
+//!
 //! Two registries live in the segment:
-//!   * **Publisher slots** — each producer claims one and writes its payload
-//!     plus a `target` name (which consumer to send to; empty = broadcast).
-//!   * **Consumer slots** — each consumer claims one and publishes its instance
-//!     `name`, so producers can list available targets. This is the
-//!     bidirectional half: producers read consumer names, consumers read
-//!     producer payloads.
 //!
-//! Concurrency: each slot is a seqlock. The single writer bumps `seq` to odd,
-//! writes the payload via raw pointers, then bumps to even. Readers copy the
-//! payload and retry if `seq` changed or was odd. Payload fields live in
-//! `UnsafeCell`; byte access uses raw pointers (`copy_nonoverlapping`).
+//! **Publisher slots** — each producer claims one and writes its payload
+//! plus a `target` name (which consumer to send to; empty = broadcast).
 //!
-//! Liveness: each write stamps `heartbeat_ms` (wall-clock millis). Readers drop
-//! slots whose heartbeat is older than `STALE_MS`, so a removed plugin's entry
-//! disappears on its own. Slots are claimed via CAS so two instances never share
-//! one; a slot held by a dead instance (stale heartbeat) is reclaimable.
+//! **Consumer slots** — each consumer claims one and publishes its instance
+//! `name`, so producers can list available targets.
+//!
+//! ## Concurrency model
+//!
+//! Each slot uses a seqlock: the writer bumps `seq` to odd, writes the payload
+//! via raw pointers, then bumps to even. Readers copy the payload and retry if
+//! `seq` changed or was odd during the copy. Payload fields live in `UnsafeCell`;
+//! byte access uses `copy_nonoverlapping` for safety. All cross-thread access is
+//! guarded by atomic operations or the seqlock.
+//!
+//! **Audio-thread safe:** Reads are allocation-free and never block.
+//!
+//! ## Liveness tracking
+//!
+//! Each write stamps `heartbeat_ms` (wall-clock millis). Readers skip slots whose
+//! heartbeat is older than `STALE_MS`, so a removed plugin's entry disappears
+//! automatically after timeout. Slots are claimed via compare-and-swap (CAS), so
+//! two instances never hold the same slot. A slot held by a dead instance (stale
+//! heartbeat) is reclaimable by any new claimant.
+//!
+//! ## Error handling
+//!
+//! Invalid slot indices (>= MAX_SLOTS or MAX_CONSUMERS) are silently ignored by
+//! write/touch functions. `claim_*_slot()` returns `None` when all slots are full
+//! or taken by stale instances. `read_*()` returns empty results when the hub
+//! cannot be mapped. Seqlock reads retry up to 4 times if the writer interferes;
+//! if all 4 retries fail, the read is dropped (partial data is not returned).
 
 use std::cell::UnsafeCell;
 use std::sync::atomic::{fence, AtomicU32, AtomicU64, Ordering};
@@ -57,9 +75,6 @@ const MAGIC: u32 = 0x4C58_5244;
 const VERSION: u32 = 4;
 /// Number of EQ bands for band-energy reporting.
 pub const EQ_BANDS: usize = 5;
-
-/// Alias for backward compatibility.
-pub const MAX_LUCENTS: usize = MAX_CONSUMERS;
 
 /// One publisher's data. `#[repr(C)]` so the byte layout is identical across DLLs.
 #[repr(C)]
@@ -119,8 +134,22 @@ const _: () = {
     );
 };
 
-/// Wall-clock time in milliseconds — consistent across all plugins in the
-/// process, which is what makes the heartbeat comparison valid.
+/// Get wall-clock time in milliseconds since UNIX_EPOCH.
+///
+/// Returns `SystemTime::now()` as milliseconds, consistent across all plugins
+/// in the process. Used for heartbeat tracking and slot liveness checks.
+///
+/// # Returns
+///
+/// Milliseconds since UNIX_EPOCH. If system time is unavailable, returns 0
+/// (a very old heartbeat that will be treated as stale).
+///
+/// # Example
+///
+/// ```ignore
+/// let now_ms = shm_hub::now_ms();
+/// hub.write(slot, "my-label", "target-name", &bins, &band_energy, now_ms);
+/// ```
 pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -128,20 +157,31 @@ pub fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// The display name a consumer advertises and is addressed by. Falls back to
-/// "Hub N" (slot+1) when the user hasn't typed one, so unnamed instances are
-/// still discoverable + targetable.
+/// Format a consumer instance's display name.
+///
+/// If the provided name is empty or whitespace, returns a default name like
+/// "Hub 1", "Hub 2", etc. (slot+1). Otherwise returns the name as-is.
+///
+/// This allows unnamed consumer instances to still be discoverable and targetable
+/// by producers (who read the display name from the consumer registry).
+///
+/// # Arguments
+///
+/// * `name` - The consumer's chosen name (may be empty or whitespace)
+/// * `slot` - The consumer's slot index (0-based)
+///
+/// # Example
+///
+/// ```ignore
+/// let name = shm_hub::display_name("My Analyzer", 0);  // "My Analyzer"
+/// let name = shm_hub::display_name("", 0);              // "Hub 1"
+/// ```
 pub fn display_name(name: &str, slot: u8) -> String {
     if name.trim().is_empty() {
         format!("Hub {}", slot + 1)
     } else {
         name.to_string()
     }
-}
-
-/// Legacy alias for backward compatibility.
-pub fn lucent_display_name(name: &str, slot: u8) -> String {
-    display_name(name, slot)
 }
 
 /// Copy a UTF-8 name into a fixed slot buffer, returning the written length.
@@ -156,8 +196,26 @@ unsafe fn write_name_bytes(buf: *mut u8, name: &str) -> u32 {
     len as u32
 }
 
-/// Handle to the shared relay segment. Held for the process lifetime inside a
-/// `OnceLock` so the mapping is never unmapped early.
+/// Handle to the cross-process shared memory hub.
+///
+/// Provides access to publisher and consumer slot registries for multi-instance
+/// cross-DLL communication. The hub persists for the process lifetime and is
+/// lazily initialized on first access via [`relay_hub()`].
+///
+/// This type is thread-safe and audio-thread safe (all reads are lock-free and
+/// allocation-free via seqlock synchronization).
+///
+/// # Thread safety
+///
+/// - `Send + Sync`: safe to share across threads
+/// - Read operations never block or allocate
+/// - Write operations are atomic
+/// - Seqlock retries handle concurrent writes (up to 4 retries)
+///
+/// # Usage
+///
+/// Get the hub via [`relay_hub()`], then use it to claim slots, publish data,
+/// and read from other instances.
 pub struct RelayHub {
     _shmem: Shmem,
     shared: *const HubShared,
@@ -224,7 +282,28 @@ impl RelayHub {
 
     // ---- Publisher registry (writer = producer, reader = consumer) -----------
 
-    /// Atomically claim a free publisher slot at startup.
+    /// Claim a free publisher slot for this instance.
+    ///
+    /// Scans the publisher registry for the first unclaimed slot (or a stale slot
+    /// that can be reclaimed). Uses compare-and-swap atomics to ensure only one
+    /// instance claims any given slot. Call this once at plugin initialization.
+    ///
+    /// # Arguments
+    ///
+    /// * `now_ms` - Current wall-clock time in milliseconds (from [`now_ms()`])
+    ///
+    /// # Returns
+    ///
+    /// - `Some(slot_index)` if a slot was claimed (index 0..MAX_SLOTS)
+    /// - `None` if all slots are occupied by live instances
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// if let Some(slot) = hub.claim_slot(shm_hub::now_ms()) {
+    ///     // Store slot and use it to publish data
+    /// }
+    /// ```
     pub fn claim_slot(&self, now_ms: u64) -> Option<u8> {
         for idx in 0..MAX_SLOTS {
             let s = unsafe { &(*self.shared).slots[idx] };
@@ -235,7 +314,19 @@ impl RelayHub {
         None
     }
 
-    /// Release a previously claimed publisher slot on teardown.
+    /// Release a previously claimed publisher slot.
+    ///
+    /// Call this on plugin teardown to free the slot for other instances.
+    /// Marks the slot as unclaimed and sets heartbeat to 0 (treated as immediately
+    /// stale by readers).
+    ///
+    /// # Arguments
+    ///
+    /// * `slot` - The slot index returned by [`claim_slot()`]
+    ///
+    /// # Behavior on invalid slot
+    ///
+    /// If `slot >= MAX_SLOTS`, this call is silently ignored (no-op).
     pub fn release_slot(&self, slot: u8) {
         let idx = slot as usize;
         if idx >= MAX_SLOTS {
@@ -246,9 +337,33 @@ impl RelayHub {
         s.claimed.store(0, Ordering::Release);
     }
 
-    /// Publish this slot's payload + label + target + band energy.
-    /// `target` empty = broadcast to every consumer; otherwise only the consumer
-    /// whose instance name equals `target` receives the payload.
+    /// Publish spectrum bins and metadata to this publisher slot.
+    ///
+    /// Updates the slot's payload atomically using seqlock synchronization. All
+    /// fields are written together (bins, band energy, labels, target).
+    ///
+    /// The payload is protected by a seqlock: readers see either the old or new
+    /// data, never a partially-written state.
+    ///
+    /// # Arguments
+    ///
+    /// * `slot` - The publisher slot index (from [`claim_slot()`])
+    /// * `label` - A short name for this publisher (max `MAX_NAME_LEN` bytes)
+    /// * `target` - Name of the consumer to send to:
+    ///   - Empty string: broadcast to every consumer
+    ///   - Non-empty: only the consumer with matching display_name receives it
+    /// * `bins` - Spectrum data (up to `SPECTRUM_BINS` f32 values, typically dB)
+    /// * `band_energy` - Per-band energy levels (up to `EQ_BANDS` f32 values, dB)
+    /// * `now_ms` - Current wall-clock time in milliseconds (updates heartbeat)
+    ///
+    /// # Behavior on invalid slot
+    ///
+    /// If `slot >= MAX_SLOTS`, this call is silently ignored (no-op).
+    ///
+    /// # Array truncation
+    ///
+    /// If `bins` or `band_energy` are shorter than expected, the rest is zero-filled
+    /// (spectrum bins are filled with -90.0 dB, band energy with -90.0 dB).
     pub fn write(&self, slot: u8, label: &str, target: &str, bins: &[f32], band_energy: &[f32], now_ms: u64) {
         let idx = slot as usize;
         if idx >= MAX_SLOTS {
@@ -285,9 +400,23 @@ impl RelayHub {
         s.heartbeat_ms.store(now_ms, Ordering::Release);
     }
 
-    /// Presence heartbeat: refresh label/target/heartbeat WITHOUT touching
-    /// `bins` or `band_energy`, so it can keep a publisher live while transport
-    /// is stopped without overwriting the audio thread's data.
+    /// Update metadata and heartbeat WITHOUT writing spectrum data.
+    ///
+    /// Useful for keeping a publisher alive when audio is not actively being
+    /// published (e.g., when transport is stopped). Updates label, target, and
+    /// heartbeat but leaves bins and band_energy untouched, so consumers continue
+    /// seeing stale but valid spectrum data.
+    ///
+    /// # Arguments
+    ///
+    /// * `slot` - The publisher slot index
+    /// * `label` - A short name for this publisher
+    /// * `target` - Target consumer name (empty = broadcast)
+    /// * `now_ms` - Current wall-clock time (refreshes heartbeat)
+    ///
+    /// # Behavior on invalid slot
+    ///
+    /// If `slot >= MAX_SLOTS`, this call is silently ignored (no-op).
     pub fn touch(&self, slot: u8, label: &str, target: &str, now_ms: u64) {
         let idx = slot as usize;
         if idx >= MAX_SLOTS {
@@ -310,8 +439,31 @@ impl RelayHub {
         s.heartbeat_ms.store(now_ms, Ordering::Release);
     }
 
-    /// Collect all live, active publisher slots whose target is empty (broadcast)
-    /// or equals `my_name`. Stale slots are skipped.
+    /// Read spectrum data from all publishers targeting this consumer.
+    ///
+    /// Returns a list of (publisher_label, spectrum_bins) tuples for all live
+    /// publishers whose target is either empty (broadcast) or matches `my_name`.
+    /// Stale publishers (no heartbeat within `STALE_MS` milliseconds) are skipped.
+    ///
+    /// Audio-thread safe: allocation-free for an empty result; allocates only for
+    /// publishers found.
+    ///
+    /// # Arguments
+    ///
+    /// * `my_name` - This consumer's display name (use [`display_name()`])
+    /// * `now_ms` - Current wall-clock time (used for stale checks)
+    ///
+    /// # Returns
+    ///
+    /// A vector of `(publisher_name, spectrum_bins)` tuples. Each `spectrum_bins`
+    /// contains up to `SPECTRUM_BINS` f32 values (typically dB levels).
+    ///
+    /// Returns empty vector if no matching publishers are live.
+    ///
+    /// # Retry behavior
+    ///
+    /// Each slot is read up to 4 times if the writer interferes (seqlock conflict).
+    /// If all retries fail, that slot is silently skipped.
     pub fn read_active(&self, my_name: &str, now_ms: u64) -> Vec<(String, Vec<f32>)> {
         let mut out = Vec::new();
         for idx in 0..MAX_SLOTS {
@@ -372,8 +524,26 @@ impl RelayHub {
         out
     }
 
-    /// Read band energy from a specific publisher slot (by index). Returns None
-    /// if the slot is stale or the seqlock fails.
+    /// Read band energy levels from a specific publisher slot.
+    ///
+    /// Reads the per-band energy (dB) array from the publisher slot. Typical usage
+    /// is to get dynamic-EQ trigger levels from a linked publisher.
+    ///
+    /// Audio-thread safe: no allocation, lock-free.
+    ///
+    /// # Arguments
+    ///
+    /// * `slot` - The publisher slot index
+    /// * `now_ms` - Current wall-clock time (stale check)
+    ///
+    /// # Returns
+    ///
+    /// - `Some([f32; EQ_BANDS])` if the slot is live and readable
+    /// - `None` if the slot is stale, invalid, or seqlock retries exhausted
+    ///
+    /// # Band layout
+    ///
+    /// The returned array typically contains: [Low Shelf, Peak 1, Peak 2, Peak 3, High Shelf]
     pub fn read_band_energy(&self, slot: u8, now_ms: u64) -> Option<[f32; EQ_BANDS]> {
         let idx = slot as usize;
         if idx >= MAX_SLOTS {
@@ -408,7 +578,22 @@ impl RelayHub {
         None
     }
 
-    /// Find a live publisher slot by name and return its band energy + slot index.
+    /// Find a publisher by name and read its band energy.
+    ///
+    /// Scans all publisher slots for one matching the given name, then reads its
+    /// band energy array. Convenience method combining name lookup + energy read.
+    ///
+    /// Audio-thread safe: no allocation, lock-free.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Publisher name to search for (matched against slot label)
+    /// * `now_ms` - Current wall-clock time (stale check)
+    ///
+    /// # Returns
+    ///
+    /// - `Some((slot_index, band_energy))` if a live matching publisher is found
+    /// - `None` if no live publisher matches the name
     pub fn find_band_energy(&self, name: &str, now_ms: u64) -> Option<(u8, [f32; EQ_BANDS])> {
         for idx in 0..MAX_SLOTS {
             let s = unsafe { &(*self.shared).slots[idx] };
@@ -448,8 +633,28 @@ impl RelayHub {
 
     // ---- Consumer registry (writer = consumer, reader = publisher) -----------
 
-    /// Claim a free consumer-name slot at startup.
-    pub fn claim_lucent_slot(&self, now_ms: u64) -> Option<u8> {
+    /// Claim a consumer-name registry slot.
+    ///
+    /// Call this at plugin initialization to advertise your instance's name to
+    /// publishers. Publishers read the consumer registry to find available targets.
+    ///
+    /// # Arguments
+    ///
+    /// * `now_ms` - Current wall-clock time (initializes heartbeat)
+    ///
+    /// # Returns
+    ///
+    /// - `Some(slot_index)` if a free slot was claimed (index 0..MAX_CONSUMERS)
+    /// - `None` if all consumer slots are occupied
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// if let Some(slot) = hub.claim_consumer_slot(shm_hub::now_ms()) {
+    ///     hub.write_consumer_name(slot, "My Analyzer", shm_hub::now_ms());
+    /// }
+    /// ```
+    pub fn claim_consumer_slot(&self, now_ms: u64) -> Option<u8> {
         for idx in 0..MAX_CONSUMERS {
             let s = unsafe { &(*self.shared).consumers[idx] };
             if try_claim(&s.claimed, &s.heartbeat_ms, now_ms) {
@@ -459,8 +664,19 @@ impl RelayHub {
         None
     }
 
-    /// Release a previously claimed consumer-name slot on teardown.
-    pub fn release_lucent_slot(&self, slot: u8) {
+    /// Release a previously claimed consumer-name slot.
+    ///
+    /// Call this on plugin teardown to free your name entry for other instances.
+    /// Marks the slot as unclaimed and sets heartbeat to 0 (immediately stale).
+    ///
+    /// # Arguments
+    ///
+    /// * `slot` - The slot index returned by [`claim_consumer_slot()`]
+    ///
+    /// # Behavior on invalid slot
+    ///
+    /// If `slot >= MAX_CONSUMERS`, this call is silently ignored (no-op).
+    pub fn release_consumer_slot(&self, slot: u8) {
         let idx = slot as usize;
         if idx >= MAX_CONSUMERS {
             return;
@@ -470,8 +686,30 @@ impl RelayHub {
         s.claimed.store(0, Ordering::Release);
     }
 
-    /// Publish this consumer instance's name + heartbeat.
-    pub fn write_lucent_name(&self, slot: u8, name: &str, now_ms: u64) {
+    /// Publish this consumer's name and refresh its heartbeat.
+    ///
+    /// Call this on a regular interval (e.g., every 100ms) to keep your name
+    /// visible to publishers. Publishers read this registry to build target lists.
+    ///
+    /// # Arguments
+    ///
+    /// * `slot` - The consumer slot index (from [`claim_consumer_slot()`])
+    /// * `name` - The consumer's display name (max `MAX_NAME_LEN` bytes)
+    /// * `now_ms` - Current wall-clock time (updates heartbeat)
+    ///
+    /// # Behavior on invalid slot
+    ///
+    /// If `slot >= MAX_CONSUMERS`, this call is silently ignored (no-op).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // In a regular update loop:
+    /// if let Some(slot) = my_consumer_slot {
+    ///     hub.write_consumer_name(slot, "My Analyzer", shm_hub::now_ms());
+    /// }
+    /// ```
+    pub fn write_consumer_name(&self, slot: u8, name: &str, now_ms: u64) {
         let idx = slot as usize;
         if idx >= MAX_CONSUMERS {
             return;
@@ -514,9 +752,20 @@ impl RelayHub {
         None
     }
 
-    /// True if a live consumer instance currently advertises exactly `name`.
-    /// Audio-thread safe — no allocation.
-    pub fn lucent_exists(&self, name: &str, now_ms: u64) -> bool {
+    /// Check if a live consumer with the given name exists.
+    ///
+    /// Audio-thread safe: no allocation, lock-free.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The consumer name to search for (exact match)
+    /// * `now_ms` - Current wall-clock time (stale check)
+    ///
+    /// # Returns
+    ///
+    /// `true` if a live consumer instance is advertising exactly this name,
+    /// `false` otherwise.
+    pub fn consumer_exists(&self, name: &str, now_ms: u64) -> bool {
         let mut buf = [0u8; MAX_NAME_LEN];
         for idx in 0..MAX_CONSUMERS {
             if let Some(n) = self.read_consumer_slot(idx, now_ms, &mut buf) {
@@ -528,9 +777,34 @@ impl RelayHub {
         false
     }
 
-    /// If exactly one live consumer exists, copy its name and return the length;
-    /// else `None`. Audio-thread safe — no allocation.
-    pub fn single_lucent_name(&self, now_ms: u64, out: &mut [u8; MAX_NAME_LEN]) -> Option<usize> {
+    /// Get the name of the single live consumer, if exactly one exists.
+    ///
+    /// Useful for auto-targeting: if only one consumer is connected, target it
+    /// automatically without user interaction.
+    ///
+    /// Audio-thread safe: no allocation, lock-free.
+    ///
+    /// # Arguments
+    ///
+    /// * `now_ms` - Current wall-clock time (stale check)
+    /// * `out` - Output buffer (must be at least `MAX_NAME_LEN` bytes)
+    ///
+    /// # Returns
+    ///
+    /// - `Some(name_length)` if exactly one live consumer exists
+    ///   (the name is written to `out[..name_length]`)
+    /// - `None` if zero or multiple consumers are live
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let mut name_buf = [0u8; shm_hub::MAX_NAME_LEN];
+    /// if let Some(len) = hub.single_consumer_name(shm_hub::now_ms(), &mut name_buf) {
+    ///     let name = std::str::from_utf8(&name_buf[..len]).unwrap_or("invalid");
+    ///     // Auto-target to the single consumer
+    /// }
+    /// ```
+    pub fn single_consumer_name(&self, now_ms: u64, out: &mut [u8; MAX_NAME_LEN]) -> Option<usize> {
         let mut found: Option<usize> = None;
         let mut scratch = [0u8; MAX_NAME_LEN];
         for idx in 0..MAX_CONSUMERS {
@@ -545,9 +819,32 @@ impl RelayHub {
         found
     }
 
-    /// List the names of all live consumer instances (for target dropdowns).
-    /// Skips stale and empty-named slots; de-duplicates names.
-    pub fn read_lucents(&self, now_ms: u64) -> Vec<String> {
+    /// List all live consumer names for UI dropdowns or routing decisions.
+    ///
+    /// Returns the display names of all live, non-empty consumer instances.
+    /// Results are deduplicated; each unique name appears at most once.
+    ///
+    /// # Arguments
+    ///
+    /// * `now_ms` - Current wall-clock time (stale check)
+    ///
+    /// # Returns
+    ///
+    /// A vector of unique consumer names. Empty vector if no consumers are live.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let targets = hub.read_consumers(shm_hub::now_ms());
+    /// if targets.is_empty() {
+    ///     println!("No consumers available");
+    /// } else {
+    ///     for target in targets {
+    ///         println!("Available target: {}", target);
+    ///     }
+    /// }
+    /// ```
+    pub fn read_consumers(&self, now_ms: u64) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         for idx in 0..MAX_CONSUMERS {
             let s = unsafe { &(*self.shared).consumers[idx] };
@@ -586,8 +883,28 @@ impl RelayHub {
     }
 }
 
-/// Process-global hub backed by shared memory. Returns `None` if the segment
-/// could not be mapped (callers then behave as if no publishers exist).
+/// Get the process-global hub.
+///
+/// Returns a reference to the shared-memory hub, creating it if this is the
+/// first call. The hub is initialized once and never dropped (held in a static
+/// `OnceLock` for the process lifetime).
+///
+/// # Returns
+///
+/// - `Some(&RelayHub)` if the hub was successfully created or opened
+/// - `None` if the shared-memory segment could not be mapped (rare; usually
+///   indicates a system error or resource exhaustion). Callers should treat
+///   `None` as "no publishers available" and fall back gracefully.
+///
+/// # Example
+///
+/// ```ignore
+/// if let Some(hub) = shm_hub::relay_hub() {
+///     if let Some(slot) = hub.claim_slot(shm_hub::now_ms()) {
+///         // Use the slot
+///     }
+/// }
+/// ```
 pub fn relay_hub() -> Option<&'static RelayHub> {
     static HUB: OnceLock<Option<RelayHub>> = OnceLock::new();
     HUB.get_or_init(RelayHub::open_or_create).as_ref()

@@ -1,5 +1,13 @@
 /target/
+/backup/
 **/*.rs.bk
+
+# Cloud storage sync temps
+.tmp.driveupload/
+.tmp.drivedownload/
+
+# Cargo/Rust defaults
+Cargo.lock.backup
 *.pdb
 *.exe
 *.dll
@@ -7,10 +15,18 @@
 *.dylib
 *.clap
 *.vst3
-.mcp.json
-node_modules/
+
+# Graphify knowledge graph (generated)
 /graphify-out/
+
+# Custom build logs
 check.log
-Cargo.lock.backup
-.tmp.driveupload/
-.tmp.drivedownload/
+
+# MCP config (absolute Vault-Pfad, per machine)
+.mcp.json
+
+# Claude Code — local overrides (personal paths/permissions)
+.claude/settings.local.json
+.claude/worktrees/
+
+node_modules/

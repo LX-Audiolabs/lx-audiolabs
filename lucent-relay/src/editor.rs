@@ -75,15 +75,15 @@ impl IcedPlugin<LucentRelayParams> for RelayUi {
             RelayMsg::Tick => {
                 let now = shared_analysis::shm::now_ms();
                 self.lucent_list = relay_hub()
-                    .map(|hub| hub.read_lucents(now))
+                    .map(|hub| hub.read_consumers(now))
                     .unwrap_or_default();
                 self.connected = relay_hub()
                     .map(|hub| {
                         let t = self.handle.target();
                         if t.is_empty() {
-                            !hub.read_lucents(now).is_empty()
+                            !hub.read_consumers(now).is_empty()
                         } else {
-                            hub.lucent_exists(&t, now)
+                            hub.consumer_exists(&t, now)
                         }
                     })
                     .unwrap_or(false);

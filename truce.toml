@@ -21,3 +21,12 @@ category = "effect"
 fourcc = "Lcnt"
 vst3_subcategory = "Analyzer"
 description = "FFT spectrum analyser — receives relay data and displays masking"
+
+[[plugin]]
+name = "Aether"
+bundle_id = "aether"
+crate = "aether"
+category = "effect"
+fourcc = "Aeth"
+vst3_subcategory = "Equalizer"
+description = "Headphone monitoring corrector — Harman 5-band EQ + crossfeed"
