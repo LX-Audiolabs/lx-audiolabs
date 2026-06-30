@@ -134,7 +134,7 @@ impl IcedPlugin<crate::LucentParams> for LucentEditor {
                         .map(|n| n.clone())
                         .unwrap_or_else(|_| self.ui_state.name.clone());
                     let my_name = if slot >= 0 {
-                        shared_analysis::shm::lucent_display_name(&raw, slot as u8)
+                        shared_analysis::shm::display_name(&raw, slot as u8)
                     } else {
                         raw
                     };

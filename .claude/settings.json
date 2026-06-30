@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(cd c:\\\\Users\\\\lxndr\\\\Documents\\\\LX-AudioLabs\\\\lx-audiolabs-dev && Start-Process powershell -Verb RunAs -ArgumentList \"-NoExit\", \"-Command\", \"cd '$PWD'; .\\\\build.ps1 -InstallAfterBuild\")"
+    ]
+  }
+}

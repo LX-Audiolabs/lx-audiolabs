@@ -124,7 +124,7 @@ impl LucentRelay {
                 if slot < 0 { continue; }
                 if let Some(hub) = relay_hub() {
                     let now = shared_analysis::shm::now_ms();
-                    let lucents = hub.read_lucents(now);
+                    let lucents = hub.read_consumers(now);
                     let sel = handle.target();
                     let resolved: Option<String> = if lucents.len() == 1 {
                         Some(lucents[0].clone())
@@ -148,10 +148,10 @@ impl LucentRelay {
         let Some(hub) = relay_hub() else { return };
         let label: &str = if self.cached_name.is_empty() { &self.fallback_label } else { &self.cached_name };
         let resolved: Option<&str> = if !self.cached_target.is_empty()
-            && hub.lucent_exists(&self.cached_target, now_ms)
+            && hub.consumer_exists(&self.cached_target, now_ms)
         {
             Some(self.cached_target.as_str())
-        } else if let Some(n) = hub.single_lucent_name(now_ms, &mut self.target_buf) {
+        } else if let Some(n) = hub.single_consumer_name(now_ms, &mut self.target_buf) {
             std::str::from_utf8(&self.target_buf[..n]).ok()
         } else {
             None

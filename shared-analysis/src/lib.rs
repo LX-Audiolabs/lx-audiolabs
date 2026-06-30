@@ -8,7 +8,7 @@ pub use snap_fft::{SnapFFT, SnapMode};
 
 // Re-export shm-hub transparently so existing callers keep working
 pub use shm_hub as shm;
-pub use shm_hub::{relay_hub, RelayHub, SPECTRUM_BINS, EQ_BANDS, MAX_NAME_LEN, STALE_MS, MAX_SLOTS, MAX_LUCENTS, now_ms, lucent_display_name};
+pub use shm_hub::{relay_hub, RelayHub, SPECTRUM_BINS, EQ_BANDS, MAX_NAME_LEN, STALE_MS, MAX_SLOTS, MAX_CONSUMERS, now_ms, display_name};
 
 // Re-export vault/preset/config types so existing callers don't need to change imports
 pub use shared_vault::{

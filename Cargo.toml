@@ -7,6 +7,7 @@ members = [
     "shm-hub",
     "lucent",
     "lucent-relay",
+    "aether",
 ]
 resolver = "2"
 
@@ -16,3 +17,20 @@ lto = true
 codegen-units = 1
 strip = true
 panic = "abort"
+
+[profile.shell]
+inherits = "release"
+
+# ---------------------------------------------------------------------------
+# truce#162 — params_flush set_plain fix (on main, not yet released)
+# Entfernen sobald truce >1.0.1 auf crates.io released ist.
+# ---------------------------------------------------------------------------
+[patch.crates-io]
+truce        = { git = "https://github.com/truce-audio/truce", branch = "main" }
+truce-core   = { git = "https://github.com/truce-audio/truce", branch = "main" }
+truce-params = { git = "https://github.com/truce-audio/truce", branch = "main" }
+truce-clap   = { git = "https://github.com/truce-audio/truce", branch = "main" }
+truce-vst3   = { git = "https://github.com/truce-audio/truce", branch = "main" }
+truce-loader = { git = "https://github.com/truce-audio/truce", branch = "main" }
+truce-iced   = { git = "https://github.com/truce-audio/truce", branch = "main" }
+truce-test   = { git = "https://github.com/truce-audio/truce", branch = "main" }
