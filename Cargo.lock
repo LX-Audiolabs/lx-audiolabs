@@ -56,7 +56,7 @@ version = "0.38.0+1.3.281"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bb44936d800fea8f016d7f2311c6a4f97aebd5dc86f09906139ec848cf3a46f"
 dependencies = [
- "libloading",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -386,7 +386,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
- "libloading",
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -1073,7 +1073,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6aae1df220ece3c0ada96b8153459b67eebe9ae9212258bb0134ae60416fdf76"
 dependencies = [
  "libc",
- "libloading",
+ "libloading 0.8.9",
  "pkg-config",
 ]
 
@@ -1110,6 +1110,16 @@ name = "libloading"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
+dependencies = [
+ "cfg-if",
+ "windows-link 0.2.1",
+]
+
+[[package]]
+name = "libloading"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
 dependencies = [
  "cfg-if",
  "windows-link 0.2.1",
@@ -1185,6 +1195,8 @@ dependencies = [
  "truce-iced",
  "truce-loader",
  "truce-params",
+ "truce-test",
+ "truce-vst3",
 ]
 
 [[package]]
@@ -1195,6 +1207,7 @@ dependencies = [
  "realfft",
  "shared-analysis",
  "shared-dsp",
+ "shared-ui",
  "tracing",
  "truce",
  "truce-clap",
@@ -1202,6 +1215,8 @@ dependencies = [
  "truce-iced",
  "truce-loader",
  "truce-params",
+ "truce-test",
+ "truce-vst3",
 ]
 
 [[package]]
@@ -2704,6 +2719,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "truce-driver"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a2a07c1c4389d5323efd89f0f763eb29103a48e6fe66ffe6f882bb67288e4c1"
+dependencies = [
+ "truce-core",
+ "truce-params",
+]
+
+[[package]]
 name = "truce-font"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2786,7 +2811,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af81b8a0bb99cd58626ecc6696a591198d85813eb1398a82fd69f0e0699789c3"
 dependencies = [
  "crc32fast",
+ "libloading 0.9.0",
  "log",
+ "parking_lot",
  "truce-core",
  "truce-gui-types",
  "truce-params",
@@ -2814,10 +2841,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "truce-test"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ac1e621de4b4d85e00a2b59e8d8b9a770389120383c48f0e0b70cd051620139"
+dependencies = [
+ "png",
+ "toml",
+ "truce-build",
+ "truce-core",
+ "truce-driver",
+ "truce-params",
+]
+
+[[package]]
 name = "truce-utils"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a0d7d73d7b2bf67e390c55caebebfa3dcbf7ef81eb2202514cfe7ae97dbbb4fe"
+
+[[package]]
+name = "truce-vst3"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a56ab9a51d7c2248c7348c0785e4215674d0bd61541e5820274baaa1514956c4"
+dependencies = [
+ "cc",
+ "crossbeam-queue",
+ "truce-core",
+ "truce-params",
+]
 
 [[package]]
 name = "ttf-parser"
@@ -3186,7 +3239,7 @@ dependencies = [
  "js-sys",
  "khronos-egl",
  "libc",
- "libloading",
+ "libloading 0.8.9",
  "log",
  "metal",
  "naga 27.0.3",
@@ -3233,7 +3286,7 @@ dependencies = [
  "js-sys",
  "khronos-egl",
  "libc",
- "libloading",
+ "libloading 0.8.9",
  "log",
  "naga 29.0.3",
  "ndk-sys",
@@ -3728,7 +3781,7 @@ dependencies = [
  "as-raw-xcb-connection",
  "gethostname",
  "libc",
- "libloading",
+ "libloading 0.8.9",
  "once_cell",
  "rustix",
  "x11rb-protocol",
