@@ -35,18 +35,34 @@ jobs:
       - name: Package (Linux)
         if: runner.os == 'Linux'
         run: |
-          mkdir -p dist
-          cp target/bundles/*.clap dist/
+          mkdir -p dist/aether dist/aurum dist/lucent-bundle
+          cp target/bundles/Aether.clap dist/aether/
+          cp target/bundles/Aurum.clap dist/aurum/
+          cp "target/bundles/Lucent.clap" "target/bundles/Lucent Relay.clap" dist/lucent-bundle/
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item target\bundles\*.clap dist\
+          New-Item -ItemType Directory -Force -Path dist\aether, dist\aurum, dist\lucent-bundle | Out-Null
+          Copy-Item target\bundles\Aether.clap dist\aether\
+          Copy-Item target\bundles\Aurum.clap dist\aurum\
+          Copy-Item 'target\bundles\Lucent.clap', 'target\bundles\Lucent Relay.clap' dist\lucent-bundle\
 
       - uses: actions/upload-artifact@v5
         with:
-          name: clap-plugins-${{ runner.os == 'Linux' && 'linux' || 'win' }}
-          path: dist/
+          name: aether-${{ runner.os == 'Linux' && 'linux' || 'win' }}
+          path: dist/aether/
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: aurum-${{ runner.os == 'Linux' && 'linux' || 'win' }}
+          path: dist/aurum/
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: lucent-bundle-${{ runner.os == 'Linux' && 'linux' || 'win' }}
+          path: dist/lucent-bundle/
           if-no-files-found: error
