@@ -1,20 +1,21 @@
-//! Cross-process / cross-DLL relay hub backed by named shared memory.
+//! Cross-process / cross-DLL publish/subscribe hub backed by named shared memory.
 //!
-//! Problem this solves: each `.clap` is a separate cdylib, so a process-global
+//! Each `.clap` / `.vst3` / `.dll` is a separate cdylib, so a process-global
 //! `OnceLock` in a statically-linked rlib is NOT shared between plugins. Two
-//! different `.clap` files each get their own copy. Lucent-Relay (writer) and
-//! Lucent (reader) therefore cannot talk through a plain global.
+//! different plugin files each get their own copy and therefore cannot talk
+//! through a plain global.
 //!
 //! Solution: a single named shared-memory segment (`CreateFileMapping` on
 //! Windows, `shm_open`+`mmap` on macOS via the `shared_memory` crate). All
 //! plugin instances in the host process map the SAME segment.
 //!
 //! Two registries live in the segment:
-//!   * **Relay slots** — each Lucent-Relay claims one and writes its FFT plus a
-//!     `target` name (which Lucent instance it sends to; empty = broadcast).
-//!   * **Lucent slots** — each Lucent claims one and publishes its instance
-//!     `name`, so relays can list the available targets in a dropdown. This is
-//!     the bidirectional half: relays read Lucent names, Lucents read relay FFTs.
+//!   * **Publisher slots** — each producer claims one and writes its payload
+//!     plus a `target` name (which consumer to send to; empty = broadcast).
+//!   * **Consumer slots** — each consumer claims one and publishes its instance
+//!     `name`, so producers can list available targets. This is the
+//!     bidirectional half: producers read consumer names, consumers read
+//!     producer payloads.
 //!
 //! Concurrency: each slot is a seqlock. The single writer bumps `seq` to odd,
 //! writes the payload via raw pointers, then bumps to even. Readers copy the
@@ -33,33 +34,36 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use shared_memory::{Shmem, ShmemConf};
 
-use crate::SPECTRUM_BINS;
-
-/// Maximum number of relay slots (rows in the Lucent overlay).
+/// Number of spectrum bins per payload frame.
+pub const SPECTRUM_BINS: usize = 1024;
+/// Maximum number of publisher slots.
 pub const MAX_SLOTS: usize = 16;
-/// Maximum number of Lucent instances advertising a name for relay dropdowns.
-pub const MAX_LUCENTS: usize = 16;
+/// Maximum number of consumer instances advertising a name.
+pub const MAX_CONSUMERS: usize = 16;
 /// Maximum label/name length in bytes (UTF-8).
 pub const MAX_NAME_LEN: usize = 32;
 /// A slot is considered dead if no heartbeat arrived within this window.
 pub const STALE_MS: u64 = 500;
 
 /// OS-global name for the segment. The `_vN` suffix is bumped whenever the
-/// slot layout or claim protocol changes, so an old `.clap` (different layout)
+/// slot layout or claim protocol changes, so an old plugin (different layout)
 /// maps a *separate* segment instead of colliding with the new one.
 /// `_v2`: added the `claimed` flag for atomic auto-slot assignment.
-/// `_v3`: relay slots gained a `target` name; added the Lucent-name registry.
-/// `_v4`: relay slots gained `band_energy` [f32; 5] for dynamic-EQ triggering.
+/// `_v3`: publisher slots gained a `target` name; added the consumer-name registry.
+/// `_v4`: publisher slots gained `band_energy` [f32; 5] for dynamic-EQ triggering.
 const SHM_OS_ID: &str = "lxaudiolabs_lucent_relay_v4";
 /// "LXRD" — marks a fully-initialized segment.
 const MAGIC: u32 = 0x4C58_5244;
 const VERSION: u32 = 4;
-/// Number of EQ bands for dynamic-EQ band-energy reporting.
+/// Number of EQ bands for band-energy reporting.
 pub const EQ_BANDS: usize = 5;
 
-/// One relay's data. `#[repr(C)]` so the byte layout is identical across DLLs.
+/// Alias for backward compatibility.
+pub const MAX_LUCENTS: usize = MAX_CONSUMERS;
+
+/// One publisher's data. `#[repr(C)]` so the byte layout is identical across DLLs.
 #[repr(C)]
-struct RelaySlot {
+struct PublisherSlot {
     /// Seqlock counter: even = stable, odd = write in progress.
     seq: AtomicU32,
     /// Auto-slot ownership: 0 = free, 1 = claimed. CAS-guarded; a slot whose
@@ -71,22 +75,21 @@ struct RelaySlot {
     name_len: UnsafeCell<u32>,
     active: UnsafeCell<u32>,
     name: UnsafeCell<[u8; MAX_NAME_LEN]>,
-    /// Target Lucent instance name; empty = broadcast to every Lucent.
+    /// Target consumer instance name; empty = broadcast to every consumer.
     target_len: UnsafeCell<u32>,
     target: UnsafeCell<[u8; MAX_NAME_LEN]>,
     bins: UnsafeCell<[f32; SPECTRUM_BINS]>,
     /// Per-band energy (dB) for dynamic-EQ triggering: Low Shelf, Peak 1–3, High Shelf.
-    /// Computed as RMS across the band's frequency range from the same FFT frame.
     band_energy: UnsafeCell<[f32; EQ_BANDS]>,
 }
 
 // SAFETY: all cross-thread access goes through atomics (seq/heartbeat) and the
 // seqlock-guarded raw-pointer payload; we never hand out `&` to the payload.
-unsafe impl Sync for RelaySlot {}
+unsafe impl Sync for PublisherSlot {}
 
-/// One Lucent instance advertising its name so relays can target it.
+/// One consumer instance advertising its name so publishers can target it.
 #[repr(C)]
-struct LucentSlot {
+struct ConsumerSlot {
     seq: AtomicU32,
     claimed: AtomicU32,
     heartbeat_ms: AtomicU64,
@@ -94,27 +97,25 @@ struct LucentSlot {
     name: UnsafeCell<[u8; MAX_NAME_LEN]>,
 }
 
-// SAFETY: see RelaySlot.
-unsafe impl Sync for LucentSlot {}
+// SAFETY: see PublisherSlot.
+unsafe impl Sync for ConsumerSlot {}
 
 #[repr(C)]
-struct RelayShared {
+struct HubShared {
     magic: AtomicU32,
     version: AtomicU32,
-    slots: [RelaySlot; MAX_SLOTS],
-    lucents: [LucentSlot; MAX_LUCENTS],
+    slots: [PublisherSlot; MAX_SLOTS],
+    consumers: [ConsumerSlot; MAX_CONSUMERS],
 }
 
 // Compile-time layout guarantees so the segment is byte-compatible everywhere.
-// Single source of truth → an alignment + relationship check is enough to catch
-// accidental padding without brittle hand-counted byte totals.
 const _: () = {
-    assert!(core::mem::align_of::<RelaySlot>() == 8);
-    assert!(core::mem::align_of::<LucentSlot>() == 8);
+    assert!(core::mem::align_of::<PublisherSlot>() == 8);
+    assert!(core::mem::align_of::<ConsumerSlot>() == 8);
     assert!(
-        core::mem::size_of::<RelayShared>()
-            == 8 + MAX_SLOTS * core::mem::size_of::<RelaySlot>()
-                + MAX_LUCENTS * core::mem::size_of::<LucentSlot>()
+        core::mem::size_of::<HubShared>()
+            == 8 + MAX_SLOTS * core::mem::size_of::<PublisherSlot>()
+                + MAX_CONSUMERS * core::mem::size_of::<ConsumerSlot>()
     );
 };
 
@@ -127,17 +128,20 @@ pub fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// The name a Lucent advertises and is addressed by. Falls back to "Lucent N"
-/// (slot+1) when the user hasn't typed one, so an unnamed Lucent is still
-/// discoverable + targetable — `read_lucents` skips empty-named slots. The same
-/// effective name MUST be used when advertising and when filtering relay feeds
-/// (read_active), or a relay's target won't match the Lucent's own name.
-pub fn lucent_display_name(name: &str, slot: u8) -> String {
+/// The display name a consumer advertises and is addressed by. Falls back to
+/// "Hub N" (slot+1) when the user hasn't typed one, so unnamed instances are
+/// still discoverable + targetable.
+pub fn display_name(name: &str, slot: u8) -> String {
     if name.trim().is_empty() {
-        format!("Lucent {}", slot + 1)
+        format!("Hub {}", slot + 1)
     } else {
         name.to_string()
     }
+}
+
+/// Legacy alias for backward compatibility.
+pub fn lucent_display_name(name: &str, slot: u8) -> String {
+    display_name(name, slot)
 }
 
 /// Copy a UTF-8 name into a fixed slot buffer, returning the written length.
@@ -156,11 +160,11 @@ unsafe fn write_name_bytes(buf: *mut u8, name: &str) -> u32 {
 /// `OnceLock` so the mapping is never unmapped early.
 pub struct RelayHub {
     _shmem: Shmem,
-    shared: *const RelayShared,
+    shared: *const HubShared,
 }
 
 // SAFETY: `shared` points into the shared mapping; all access is via atomics +
-// seqlock-guarded raw pointers (see RelaySlot). The mapping outlives the handle.
+// seqlock-guarded raw pointers (see PublisherSlot). The mapping outlives the handle.
 unsafe impl Send for RelayHub {}
 unsafe impl Sync for RelayHub {}
 
@@ -190,14 +194,14 @@ fn try_claim(claimed: &AtomicU32, heartbeat: &AtomicU64, now_ms: u64) -> bool {
 
 impl RelayHub {
     fn open_or_create() -> Option<RelayHub> {
-        let size = core::mem::size_of::<RelayShared>();
+        let size = core::mem::size_of::<HubShared>();
 
         let (shmem, is_creator) = match ShmemConf::new().os_id(SHM_OS_ID).size(size).create() {
             Ok(m) => (m, true),
             Err(_) => (ShmemConf::new().os_id(SHM_OS_ID).open().ok()?, false),
         };
 
-        let shared = shmem.as_ptr() as *const RelayShared;
+        let shared = shmem.as_ptr() as *const HubShared;
 
         if is_creator {
             unsafe {
@@ -218,9 +222,9 @@ impl RelayHub {
         Some(RelayHub { _shmem: shmem, shared })
     }
 
-    // ---- Relay registry (writer = Lucent-Relay, reader = Lucent) ------------
+    // ---- Publisher registry (writer = producer, reader = consumer) -----------
 
-    /// Relay side: atomically claim a free relay slot at startup.
+    /// Atomically claim a free publisher slot at startup.
     pub fn claim_slot(&self, now_ms: u64) -> Option<u8> {
         for idx in 0..MAX_SLOTS {
             let s = unsafe { &(*self.shared).slots[idx] };
@@ -231,7 +235,7 @@ impl RelayHub {
         None
     }
 
-    /// Relay side: release a previously claimed relay slot on teardown.
+    /// Release a previously claimed publisher slot on teardown.
     pub fn release_slot(&self, slot: u8) {
         let idx = slot as usize;
         if idx >= MAX_SLOTS {
@@ -242,10 +246,9 @@ impl RelayHub {
         s.claimed.store(0, Ordering::Release);
     }
 
-    /// Writer (relay side): publish this slot's spectrum + label + target + band energy.
-    /// `target` empty = broadcast to every Lucent; otherwise only the Lucent
-    /// whose instance name equals `target` keeps the feed.
-    /// `band_energy` = per-band RMS energy (dB) for dynamic-EQ triggering [EQ_BANDS].
+    /// Publish this slot's payload + label + target + band energy.
+    /// `target` empty = broadcast to every consumer; otherwise only the consumer
+    /// whose instance name equals `target` receives the payload.
     pub fn write(&self, slot: u8, label: &str, target: &str, bins: &[f32], band_energy: &[f32], now_ms: u64) {
         let idx = slot as usize;
         if idx >= MAX_SLOTS {
@@ -282,9 +285,9 @@ impl RelayHub {
         s.heartbeat_ms.store(now_ms, Ordering::Release);
     }
 
-    /// Presence heartbeat (relay liveness thread): refresh label/target/heartbeat
-    /// WITHOUT touching `bins` or `band_energy`, so it can keep a relay live while
-    /// transport is stopped without overwriting the audio thread's data.
+    /// Presence heartbeat: refresh label/target/heartbeat WITHOUT touching
+    /// `bins` or `band_energy`, so it can keep a publisher live while transport
+    /// is stopped without overwriting the audio thread's data.
     pub fn touch(&self, slot: u8, label: &str, target: &str, now_ms: u64) {
         let idx = slot as usize;
         if idx >= MAX_SLOTS {
@@ -307,8 +310,8 @@ impl RelayHub {
         s.heartbeat_ms.store(now_ms, Ordering::Release);
     }
 
-    /// Reader (Lucent side): collect all live, active relay slots whose target
-    /// is empty (broadcast) or equals `my_name`. Stale slots are skipped.
+    /// Collect all live, active publisher slots whose target is empty (broadcast)
+    /// or equals `my_name`. Stale slots are skipped.
     pub fn read_active(&self, my_name: &str, now_ms: u64) -> Vec<(String, Vec<f32>)> {
         let mut out = Vec::new();
         for idx in 0..MAX_SLOTS {
@@ -356,7 +359,6 @@ impl RelayHub {
                 if seq1 == seq2 {
                     if active != 0 {
                         let target = String::from_utf8_lossy(&target_buf[..target_len]);
-                        // Broadcast (empty target) or addressed to this instance.
                         if target.is_empty() || target == my_name {
                             let name =
                                 String::from_utf8_lossy(&name_buf[..name_len]).into_owned();
@@ -370,9 +372,8 @@ impl RelayHub {
         out
     }
 
-    /// Read band energy from a specific relay slot (by index). Returns None if
-    /// the slot is stale or the seqlock fails. Used by Relay for dynamic-EQ
-    /// triggering — one Relay reads another Relay's per-band energy.
+    /// Read band energy from a specific publisher slot (by index). Returns None
+    /// if the slot is stale or the seqlock fails.
     pub fn read_band_energy(&self, slot: u8, now_ms: u64) -> Option<[f32; EQ_BANDS]> {
         let idx = slot as usize;
         if idx >= MAX_SLOTS {
@@ -407,9 +408,7 @@ impl RelayHub {
         None
     }
 
-    /// Find a live relay slot by name and return its band energy + slot index.
-    /// Returns None if no matching relay is found. Used for trigger-source
-    /// dropdown resolution: user picks a relay name → we find its slot → read energy.
+    /// Find a live publisher slot by name and return its band energy + slot index.
     pub fn find_band_energy(&self, name: &str, now_ms: u64) -> Option<(u8, [f32; EQ_BANDS])> {
         for idx in 0..MAX_SLOTS {
             let s = unsafe { &(*self.shared).slots[idx] };
@@ -437,7 +436,6 @@ impl RelayHub {
                 if seq1 == s.seq.load(Ordering::Acquire) {
                     let slot_name = String::from_utf8_lossy(&name_buf[..name_len]);
                     if slot_name == name {
-                        // Found matching slot — read band energy from it.
                         return self.read_band_energy(idx as u8, now_ms)
                             .map(|e| (idx as u8, e));
                     }
@@ -448,12 +446,12 @@ impl RelayHub {
         None
     }
 
-    // ---- Lucent registry (writer = Lucent, reader = Lucent-Relay) -----------
+    // ---- Consumer registry (writer = consumer, reader = publisher) -----------
 
-    /// Lucent side: claim a free Lucent-name slot at startup.
+    /// Claim a free consumer-name slot at startup.
     pub fn claim_lucent_slot(&self, now_ms: u64) -> Option<u8> {
-        for idx in 0..MAX_LUCENTS {
-            let s = unsafe { &(*self.shared).lucents[idx] };
+        for idx in 0..MAX_CONSUMERS {
+            let s = unsafe { &(*self.shared).consumers[idx] };
             if try_claim(&s.claimed, &s.heartbeat_ms, now_ms) {
                 return Some(idx as u8);
             }
@@ -461,24 +459,24 @@ impl RelayHub {
         None
     }
 
-    /// Lucent side: release a previously claimed Lucent-name slot on teardown.
+    /// Release a previously claimed consumer-name slot on teardown.
     pub fn release_lucent_slot(&self, slot: u8) {
         let idx = slot as usize;
-        if idx >= MAX_LUCENTS {
+        if idx >= MAX_CONSUMERS {
             return;
         }
-        let s = unsafe { &(*self.shared).lucents[idx] };
+        let s = unsafe { &(*self.shared).consumers[idx] };
         s.heartbeat_ms.store(0, Ordering::Release);
         s.claimed.store(0, Ordering::Release);
     }
 
-    /// Lucent side: publish this instance's name + heartbeat.
+    /// Publish this consumer instance's name + heartbeat.
     pub fn write_lucent_name(&self, slot: u8, name: &str, now_ms: u64) {
         let idx = slot as usize;
-        if idx >= MAX_LUCENTS {
+        if idx >= MAX_CONSUMERS {
             return;
         }
-        let s = unsafe { &(*self.shared).lucents[idx] };
+        let s = unsafe { &(*self.shared).consumers[idx] };
 
         let seq0 = s.seq.load(Ordering::Relaxed);
         s.seq.store(seq0.wrapping_add(1), Ordering::Release);
@@ -491,10 +489,10 @@ impl RelayHub {
         s.heartbeat_ms.store(now_ms, Ordering::Release);
     }
 
-    /// Read one Lucent slot's name into `out` if it is live and non-empty.
+    /// Read one consumer slot's name if it is live and non-empty.
     /// Returns the name length. Allocation-free — safe on the audio thread.
-    fn read_lucent_slot(&self, idx: usize, now_ms: u64, out: &mut [u8; MAX_NAME_LEN]) -> Option<usize> {
-        let s = unsafe { &(*self.shared).lucents[idx] };
+    fn read_consumer_slot(&self, idx: usize, now_ms: u64, out: &mut [u8; MAX_NAME_LEN]) -> Option<usize> {
+        let s = unsafe { &(*self.shared).consumers[idx] };
         let hb = s.heartbeat_ms.load(Ordering::Acquire);
         if hb == 0 || now_ms.wrapping_sub(hb) > STALE_MS {
             return None;
@@ -516,12 +514,12 @@ impl RelayHub {
         None
     }
 
-    /// Relay side, audio-thread safe (no allocation): true if a live Lucent
-    /// instance currently advertises exactly `name`.
+    /// True if a live consumer instance currently advertises exactly `name`.
+    /// Audio-thread safe — no allocation.
     pub fn lucent_exists(&self, name: &str, now_ms: u64) -> bool {
         let mut buf = [0u8; MAX_NAME_LEN];
-        for idx in 0..MAX_LUCENTS {
-            if let Some(n) = self.read_lucent_slot(idx, now_ms, &mut buf) {
+        for idx in 0..MAX_CONSUMERS {
+            if let Some(n) = self.read_consumer_slot(idx, now_ms, &mut buf) {
                 if &buf[..n] == name.as_bytes() {
                     return true;
                 }
@@ -530,16 +528,15 @@ impl RelayHub {
         false
     }
 
-    /// Relay side, audio-thread safe (no allocation): if exactly one live Lucent
-    /// exists, copy its name into `out` and return the length; else `None`.
-    /// This is the auto-target case (single Lucent → no manual selection needed).
+    /// If exactly one live consumer exists, copy its name and return the length;
+    /// else `None`. Audio-thread safe — no allocation.
     pub fn single_lucent_name(&self, now_ms: u64, out: &mut [u8; MAX_NAME_LEN]) -> Option<usize> {
         let mut found: Option<usize> = None;
         let mut scratch = [0u8; MAX_NAME_LEN];
-        for idx in 0..MAX_LUCENTS {
-            if let Some(n) = self.read_lucent_slot(idx, now_ms, &mut scratch) {
+        for idx in 0..MAX_CONSUMERS {
+            if let Some(n) = self.read_consumer_slot(idx, now_ms, &mut scratch) {
                 if found.is_some() {
-                    return None; // more than one live Lucent → must choose manually
+                    return None;
                 }
                 out[..n].copy_from_slice(&scratch[..n]);
                 found = Some(n);
@@ -548,12 +545,12 @@ impl RelayHub {
         found
     }
 
-    /// Relay side: list the names of all live Lucent instances (for the target
-    /// dropdown). Skips stale and empty-named slots; de-duplicates names.
+    /// List the names of all live consumer instances (for target dropdowns).
+    /// Skips stale and empty-named slots; de-duplicates names.
     pub fn read_lucents(&self, now_ms: u64) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
-        for idx in 0..MAX_LUCENTS {
-            let s = unsafe { &(*self.shared).lucents[idx] };
+        for idx in 0..MAX_CONSUMERS {
+            let s = unsafe { &(*self.shared).consumers[idx] };
 
             let hb = s.heartbeat_ms.load(Ordering::Acquire);
             if hb == 0 || now_ms.wrapping_sub(hb) > STALE_MS {
@@ -589,8 +586,8 @@ impl RelayHub {
     }
 }
 
-/// Process-global relay hub backed by shared memory. Returns `None` if the
-/// segment could not be mapped (callers then behave as if no relays exist).
+/// Process-global hub backed by shared memory. Returns `None` if the segment
+/// could not be mapped (callers then behave as if no publishers exist).
 pub fn relay_hub() -> Option<&'static RelayHub> {
     static HUB: OnceLock<Option<RelayHub>> = OnceLock::new();
     HUB.get_or_init(RelayHub::open_or_create).as_ref()

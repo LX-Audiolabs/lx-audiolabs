@@ -17,7 +17,6 @@ pub fn resonance_hub() -> &'static ResonanceHub {
 mod editor;
 mod ui;
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
 const WINDOW_W: u32 = 990;
 const WINDOW_H: u32 = 550;
 
@@ -478,7 +477,12 @@ impl PluginLogic for Lucent {
         }
     }
 
-    fn state_changed(&mut self) {}
+    fn state_changed(&mut self) {
+        // Preset recall / undo / session load — sync cached name from restored params.
+        if let Ok(n) = self.params.name.read() {
+            self.cached_name = n.clone();
+        }
+    }
 
     fn editor(&self) -> Box<dyn Editor> {
         IcedEditor::<LucentParams, editor::LucentEditor>::new(

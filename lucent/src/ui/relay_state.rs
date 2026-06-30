@@ -6,31 +6,7 @@ pub struct RelayData {
     pub active: bool,
 }
 
-impl RelayData {
-    #[allow(dead_code)]
-    pub fn new(name: String) -> Self {
-        Self {
-            name,
-            spectrum: vec![],
-            active: true,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn dummy(name: &str) -> Self {
-        let mut spectrum = vec![0.0f32; 1024];
-        // Create some synthetic peak patterns for visual testing
-        for (i, s) in spectrum.iter_mut().enumerate() {
-            let freq_factor = i as f32 / 1024.0;
-            *s = -40.0 + 20.0 * (freq_factor * std::f32::consts::PI).sin();
-        }
-        Self {
-            name: name.to_string(),
-            spectrum,
-            active: true,
-        }
-    }
-}
+// ponytail: dead test helpers removed — YAGNI
 
 /// Lucent UI State — manages own spectrum + relay feeds + plugin name
 #[derive(Clone, Debug)]
@@ -45,20 +21,6 @@ impl LucentUiState {
         Self {
             own_spectrum: vec![],
             relays: vec![],
-            name: "Lucent".to_string(),
-        }
-    }
-
-    /// For testing: create with dummy relays
-    #[allow(dead_code)]
-    pub fn with_dummy_relays() -> Self {
-        Self {
-            own_spectrum: vec![-40.0f32; 1024],
-            relays: vec![
-                RelayData::dummy("Kick"),
-                RelayData::dummy("Bass"),
-                RelayData::dummy("Synth"),
-            ],
             name: "Lucent".to_string(),
         }
     }
