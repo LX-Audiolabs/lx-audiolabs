@@ -2,7 +2,12 @@
 
 ## EXECUTION CONTRACT
 
-The Vault is the **single source of truth**.
+**Dual-Truth System (2026-06-30):**
+
+| Truth | Source | Location |
+|-------|--------|----------|
+| **Documentation** | MCP Vault (Obsidian) | `CLAP-vault/` via MCP |
+| **Code** | Graphify | `graphify-out/` |
 
 Before ANY planning, analysis or code changes you MUST read via MCP:
 
