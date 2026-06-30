@@ -11,7 +11,7 @@ mod editor;
 
 const FFT_SIZE: usize = 2048;
 const WINDOW_W: u32 = 260;
-const WINDOW_H: u32 = 120;
+const WINDOW_H: u32 = 160;
 
 // ─── Parameters ──────────────────────────────────────────────────────────────
 // Truce requires at least one Param field. Bypass is semantically correct

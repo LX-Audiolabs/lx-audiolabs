@@ -32,6 +32,7 @@ pub struct RelayUi {
     name_buf: String,
     lucent_list: Vec<String>,
     selected_target: String,
+    connected: bool,
 }
 
 impl IcedPlugin<LucentRelayParams> for RelayUi {
@@ -46,6 +47,7 @@ impl IcedPlugin<LucentRelayParams> for RelayUi {
             name_buf,
             lucent_list: Vec::new(),
             selected_target: target,
+            connected: false,
         }
     }
 
@@ -75,9 +77,19 @@ impl IcedPlugin<LucentRelayParams> for RelayUi {
                 self.lucent_list = relay_hub()
                     .map(|hub| hub.read_lucents(now))
                     .unwrap_or_default();
+                self.connected = relay_hub()
+                    .map(|hub| {
+                        let t = self.handle.target();
+                        if t.is_empty() {
+                            !hub.read_lucents(now).is_empty()
+                        } else {
+                            hub.lucent_exists(&t, now)
+                        }
+                    })
+                    .unwrap_or(false);
                 // Keep selected target if still valid, else clear.
                 let t = self.handle.target();
-                if !t.is_empty() {
+                if !t.is_empty() && self.lucent_list.iter().any(|l| *l == t) {
                     self.selected_target = t;
                 }
             }
@@ -96,6 +108,10 @@ impl IcedPlugin<LucentRelayParams> for RelayUi {
         }
 
         truce_iced::iced::Task::none()
+    }
+
+    fn needs_redraw(&self) -> bool {
+        true // always repaint — SHM slot/heartbeat can change without params or UI input
     }
 
     fn view<'a>(
@@ -175,21 +191,21 @@ impl IcedPlugin<LucentRelayParams> for RelayUi {
         .align_y(Alignment::Center)
         .padding([4.0, 12.0]);
 
-        // ── STATUS ──────────────────────────────────────────────────────────
-        let status_text = if self.lucent_list.is_empty() {
-            "No Lucent instances found — open a Lucent plugin first"
+        // ── CONNECTION STATUS ──────────────────────────────────────────────
+        let (conn_color, conn_text) = if self.connected {
+            (Color::from_rgb(0.2, 0.9, 0.3), "● Connected")
         } else {
-            "FFT relay active — spectrum sent to selected Lucent"
+            (Color::from_rgb(0.9, 0.2, 0.2), "● No Lucent")
         };
-        let status = container(
-            text(status_text)
-                .size(10)
-                .color(Color::from_rgb(0.40, 0.40, 0.50)),
-        )
-        .padding([10.0, 12.0])
-        .width(Length::Fill);
 
-        column![header, name_row, target_row, status]
+        let conn_indicator = row![
+            text(conn_text).size(10).font(bold_font()).color(conn_color),
+            Space::new().width(Length::Fill),
+        ]
+        .padding([2.0, 12.0])
+        .align_y(Alignment::Center);
+
+        column![header, name_row, target_row, conn_indicator]
             .spacing(4)
             .into()
     }
