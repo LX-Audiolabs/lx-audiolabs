@@ -73,9 +73,11 @@ impl LucentRelay {
         let mut planner = RealFftPlanner::<f32>::new();
         let fft_fwd = planner.plan_fft_forward(FFT_SIZE);
         let fft_output = fft_fwd.make_output_vec();
+        let relay_handle = RelayHandle::default();
+        editor::set_relay_handle(relay_handle.clone());
         Self {
             params,
-            relay_handle:   RelayHandle::default(),
+            relay_handle,
             shm_state:      Arc::new(SharedState::default()),
             fft_fwd,
             fft_input:      vec![0.0; FFT_SIZE],
