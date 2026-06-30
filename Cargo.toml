@@ -1,0 +1,17 @@
+[workspace]
+members = [
+    "shared-dsp",
+    "shared-analysis",
+    "shared-vault",
+    "shared-ui",
+    "lucent",
+    "lucent-relay",
+]
+resolver = "2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

@@ -1,0 +1,19 @@
+[package]
+name = "lucent"
+# Pre-production / not yet shippable: frozen at 0.2.0, excluded from build.ps1
+# and build-version.py auto-bump until ready ("spruchreif").
+version = "0.2.49"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+nice-plug = "0.1.10"
+nice-plug-iced = { version = "0.1.3", default-features = false, features = ["wgpu", "crisp", "web-colors", "smol", "thread-pool", "fira-sans", "x11", "canvas", "image", "unconditional-rendering"] }
+shared-dsp = { path = "../shared-dsp" }
+shared-analysis = { path = "../shared-analysis", features = ["dev-logging"] }
+shared-ui = { path = "../shared-ui" }
+tracing = "0.1"
+realfft = "3"
+

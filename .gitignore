@@ -1,0 +1,16 @@
+/target/
+**/*.rs.bk
+*.pdb
+*.exe
+*.dll
+*.so
+*.dylib
+*.clap
+*.vst3
+.mcp.json
+node_modules/
+/graphify-out/
+check.log
+Cargo.lock.backup
+.tmp.driveupload/
+.tmp.drivedownload/
