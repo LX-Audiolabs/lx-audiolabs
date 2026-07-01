@@ -52,7 +52,7 @@ jobs:
           Copy-Item target\bundles\Aether.clap dist\
           Write-Host "Aether v${{ steps.version.outputs.version }} — Windows"
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: Aether-v${{ steps.version.outputs.version }}-${{ runner.os == 'Linux' && 'linux' || 'win' }}
           path: dist/

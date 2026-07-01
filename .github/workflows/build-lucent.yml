@@ -45,7 +45,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item 'target\bundles\Lucent.clap', 'target\bundles\Lucent Relay.clap' dist\
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: Lucent-Bundle-${{ runner.os == 'Linux' && 'linux' || 'win' }}
           path: dist/

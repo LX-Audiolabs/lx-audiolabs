@@ -53,31 +53,31 @@ jobs:
           Copy-Item target\bundles\Equilibrium.clap dist\equilibrium\
           Copy-Item target\bundles\Meridian.clap dist\meridian\
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: aether-${{ runner.os == 'Linux' && 'linux' || 'win' }}
           path: dist/aether/
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: aurum-${{ runner.os == 'Linux' && 'linux' || 'win' }}
           path: dist/aurum/
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: lucent-bundle-${{ runner.os == 'Linux' && 'linux' || 'win' }}
           path: dist/lucent-bundle/
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: equilibrium-${{ runner.os == 'Linux' && 'linux' || 'win' }}
           path: dist/equilibrium/
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: meridian-${{ runner.os == 'Linux' && 'linux' || 'win' }}
           path: dist/meridian/
