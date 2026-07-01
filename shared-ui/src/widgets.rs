@@ -88,7 +88,7 @@ pub fn hslider_gesture<'a, Message: Clone + 'a>(
         on_gesture: Box::new(move |g| Some(on_gesture(g))),
     })
     .width(Length::Fill)
-    .height(Length::Fixed(18.0))
+    .height(Length::Fixed(22.0))
     .into()
 }
 
