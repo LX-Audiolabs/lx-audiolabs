@@ -96,7 +96,7 @@ impl PeakTracker {
             persistence: vec![0u32; SPECTRUM_BINS],
             last_prominence: vec![0.0; SPECTRUM_BINS],
             resonance_score: vec![0.0; SPECTRUM_BINS],
-            prominence_threshold: 6.0,
+            prominence_threshold: 3.5,
         }
     }
 
@@ -370,8 +370,13 @@ impl PluginLogic for Lucent {
                                 bins.copy_from_slice(&frame);
                             }
                             if let Ok(mut avg) = self.params.shared.spectrum_avg.try_lock() {
+                                // Energy-gating: only update EMA if signal above -80 dB
+                                let frame_energy = frame.iter().map(|x| x * x).sum::<f32>() / n_bins as f32;
+                                let energy_db = 10.0 * frame_energy.log10().max(-40.0);
+                                let gate = energy_db > -80.0;
                                 for k in 0..n_bins {
-                                    avg[k] = avg[k] * (49.0 / 50.0) + frame[k] * (1.0 / 50.0);
+                                    let input = if gate { frame[k] } else { 0.0 };
+                                    avg[k] = avg[k] * (49.0 / 50.0) + input * (1.0 / 50.0);
                                 }
                             }
                         }
@@ -397,8 +402,12 @@ impl PluginLogic for Lucent {
                                 bins.copy_from_slice(&frame);
                             }
                             if let Ok(mut avg) = self.params.shared.spectrum_avg.try_lock() {
+                                let frame_energy = frame.iter().map(|x| x * x).sum::<f32>() / n_bins as f32;
+                                let energy_db = 10.0 * frame_energy.log10().max(-40.0);
+                                let gate = energy_db > -80.0;
                                 for k in 0..n_bins {
-                                    avg[k] = avg[k] * (49.0 / 50.0) + frame[k] * (1.0 / 50.0);
+                                    let input = if gate { frame[k] } else { 0.0 };
+                                    avg[k] = avg[k] * (49.0 / 50.0) + input * (1.0 / 50.0);
                                 }
                             }
                         }

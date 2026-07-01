@@ -819,7 +819,7 @@ impl<Message> canvas::Program<Message> for SpectrumCanvas {
                 b.line_to(Point::new(last_x, height));
                 b.close();
             });
-            frame.fill(&mask_fill, Color::from_rgba(0.95, 0.22, 0.18, 0.50));
+            frame.fill(&mask_fill, Color::from_rgba(0.95, 0.22, 0.18, 0.30));
         }
 
         // Resonance peaks (Lucent) — amber vertical markers + diamond
