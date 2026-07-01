@@ -688,9 +688,24 @@ impl MeridianEditor {
         ];
         self.cut_slope_sel = self.params.cut_slope.value() as i32;
         self.auto_loud_measuring = self.shared_state.auto_loud_measuring.load(Ordering::Acquire);
-        self.snap_active = self.shared_state.snap_active.load(Ordering::Acquire);
+        let snap_now = self.shared_state.snap_active.load(Ordering::Acquire);
+        let was_snap = self.snap_active;
+        self.snap_active = snap_now;
         if self.snap_active { self.snap_blink_counter = self.snap_blink_counter.wrapping_add(1); }
-        else { self.snap_blink_counter = 0; }
+        else if was_snap {
+            self.snap_blink_counter = 0;
+            if let Some(ref vp) = self.vault_path {
+                if !vp.is_empty() {
+                    let stereo = self.shared_state.snap_stereo_snap.lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
+                    let mono = self.shared_state.snap_mono_snap.lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
+                    let delta = self.shared_state.snap_delta_snap.lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
+                    let sr = self.shared_state.sample_rate.load(Ordering::Acquire);
+                    let md = snap_markdown(&stereo, &mono, &delta, self.band_levels, self.phase_correlation, self.peak_l, self.peak_r, sr);
+                    let fname = snap_filename(vp);
+                    let _ = std::fs::write(std::path::Path::new(vp).join(&fname), &md);
+                }
+            }
+        }
         let measuring = self.shared_state.auto_loud_measuring.load(Ordering::Acquire);
         if !measuring {
             let offset = self.shared_state.auto_loud_gain_offset.load(Ordering::Acquire);
@@ -1045,4 +1060,44 @@ fn list_meridian_presets(vault_path: Option<&str>) -> Vec<(String, PathBuf, Meri
     scan(&local_dir);
     if let Some(vp) = vault_path { if !vp.is_empty() { scan(std::path::Path::new(vp)); } }
     presets
+}
+
+// ─── SNAP Helpers ────────────────────────────────────────────────────────────
+
+fn snap_filename(vault_path: &str) -> String {
+    let dir = std::path::Path::new(vault_path);
+    let mut max_n = 0u32;
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.flatten() {
+            let s = e.file_name().to_string_lossy().into_owned();
+            if let Some(inner) = s.strip_prefix("SNAPSHOT-").and_then(|r| r.strip_suffix(".md")) {
+                if let Ok(n) = inner.parse::<u32>() { max_n = max_n.max(n); }
+            }
+        }
+    }
+    format!("SNAPSHOT-{:03}.md", max_n + 1)
+}
+
+fn snap_markdown(stereo: &[f32], mono: &[f32], delta: &[f32],
+    band_levels: [f32; 5], corr: f32, pl: f32, pr: f32, sr: f32) -> String
+{
+    let fft_sz = 2048.0;
+    let freqs: &[f32] = &[20.0, 40.0, 80.0, 160.0, 315.0, 630.0, 1250.0, 2500.0, 5000.0, 10000.0, 16000.0, 20000.0];
+    let tbl = |s: &[f32]| {
+        freqs.iter().map(|&f| {
+            let bin = ((f * fft_sz / sr) as usize).min(s.len().saturating_sub(1));
+            format!("| {} | {:.1} |", if f >= 1000.0 { format!("{:.0}k", f/1000.0) } else { format!("{:.0}", f) }, s[bin])
+        }).collect::<Vec<_>>().join("\n")
+    };
+    format!(
+        "---\nplugin: meridian\ntype: snapshot\n---\n\n# Meridian Snapshot\n\n\
+        ## Signal\n| | L | R |\n|--|--|--|\n| Peak | {pl:.1} dB | {pr:.1} dB |\n| Korrelation | {co:.2} | |\n\n\
+        ## Spektrum — Stereo\n| Hz | dB |\n|----|-----|\n{st}\n\n\
+        ## Spektrum — Mono\n| Hz | dB |\n|----|-----|\n{mn}\n\n\
+        ## Delta\n| Hz | dB |\n|----|-----|\n{dt}\n\n\
+        ## 5-Band\n| Band | Pegel |\n|------|-------|\n\
+        | Sub | {b0:.1} dB |\n| Bass | {b1:.1} dB |\n| Mid | {b2:.1} dB |\n| Presence | {b3:.1} dB |\n| Air | {b4:.1} dB |\n",
+        pl=pl, pr=pr, co=corr, st=tbl(stereo), mn=tbl(mono), dt=tbl(delta),
+        b0=band_levels[0], b1=band_levels[1], b2=band_levels[2], b3=band_levels[3], b4=band_levels[4],
+    )
 }
