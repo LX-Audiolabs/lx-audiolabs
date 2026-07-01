@@ -186,70 +186,131 @@ impl<M> canvas::Program<M> for EqSpectrumCanvas {
         let width = bounds.width;
         let height = bounds.height;
         let col_width = width / 5.0;
-        let amber = Color::from_rgb(1.0, 0.55, 0.1);
 
         frame.fill(&Path::rectangle(Point::ORIGIN, bounds.size()), Color::from_rgb(0.08, 0.08, 0.08));
 
-        let raw_avg: f32 = self.band_levels.iter().sum::<f32>() / 5.0;
-        let is_silent = raw_avg <= -70.0;
-
+        // Pink noise tilt: +3 dB/octave compensation so pink noise appears flat.
         const TILT: [f32; 5] = [-3.0, 0.0, 3.0, 6.0, 9.0];
-        let min_db = -54.0f32;
-        let max_db = 6.0f32;
-        let range = max_db - min_db;
+
+        // Silence detection uses RAW band levels (before clamping/tilt)
+        let raw_band_avg: f32 = (0..5).map(|b| self.band_levels[b]).sum::<f32>() / 5.0;
+        let is_silent = raw_band_avg <= -70.0;
+
+        // Compute normalized averages for relative display
+        let mut listen_sum = 0.0;
+        let mut band_sum = 0.0;
+        for (b, &tilt) in TILT.iter().enumerate() {
+            listen_sum += self.listen_levels[b].max(-50.0) + tilt;
+            band_sum  += self.band_levels[b].max(-50.0) + tilt;
+        }
+        let listen_avg = listen_sum / 5.0;
+        let band_avg   = band_sum / 5.0;
+
+        let min_db = -30.0f32;
+        let max_db = 12.0f32;
+        let db_range = max_db - min_db;
+
+        let db_to_y = |db: f32| {
+            let norm = ((db - min_db) / db_range).clamp(0.0, 1.0);
+            height - (norm * height)
+        };
+
+        // Horizontal dB grid lines
+        for &db in &[-30.0f32, -24.0, -18.0, -12.0, -6.0, 0.0, 6.0, 12.0] {
+            let y = db_to_y(db);
+            let is_major = db == -30.0 || db == -18.0 || db == -6.0 || db == 6.0;
+            let alpha = if is_major { 0.20 } else { 0.10 };
+            frame.stroke(
+                &Path::line(Point::new(0.0, y), Point::new(width, y)),
+                Stroke::default().with_color(Color::from_rgba(1.0, 1.0, 1.0, alpha)).with_width(1.0),
+            );
+        }
+
+        // Separators
+        for i in 1..5 {
+            let x = i as f32 * col_width;
+            frame.stroke(
+                &Path::line(Point::new(x, 0.0), Point::new(x, height)),
+                Stroke::default().with_color(Color::from_rgba(1.0, 1.0, 1.0, 0.05)).with_width(1.0),
+            );
+        }
 
         for b in 0..5 {
-            let x = b as f32 * col_width;
-            let pad = col_width * 0.12;
-            let bar_w = col_width - pad * 2.0;
+            let col_x = b as f32 * col_width;
 
-            // Target tolerance band
-            let target = self.target_levels[b] + TILT[b];
-            let tol = self.target_tolerances[b];
-            let t_lo = target - tol;
-            let t_hi = target + tol;
-            let t_y_lo = height - ((t_lo - min_db) / range) * height;
-            let t_y_hi = height - ((t_hi - min_db) / range) * height;
-            frame.fill(
-                &Path::rectangle(Point::new(x + pad, t_y_hi.min(t_y_lo)), Size::new(bar_w, (t_y_lo - t_y_hi).abs())),
-                Color::from_rgba(1.0, 0.55, 0.1, 0.12),
-            );
+            // Peak meter amber bar — relative to spectral average
+            let bar_alpha = if self.listen_samples > 0.0 { 0.12 } else { 0.55 };
+            if !is_silent {
+                let peak_db_t = self.band_levels[b].max(-50.0) + TILT[b];
+                let norm_band_db = peak_db_t - band_avg;
+                let bar_top_y = db_to_y(norm_band_db);
+                let bar_h = (height - bar_top_y).max(0.0);
+                frame.fill(
+                    &Path::rectangle(Point::new(col_x + 5.0, bar_top_y), Size::new(col_width - 10.0, bar_h)),
+                    Color::from_rgba(1.0, 0.45, 0.1, bar_alpha),
+                );
+            }
 
-            // Target line
-            let t_y = height - ((target - min_db) / range) * height;
-            frame.stroke(
-                &Path::line(Point::new(x + pad, t_y), Point::new(x + pad + bar_w, t_y)),
-                Stroke::default().with_color(amber).with_width(1.5),
-            );
+            // Target Corridor & Line — hidden during Listen/Analyze
+            if self.listen_samples <= 100.0 {
+                let target_db = self.target_levels[b].max(-30.0) + TILT[b];
+                let target_sum: f32 = (0..5).map(|i| self.target_levels[i].max(-30.0) + TILT[i]).sum();
+                let target_avg = target_sum / 5.0;
+                let norm_target_db = target_db - target_avg;
+                let tolerance = self.target_tolerances[b];
+
+                let target_y = db_to_y(norm_target_db);
+                let upper_y = db_to_y(norm_target_db + tolerance);
+                let lower_y = db_to_y(norm_target_db - tolerance);
+                let corridor_h = (lower_y - upper_y).max(2.0);
+
+                // Target Corridor Shaded Area
+                frame.fill(
+                    &Path::rectangle(Point::new(col_x + 1.0, upper_y), Size::new(col_width - 2.0, corridor_h)),
+                    Color::from_rgba(1.0, 1.0, 1.0, 0.15),
+                );
+
+                // Target Line
+                frame.stroke(
+                    &Path::line(Point::new(col_x, target_y), Point::new(col_x + col_width, target_y)),
+                    Stroke::default().with_color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)).with_width(1.0),
+                );
+            }
 
             // Listen range (if active)
             if self.listen_samples > 100.0 {
-                let l_lo = self.listen_level_min[b] + TILT[b];
-                let l_hi = self.listen_level_max[b] + TILT[b];
-                let ly_lo = height - ((l_lo - min_db) / range) * height;
-                let ly_hi = height - ((l_hi - min_db) / range) * height;
-                frame.fill(
-                    &Path::rectangle(Point::new(x + pad, ly_hi.min(ly_lo)), Size::new(bar_w, (ly_lo - ly_hi).abs())),
-                    Color::from_rgba(0.5, 0.5, 1.0, 0.08),
-                );
-            }
+                let listen_db = self.listen_levels[b].max(-50.0) + TILT[b];
+                let norm_listen_db = listen_db - listen_avg;
+                let listen_y = db_to_y(norm_listen_db);
 
-            // Band level bar
-            if !is_silent {
-                let level = self.band_levels[b] + TILT[b];
-                let bar_top = height - ((level.clamp(min_db, max_db) - min_db) / range) * height;
-                frame.fill(
-                    &Path::rectangle(Point::new(x + pad, bar_top), Size::new(bar_w, height - bar_top)),
-                    amber,
-                );
-            }
+                // Red Min/Max Box — exact peak range from analysis
+                let min_db_l = self.listen_level_min[b].max(-50.0) + TILT[b];
+                let max_db_l = self.listen_level_max[b].max(-50.0) + TILT[b];
+                let norm_min = min_db_l - listen_avg;
+                let norm_max = max_db_l - listen_avg;
+                let upper_y = db_to_y(norm_max);
+                let lower_y = db_to_y(norm_min);
+                let tolerance_h = (lower_y - upper_y).max(2.0);
 
-            // Divider
-            if b < 4 {
-                let div_x = (b + 1) as f32 * col_width;
+                frame.fill(
+                    &Path::rectangle(Point::new(col_x + 1.0, upper_y), Size::new(col_width - 2.0, tolerance_h)),
+                    Color::from_rgba(1.0, 0.3, 0.3, 0.12),
+                );
+
+                // Listen Tolerances Corridor
+                let listen_tolerance = self.listen_tolerances[b];
+                let l_upper_y = db_to_y(norm_listen_db + listen_tolerance);
+                let l_lower_y = db_to_y(norm_listen_db - listen_tolerance);
+                let l_corridor_h = (l_lower_y - l_upper_y).max(2.0);
+                frame.fill(
+                    &Path::rectangle(Point::new(col_x + 1.0, l_upper_y), Size::new(col_width - 2.0, l_corridor_h)),
+                    Color::from_rgba(0.5, 0.5, 1.0, 0.10),
+                );
+
+                // Analyzed Level Line (Crimson)
                 frame.stroke(
-                    &Path::line(Point::new(div_x, 0.0), Point::new(div_x, height)),
-                    Stroke::default().with_color(Color::from_rgba(1.0, 1.0, 1.0, 0.06)).with_width(1.0),
+                    &Path::line(Point::new(col_x, listen_y), Point::new(col_x + col_width, listen_y)),
+                    Stroke::default().with_color(Color::from_rgba(1.0, 0.3, 0.3, 0.7)).with_width(1.5),
                 );
             }
         }
@@ -597,13 +658,8 @@ impl EquilibriumEditor {
                         self.shared_state.target_levels[b].store(prof.bands[b], Ordering::Release);
                         self.shared_state.target_tolerances[b].store(prof.tolerances[b], Ordering::Release);
                     }
-                    // Apply preset values to actual parameters
-                    self.params.low_gain.set_value(prof.bands[0] as f64);
-                    self.params.bass_gain.set_value(prof.bands[1] as f64);
-                    self.params.mid_gain.set_value(prof.bands[2] as f64);
-                    self.params.high_mid_gain.set_value(prof.bands[3] as f64);
-                    self.params.high_gain.set_value(prof.bands[4] as f64);
-
+                    // Bands are the Target Profile (analysis reference line), not a
+                    // gain correction — only stereo settings apply directly to params.
                     self.params.low_width.set_value(prof.widths[0] as f64);
                     self.params.bass_width.set_value(prof.widths[1] as f64);
                     self.params.mid_width.set_value(prof.widths[2] as f64);
@@ -729,13 +785,11 @@ impl EquilibriumEditor {
     }
 
     fn do_save_preset(&mut self) {
-        let bands = [
-            self.params.low_gain.raw_target() as f32,
-            self.params.bass_gain.raw_target() as f32,
-            self.params.mid_gain.raw_target() as f32,
-            self.params.high_mid_gain.raw_target() as f32,
-            self.params.high_gain.raw_target() as f32,
-        ];
+        // Bands/tolerances are the Target Profile (analysis reference line,
+        // set via ApplyAnalysisAsTarget or an already-selected preset) —
+        // not the current gain knob positions.
+        let bands = self.target_levels;
+        let tolerances = self.target_tolerances;
 
         let name = if self.preset_name_input.trim().is_empty() {
             format!("User Preset {}", self.presets.len() + 1)
@@ -750,7 +804,7 @@ impl EquilibriumEditor {
         let fp = dir.join(format!("{}.md", safe));
 
         let prof = shared_analysis::Profile {
-            name: name.clone(), bands, tolerances: shared_analysis::DEFAULT_TOLERANCES,
+            name: name.clone(), bands, tolerances,
             pans: [self.params.low_pan.raw_target() as f32, self.params.bass_pan.raw_target() as f32,
                 self.params.mid_pan.raw_target() as f32, self.params.high_mid_pan.raw_target() as f32,
                 self.params.high_pan.raw_target() as f32],

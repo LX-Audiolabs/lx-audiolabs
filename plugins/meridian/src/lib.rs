@@ -752,6 +752,32 @@ impl PluginLogic for Meridian {
                     sample_rate,
                 );
             }
+
+            // Update spectrum_avg (EMA) from spectrum_bins
+            if let Ok(mut avg) = self.params.shared.spectrum_avg.try_lock() {
+                if let Ok(bins) = self.params.shared.spectrum_bins.try_lock() {
+                    let n_bins = SPECTRUM_BINS;
+                    // Energy-gating: only update EMA if signal above -80 dB
+                    let frame_energy = bins.iter().map(|x| x * x).sum::<f32>() / n_bins as f32;
+                    let energy_db = 10.0 * frame_energy.log10().max(-40.0);
+                    let gate = energy_db > -80.0;
+
+                    if !gate {
+                        for sample in self.fft_input.iter_mut() {
+                            *sample = 0.0;
+                        }
+                    }
+
+                    for k in 0..n_bins {
+                        let freq = k as f32 * sample_rate / fft_size as f32;
+                        let log_norm = ((freq.max(20.0).ln() - 20.0_f32.ln())
+                            / (20000.0_f32.ln() - 20.0_f32.ln())).clamp(0.0, 1.0);
+                        let alpha = 0.02 + (0.10 - 0.02) * log_norm;
+                        let input = if gate { bins[k] } else { 0.0 };
+                        avg[k] = avg[k] * (1.0 - alpha) + input * alpha;
+                    }
+                }
+            }
         }
 
         // SNAP FFT
