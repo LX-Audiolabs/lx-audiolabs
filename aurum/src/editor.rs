@@ -60,11 +60,6 @@ impl AurumEditor {
         match g { Gesture::Start => ctx.begin_edit(id), Gesture::Change(v) => { ctx.set_param(id, v as f64); } Gesture::End => ctx.end_edit(id) }
     }
 
-    fn vsep() -> Element<'static, Message<AurumMsg>> {
-        container(Space::new()).width(Length::Fixed(1.0)).height(Length::Fixed(40.0))
-            .style(|_t| container::Style { background: Some(Color::from_rgb(0.18, 0.22, 0.22).into()), ..Default::default() }).into()
-    }
-
     fn strip_label(text: &str) -> Element<'_, Message<AurumMsg>> {
         Text::new(text).size(10).font(bold_font()).color(Color::from_rgb(1.0, 0.55, 0.15)).into()
     }
