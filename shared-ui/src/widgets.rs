@@ -659,6 +659,7 @@ pub struct KnobState {
     dragging: bool,
     drag_start_y: f32,
     drag_start_norm: f32,
+    last_click: Option<std::time::Instant>,
 }
 
 struct KnobProgram<'a, Message> {
@@ -714,6 +715,18 @@ impl<'a, Message: Clone> canvas::Program<Message> for KnobProgram<'a, Message> {
             }
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 if cursor.is_over(bounds) {
+                    // Double-click to reset (workaround for truce-iced not forwarding Right-click).
+                    // If two left-clicks arrive within 400 ms on this widget, reset to default.
+                    let now = std::time::Instant::now();
+                    if let Some(last) = state.last_click {
+                        if now.duration_since(last).as_millis() < 400 {
+                            state.last_click = None;
+                            state.dragging = false;
+                            let default_val = self.min + self.default_norm * (self.max - self.min);
+                            return (self.on_gesture)(Gesture::Change(default_val)).map(Action::publish);
+                        }
+                    }
+                    state.last_click = Some(now);
                     if let Some(pos) = cursor.position() {
                         state.dragging = true;
                         state.drag_start_y = pos.y;
@@ -1000,6 +1013,7 @@ impl<'a, Message: Clone> canvas::Program<Message> for SliderProgram<'a, Message>
 #[derive(Default, Clone)]
 pub struct HSliderState {
     dragging: bool,
+    last_click: Option<std::time::Instant>,
 }
 
 struct HSliderProgram<'a, Message> {
@@ -1043,6 +1057,17 @@ impl<'a, Message: Clone> canvas::Program<Message> for HSliderProgram<'a, Message
             }
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 if cursor.is_over(bounds) {
+                    // Double-click to reset (workaround for truce-iced not forwarding Right-click).
+                    let now = std::time::Instant::now();
+                    if let Some(last) = state.last_click {
+                        if now.duration_since(last).as_millis() < 400 {
+                            state.last_click = None;
+                            state.dragging = false;
+                            let default_val = self.min + self.default_norm * (self.max - self.min);
+                            return (self.on_gesture)(Gesture::Change(default_val)).map(Action::publish);
+                        }
+                    }
+                    state.last_click = Some(now);
                     state.dragging = true;
                     return Some(match (self.on_gesture)(Gesture::Start) {
                         Some(msg) => Action::publish(msg).and_capture(),

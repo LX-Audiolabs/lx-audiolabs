@@ -35,3 +35,6 @@ panic = "abort"
 
 [profile.shell]
 inherits = "release"
+
+[patch.crates-io]
+truce-iced = { path = "truce-iced-local" }
