@@ -26,8 +26,8 @@ pub fn reset_slider<'a, Message: Clone + 'a>(
     let span = max - min;
     let norm = if span.abs() < 1e-9 { 0.5 } else { ((value - min) / span).clamp(0.0, 1.0) };
     let default_norm = if span.abs() < 1e-9 { 0.5 } else { ((default - min) / span).clamp(0.0, 1.0) };
-    // Bipolar detection: classic crossing-zero OR default roughly mid-range (25%–75%).
-    let bipolar = (min < 0.0 && max > 0.0) || (default_norm > 0.25 && default_norm < 0.75);
+    // Bipolar detection: only when range crosses zero (e.g. -12..+12 dB).
+    let bipolar = min < 0.0 && max > 0.0;
     let center_norm = if min < 0.0 && max > 0.0 {
         ((0.0 - min) / span).clamp(0.0, 1.0)
     } else if bipolar {
@@ -66,7 +66,11 @@ pub fn hslider_gesture<'a, Message: Clone + 'a>(
     let span = max - min;
     let norm = if span.abs() < 1e-9 { 0.0 } else { ((value - min) / span).clamp(0.0, 1.0) };
     let default_norm = if span.abs() < 1e-9 { 0.0 } else { ((default - min) / span).clamp(0.0, 1.0) };
-    let bipolar = (min < 0.0 && max > 0.0) || (default_norm > 0.25 && default_norm < 0.75);
+    // Bipolar: only when range crosses zero (e.g. -12..+12 dB, -1..+1 pan).
+    // The default_norm heuristic was removed — it falsely flagged log-frequency
+    // ranges (e.g. 6k–20k Hz with default 12k at 43%) as bipolar, making the
+    // Air-band slider render differently from the other four.
+    let bipolar = min < 0.0 && max > 0.0;
     let center_norm = if min < 0.0 && max > 0.0 {
         ((0.0 - min) / span).clamp(0.0, 1.0)
     } else if bipolar {

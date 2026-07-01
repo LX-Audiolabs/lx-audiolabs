@@ -483,22 +483,22 @@ impl PluginLogic for Meridian {
             self.peak_hold_r_value = -90.0;
         }
 
-        // Smoothed parameter values
-        let warmth_drive_db = self.params.warmth_drive.smoother.next(self.params.warmth_drive.raw_target());
-        let warmth_mix_pct = self.params.warmth_mix.smoother.next(self.params.warmth_mix.raw_target());
-        let excite_amt = self.params.excite_amount.smoother.next(self.params.excite_amount.raw_target());
-        let excite_blend = self.params.excite_blend.smoother.next(self.params.excite_blend.raw_target());
-        let comp_t = self.params.comp_threshold.smoother.next(self.params.comp_threshold.raw_target());
-        let comp_m = self.params.comp_mix.smoother.next(self.params.comp_mix.raw_target());
-        let comp_att = self.params.comp_attack.smoother.next(self.params.comp_attack.raw_target());
-        let comp_rel = self.params.comp_release.smoother.next(self.params.comp_release.raw_target());
-        let ratio = self.params.comp_character.smoother.next(self.params.comp_character.raw_target());
+        // Smoothed parameter values (per-block reads via value(), truce pattern)
+        let warmth_drive_db = self.params.warmth_drive.value() as f32;
+        let warmth_mix_pct = self.params.warmth_mix.value() as f32;
+        let excite_amt = self.params.excite_amount.value() as f32;
+        let excite_blend = self.params.excite_blend.value() as f32;
+        let comp_t = self.params.comp_threshold.value() as f32;
+        let comp_m = self.params.comp_mix.value() as f32;
+        let comp_att = self.params.comp_attack.value() as f32;
+        let comp_rel = self.params.comp_release.value() as f32;
+        let ratio = self.params.comp_character.value() as f32;
         let knee = (1.0 - (ratio - 1.5) / 2.5) * 6.0;
-        let comp_makeup_gain = db_to_gain(self.params.comp_makeup.smoother.next(self.params.comp_makeup.raw_target()));
+        let comp_makeup_gain = db_to_gain(self.params.comp_makeup.value() as f32);
 
-        let width = self.params.stereo_width.smoother.next(self.params.stereo_width.raw_target()) / 100.0;
-        let pan = self.params.pan.smoother.next(self.params.pan.raw_target());
-        let out_gain = db_to_gain(self.params.output_gain.smoother.next(self.params.output_gain.raw_target()));
+        let width = self.params.stereo_width.value() as f32 / 100.0;
+        let pan = self.params.pan.value() as f32;
+        let out_gain = db_to_gain(self.params.output_gain.value() as f32);
 
         let mut snap_phase = self.params.shared.snap_phase.load(Ordering::Acquire);
         let mono = match snap_phase { 2 => true, 3 => false, _ => self.params.mono_active.value() };
