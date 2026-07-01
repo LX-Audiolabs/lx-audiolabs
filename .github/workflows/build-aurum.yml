@@ -2,12 +2,6 @@ name: Build Aurum
 
 on:
   workflow_dispatch:
-      - 'shared-dsp/**'
-      - 'shared-analysis/**'
-      - 'shared-ui/**'
-      - 'shared-vault/**'
-      - 'truce.toml'
-      - 'Cargo.toml'
       - 'Cargo.lock'
 
 jobs:

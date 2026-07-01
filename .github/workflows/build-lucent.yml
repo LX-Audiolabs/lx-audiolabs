@@ -2,12 +2,6 @@ name: Build Lucent Bundle
 
 on:
   workflow_dispatch:
-      - 'plugins/lucent-relay/**'
-      - 'shm-hub/**'
-      - 'shared-dsp/**'
-      - 'shared-analysis/**'
-      - 'shared-ui/**'
-      - 'shared-vault/**'
       - 'truce.toml'
       - 'Cargo.toml'
       - 'Cargo.lock'
