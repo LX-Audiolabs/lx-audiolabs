@@ -153,6 +153,23 @@ impl IcedPlugin<crate::LucentParams> for LucentEditor {
                 self.peak_hold_r = self.shared_state.peak_hold_r.load(Ordering::Relaxed);
                 self.phase_correlation = self.shared_state.phase_correlation.load(Ordering::Relaxed);
                 self.balance = self.shared_state.balance.load(Ordering::Relaxed);
+                let snap_now = self.shared_state.snap_active.load(Ordering::Relaxed);
+                if snap_now { self.snap_blink = 72; }
+                else if self.snap_blink == 1 {
+                    // SNAP just completed — export to vault
+                    if let Some(ref vp) = self.vault_path {
+                        if !vp.is_empty() {
+                            let stereo = self.shared_state.snap_stereo_snap.lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
+                            let mono = self.shared_state.snap_mono_snap.lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
+                            let delta = self.shared_state.snap_delta_snap.lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
+                            let sr = self.shared_state.sample_rate.load(Ordering::Relaxed);
+                            let band_levels = [-90.0f32; 5];
+                            let md = snap_markdown(&stereo, &mono, &delta, band_levels, self.phase_correlation, self.peak_l, self.peak_r, sr);
+                            let fname = snap_filename(vp);
+                            let _ = std::fs::write(std::path::Path::new(vp).join(&fname), &md);
+                        }
+                    }
+                }
                 if self.snap_blink > 0 { self.snap_blink -= 1; }
             }
             LucentMsg::RelayToggled(idx) => {
@@ -627,4 +644,41 @@ fn panel_bg() -> container::Style {
         border: Border { color: Color::from_rgb(0.18, 0.18, 0.18), width: 1.0, radius: 3.0.into() },
         ..Default::default()
     }
+}
+
+// ─── SNAP Helpers ────────────────────────────────────────────────────────────
+
+fn snap_filename(vault_path: &str) -> String {
+    let dir = std::path::Path::new(vault_path);
+    let mut max_n = 0u32;
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.flatten() {
+            let s = e.file_name().to_string_lossy().into_owned();
+            if let Some(inner) = s.strip_prefix("SNAPSHOT-").and_then(|r| r.strip_suffix(".md")) {
+                if let Ok(n) = inner.parse::<u32>() { max_n = max_n.max(n); }
+            }
+        }
+    }
+    format!("SNAPSHOT-{:03}.md", max_n + 1)
+}
+
+fn snap_markdown(stereo: &[f32], mono: &[f32], delta: &[f32],
+    _band_levels: [f32; 5], corr: f32, pl: f32, pr: f32, sr: f32) -> String
+{
+    let fft_sz = 2048.0;
+    let freqs: &[f32] = &[20.0, 40.0, 80.0, 160.0, 315.0, 630.0, 1250.0, 2500.0, 5000.0, 10000.0, 16000.0, 20000.0];
+    let tbl = |s: &[f32]| {
+        freqs.iter().map(|&f| {
+            let bin = ((f * fft_sz / sr) as usize).min(s.len().saturating_sub(1));
+            format!("| {} | {:.1} |", if f >= 1000.0 { format!("{:.0}k", f/1000.0) } else { format!("{:.0}", f) }, s[bin])
+        }).collect::<Vec<_>>().join("\n")
+    };
+    format!(
+        "---\nplugin: lucent\ntype: snapshot\n---\n\n# Lucent Snapshot\n\n\
+        ## Signal\n| | L | R |\n|--|--|--|\n| Peak | {pl:.1} dB | {pr:.1} dB |\n| Korrelation | {co:.2} | |\n\n\
+        ## Spektrum — Stereo\n| Hz | dB |\n|----|-----|\n{st}\n\n\
+        ## Spektrum — Mono\n| Hz | dB |\n|----|-----|\n{mn}\n\n\
+        ## Delta\n| Hz | dB |\n|----|-----|\n{dt}\n",
+        pl=pl, pr=pr, co=corr, st=tbl(stereo), mn=tbl(mono), dt=tbl(delta),
+    )
 }

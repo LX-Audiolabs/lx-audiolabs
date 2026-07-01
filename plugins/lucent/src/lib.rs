@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::sync::atomic::Ordering;
 use realfft::{RealFftPlanner, RealToComplex, num_complex::Complex};
 
-use shared_analysis::{SPECTRUM_BINS, SharedState, relay_hub};
+use shared_analysis::{SPECTRUM_BINS, SharedState, relay_hub, SnapFFT, SnapMode};
 
 type ResonanceHub = Arc<Mutex<Vec<(usize, f32)>>>;
 
@@ -177,6 +177,7 @@ pub struct Lucent {
     fft_output: Vec<Complex<f32>>,
     peak_tracker: PeakTracker,
     masking_analyzer: MaskingAnalyzer,
+    snap_fft: SnapFFT,
     sample_rate: f32,
     peak_hold_value: f32,
     peak_hold_l_value: f32,
@@ -207,6 +208,7 @@ impl Lucent {
             fft_output,
             peak_tracker: PeakTracker::new(),
             masking_analyzer: MaskingAnalyzer::new(44100.0),
+            snap_fft: SnapFFT::new(),
             sample_rate: 44100.0,
             peak_hold_value: -100.0,
             peak_hold_l_value: -100.0,
@@ -298,6 +300,7 @@ impl PluginLogic for Lucent {
         }
 
         let mode = self.params.analyze_mode.value();
+        let snap_phase = self.params.shared.snap_phase.load(Ordering::Acquire);
 
         // Pass-through: copy input to output
         for ch in 0..buffer.channels() {
@@ -323,6 +326,42 @@ impl PluginLogic for Lucent {
             let in_l = buffer.input(0)[i];
             let in_r = buffer.input(1)[i];
             let mono_in = (in_l + in_r) * 0.5;
+
+            // SNAP FFT (same pattern as Meridian/Equilibrium)
+            if snap_phase > 0 {
+                let sample = match snap_phase {
+                    1 | 2 => mono_in,
+                    3 => {
+                        let in_mono = (in_l + in_r) * 0.5;
+                        let out_mono = mono_in; // Lucent is pass-through, so out = in for SNAP
+                        out_mono - in_mono // delta = 0 for pure analyzer
+                    }
+                    _ => 0.0,
+                };
+                if self.snap_fft.push_sample(sample) {
+                    let frame = self.snap_fft.compute_fft(sample_rate);
+                    let threshold = if snap_phase == 2 || snap_phase == 3 { 30 } else { 60 };
+                    if self.snap_fft.accumulate_snap(&frame, snap_phase, threshold) {
+                        let mode_snap = match snap_phase {
+                            1 => SnapMode::Stereo, 2 => SnapMode::Mono, _ => SnapMode::Delta,
+                        };
+                        let snapshot = self.snap_fft.read_snapshot(mode_snap);
+                        if let Ok(mut buf) = match mode_snap {
+                            SnapMode::Stereo => self.params.shared.snap_stereo_snap.try_lock(),
+                            SnapMode::Mono => self.params.shared.snap_mono_snap.try_lock(),
+                            SnapMode::Delta => self.params.shared.snap_delta_snap.try_lock(),
+                        } {
+                            *buf = snapshot;
+                        }
+                        let next_phase = if snap_phase < 3 { snap_phase + 1 } else { 0 };
+                        self.params.shared.snap_phase.store(next_phase, Ordering::Release);
+                        if next_phase == 0 {
+                            self.params.shared.snap_active.store(false, Ordering::Release);
+                            self.snap_fft.reset_snapshots();
+                        }
+                    }
+                }
+            }
 
             max_out_l = max_out_l.max(in_l.abs());
             max_out_r = max_out_r.max(in_r.abs());
