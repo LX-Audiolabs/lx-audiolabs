@@ -2,10 +2,6 @@ name: Build Aurum
 
 on:
   workflow_dispatch:
-  push:
-    branches: [develop]
-    paths:
-      - 'plugins/aurum/**'
       - 'shared-dsp/**'
       - 'shared-analysis/**'
       - 'shared-ui/**'

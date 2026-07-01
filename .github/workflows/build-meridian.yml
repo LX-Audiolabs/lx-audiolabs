@@ -2,10 +2,6 @@ name: Build Meridian (CI)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [develop]
-    paths:
-      - 'plugins/meridian/**'
       - 'shared-dsp/**'
       - 'shared-analysis/**'
       - 'shared-ui/**'
