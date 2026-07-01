@@ -41,7 +41,7 @@ pub enum AurumMsg {
     MbRelLoG(Gesture), MbRelHiG(Gesture), MbRelSiG(Gesture),
     MbLinkToggled, MbGainGG(Gesture), MbThrOffG(Gesture), MbModeToggled,
     LimCeilG(Gesture), LimRelG(Gesture),
-    SelectPreset(usize), PresetNameChanged(String), SavePreset, SnapPressed,
+    SnapPressed,
     SetupToggled, VaultPathChanged(String), SaveVaultPath,
 }
 
@@ -52,7 +52,7 @@ pub struct AurumEditor {
     output_peak: f32, peak_hold: f32, peak_l: f32, peak_r: f32,
     peak_hold_l: f32, peak_hold_r: f32, phase_correlation: f32, balance: f32,
     vault_path: Option<String>, show_setup: bool, vault_path_input: String,
-    preset_name_input: String, snap_blink: u32,
+    snap_blink: u32,
 }
 
 impl AurumEditor {
@@ -98,7 +98,7 @@ impl IcedPlugin<AurumParams> for AurumEditor {
             output_peak: -90.0, peak_hold: -90.0, peak_l: -90.0, peak_r: -90.0,
             peak_hold_l: -90.0, peak_hold_r: -90.0, phase_correlation: 1.0, balance: 0.0,
             vault_path: cfg.vault_path.clone(), show_setup: false,
-            vault_path_input: cfg.vault_path.unwrap_or_default(), preset_name_input: String::new(),
+            vault_path_input: cfg.vault_path.unwrap_or_default(),
             snap_blink: 0 }
     }
 
@@ -195,9 +195,6 @@ impl IcedPlugin<AurumParams> for AurumEditor {
             AurumMsg::MbModeToggled => toggle(AurumParamsParamId::MbMode, !p.mb_mode.value()),
             AurumMsg::LimCeilG(g) => self.gesture(AurumParamsParamId::LimCeiling, g, ctx),
             AurumMsg::LimRelG(g) => self.gesture(AurumParamsParamId::LimRelease, g, ctx),
-            AurumMsg::SelectPreset(_) => {},
-            AurumMsg::PresetNameChanged(s) => self.preset_name_input = s,
-            AurumMsg::SavePreset => {},
             AurumMsg::SnapPressed => { self.snap_blink = 72; self.shared_state.snap_active.store(true, Ordering::Relaxed); }
             AurumMsg::SetupToggled => { self.show_setup = !self.show_setup; if self.show_setup { self.vault_path_input = self.vault_path.clone().unwrap_or_default(); } }
             AurumMsg::VaultPathChanged(p) => self.vault_path_input = p,
@@ -299,7 +296,7 @@ impl IcedPlugin<AurumParams> for AurumEditor {
 // ─── Tab Builders ──────────────────────────────────────────────────────────
 
 impl AurumEditor {
-    fn shape_tab(&self) -> Element<Message<AurumMsg>> {
+    fn shape_tab(&self) -> Element<'_, Message<AurumMsg>> {
         let p = &self.params;
         let in_db = self.shared_state.input_peak.load(Ordering::Relaxed);
         let inp = if in_db <= -90.0 { "--".to_string() } else { format!("{in_db:.1} dB") };
@@ -323,7 +320,7 @@ impl AurumEditor {
         ].spacing(2)).width(Length::Fill).into()
     }
 
-    fn color_tab(&self) -> Element<Message<AurumMsg>> {
+    fn color_tab(&self) -> Element<'_, Message<AurumMsg>> {
         let p = &self.params;
         container(column![
             container(row![Self::strip_label("2-BAND COMP"), Space::new().width(Length::Fixed(12.0)),
@@ -346,7 +343,7 @@ impl AurumEditor {
         ].spacing(2)).width(Length::Fill).into()
     }
 
-    fn limit_tab(&self) -> Element<Message<AurumMsg>> {
+    fn limit_tab(&self) -> Element<'_, Message<AurumMsg>> {
         let p = &self.params;
         container(column![
             container(column![
@@ -379,7 +376,7 @@ impl AurumEditor {
     }
 }
 
-fn band_col(label: &str, thr: f32, thr_msg: impl Fn(Gesture) -> AurumMsg + 'static, atk: f32, atk_msg: impl Fn(Gesture) -> AurumMsg + 'static, rel: f32, rel_msg: impl Fn(Gesture) -> AurumMsg + 'static, gain: f32, gain_msg: impl Fn(Gesture) -> AurumMsg + 'static) -> Element<Message<AurumMsg>> {
+fn band_col(label: &str, thr: f32, thr_msg: impl Fn(Gesture) -> AurumMsg + 'static, atk: f32, atk_msg: impl Fn(Gesture) -> AurumMsg + 'static, rel: f32, rel_msg: impl Fn(Gesture) -> AurumMsg + 'static, gain: f32, gain_msg: impl Fn(Gesture) -> AurumMsg + 'static) -> Element<'_, Message<AurumMsg>> {
     column![Text::new(label).size(9).font(bold_font()).color(Color::from_rgb(0.6, 0.6, 0.6)),
         AurumEditor::knob("THR dB", thr, -18.0, 0.0, -3.0, thr_msg), AurumEditor::knob("ATK ms", atk, 0.1, 50.0, 5.0, atk_msg),
         AurumEditor::knob("REL ms", rel, 10.0, 500.0, 100.0, rel_msg), AurumEditor::knob("GAIN dB", gain, -6.0, 6.0, 0.0, gain_msg),
