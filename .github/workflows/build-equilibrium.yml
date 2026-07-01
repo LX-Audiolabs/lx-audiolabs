@@ -52,7 +52,7 @@ jobs:
           Copy-Item target\bundles\Equilibrium.clap dist\
           Write-Host "Equilibrium v${{ steps.version.outputs.version }} — Windows"
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: Equilibrium-v${{ steps.version.outputs.version }}-${{ runner.os == 'Linux' && 'linux' || 'win' }}
           path: dist/
