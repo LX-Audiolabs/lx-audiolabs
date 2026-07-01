@@ -39,3 +39,21 @@ category = "effect"
 fourcc = "Aurm"
 vst3_subcategory = "Mastering"
 description = "All-In-One Mastering — M/S EQ, Comp, Sat, MB Limiter, TP Limiter"
+
+[[plugin]]
+name = "Equilibrium"
+bundle_id = "equilibrium"
+crate = "equilibrium"
+category = "effect"
+fourcc = "Eqlb"
+vst3_subcategory = "Equalizer"
+description = "Pre-master spectral balancer with 5-band crossover and per-band stereo control"
+
+[[plugin]]
+name = "Meridian"
+bundle_id = "meridian"
+crate = "meridian"
+category = "effect"
+fourcc = "Mrdn"
+vst3_subcategory = "Equalizer"
+description = "Track and group shaper with 5-band EQ, compressor, and saturation"

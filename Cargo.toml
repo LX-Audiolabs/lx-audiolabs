@@ -9,6 +9,8 @@ members = [
     "lucent-relay",
     "aether",
     "aurum",
+    "equilibrium",
+    "meridian",
 ]
 resolver = "2"
 

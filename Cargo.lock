@@ -452,6 +452,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "equilibrium"
+version = "1.4.0"
+dependencies = [
+ "clap-sys",
+ "shared-analysis",
+ "shared-dsp",
+ "shared-ui",
+ "tracing",
+ "truce",
+ "truce-clap",
+ "truce-core",
+ "truce-iced",
+ "truce-loader",
+ "truce-params",
+ "truce-test",
+ "truce-vst3",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1352,6 +1371,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5aa361d4faea93603064a027415f07bd8e1d5c88c9fbf68bf56a285428fd79ce"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "meridian"
+version = "1.6.0"
+dependencies = [
+ "clap-sys",
+ "realfft",
+ "shared-analysis",
+ "shared-dsp",
+ "tracing",
+ "truce",
+ "truce-clap",
+ "truce-core",
+ "truce-iced",
+ "truce-loader",
+ "truce-params",
+ "truce-test",
+ "truce-vst3",
 ]
 
 [[package]]
