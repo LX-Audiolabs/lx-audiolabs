@@ -113,7 +113,7 @@ fn default_presets() -> Vec<(String, Option<PathBuf>, AetherProfile)> {
     vec![("Harman Flat".into(), None, harman_flat_profile())]
 }
 
-pub(crate) fn resolve_last_preset() -> Option<AetherProfile> {
+fn resolve_last_preset() -> Option<AetherProfile> {
     let config = shared_analysis::load_config("Aether");
     let name = config.last_preset?;
     if let Some((_, _, p)) = default_presets().into_iter().find(|(n, _, _)| *n == name) { return Some(p); }
@@ -409,6 +409,32 @@ impl IcedPlugin<AetherParams> for AetherEditor {
             .and_then(|n| presets.iter().position(|(name, _, _)| name == n))
             .or(Some(0));
         let preset_name_input = config.last_preset.clone().unwrap_or_default();
+        // Restore the last-used preset's actual values, not just the dropdown
+        // selection above. No PluginContext exists yet at this point, so this
+        // writes plain values straight into the atomics via set_value() rather
+        // than going through apply_profile()'s ctx-based normalized path.
+        // Runs on every editor open (truce-iced calls IcedPlugin::new() each
+        // time the GUI window opens, not just once per plugin instance) - by
+        // design, per explicit product decision: reopening the window snaps
+        // any live tweaks back to the last-selected preset.
+        if let Some(profile) = resolve_last_preset() {
+            let freq = [&params.eq1_freq, &params.eq2_freq, &params.eq3_freq, &params.eq4_freq, &params.eq5_freq];
+            let gain = [&params.eq1_gain, &params.eq2_gain, &params.eq3_gain, &params.eq4_gain, &params.eq5_gain];
+            let q    = [&params.eq1_q,    &params.eq2_q,    &params.eq3_q,    &params.eq4_q,    &params.eq5_q];
+            let typ  = [&params.eq1_type, &params.eq2_type, &params.eq3_type, &params.eq4_type, &params.eq5_type];
+            for i in 0..5 {
+                let (tc, fc, gn, qq) = profile.bands[i];
+                freq[i].set_value(fc as f64);
+                gain[i].set_value(gn as f64);
+                q[i].set_value(qq as f64);
+                typ[i].set_value(tc as i64);
+            }
+            params.blend.set_value(profile.blend as f64);
+            params.cf_angle.set_value(profile.cf_angle as f64);
+            params.cf_amount.set_value(profile.cf_amount as f64);
+            params.cf_realism.set_value(profile.cf_realism as i64);
+            params.gain.set_value(profile.gain as f64);
+        }
         let shared_state = params.shared.clone();
         let mut editor = Self {
             params,
