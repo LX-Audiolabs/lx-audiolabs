@@ -597,6 +597,25 @@ impl EquilibriumEditor {
                         self.shared_state.target_levels[b].store(prof.bands[b], Ordering::Release);
                         self.shared_state.target_tolerances[b].store(prof.tolerances[b], Ordering::Release);
                     }
+                    // Apply preset values to actual parameters
+                    self.params.low_gain.set_value(prof.bands[0] as f64);
+                    self.params.bass_gain.set_value(prof.bands[1] as f64);
+                    self.params.mid_gain.set_value(prof.bands[2] as f64);
+                    self.params.high_mid_gain.set_value(prof.bands[3] as f64);
+                    self.params.high_gain.set_value(prof.bands[4] as f64);
+
+                    self.params.low_width.set_value(prof.widths[0] as f64);
+                    self.params.bass_width.set_value(prof.widths[1] as f64);
+                    self.params.mid_width.set_value(prof.widths[2] as f64);
+                    self.params.high_mid_width.set_value(prof.widths[3] as f64);
+                    self.params.high_width.set_value(prof.widths[4] as f64);
+
+                    self.params.low_pan.set_value(prof.pans[0] as f64);
+                    self.params.bass_pan.set_value(prof.pans[1] as f64);
+                    self.params.mid_pan.set_value(prof.pans[2] as f64);
+                    self.params.high_mid_pan.set_value(prof.pans[3] as f64);
+                    self.params.high_pan.set_value(prof.pans[4] as f64);
+
                     self.params.mono_floor.set_value(prof.mono_floor_hz as f64);
                 }
             }
@@ -710,11 +729,13 @@ impl EquilibriumEditor {
     }
 
     fn do_save_preset(&mut self) {
-        let mut bands = [0.0f32; 5];
-        let mut sum = 0.0;
-        for b in 0..5 { bands[b] = self.target_levels[b]; sum += bands[b]; }
-        let avg = sum / 5.0;
-        for b in bands.iter_mut() { *b -= avg; }
+        let bands = [
+            self.params.low_gain.raw_target() as f32,
+            self.params.bass_gain.raw_target() as f32,
+            self.params.mid_gain.raw_target() as f32,
+            self.params.high_mid_gain.raw_target() as f32,
+            self.params.high_gain.raw_target() as f32,
+        ];
 
         let name = if self.preset_name_input.trim().is_empty() {
             format!("User Preset {}", self.presets.len() + 1)
@@ -729,7 +750,7 @@ impl EquilibriumEditor {
         let fp = dir.join(format!("{}.md", safe));
 
         let prof = shared_analysis::Profile {
-            name: name.clone(), bands, tolerances: self.target_tolerances,
+            name: name.clone(), bands, tolerances: shared_analysis::DEFAULT_TOLERANCES,
             pans: [self.params.low_pan.raw_target() as f32, self.params.bass_pan.raw_target() as f32,
                 self.params.mid_pan.raw_target() as f32, self.params.high_mid_pan.raw_target() as f32,
                 self.params.high_pan.raw_target() as f32],
