@@ -101,13 +101,11 @@ pub struct EquilibriumEditor {
 
 #[derive(Debug, Clone)]
 pub struct EqPreset {
-    pub name: String,
     pub bands: [f32; 5],
     pub tolerances: [f32; 5],
     pub pans: [f32; 5],
     pub widths: [f32; 5],
     pub mono_floor_hz: f32,
-    pub output_gain: f32,
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -132,11 +130,10 @@ fn vsep<'a, M: 'a>() -> Element<'a, M> {
 fn load_presets(vault_path: Option<&str>) -> Vec<(String, Option<PathBuf>, EqPreset)> {
     let mut presets = vec![
         ("Pink Noise".to_string(), None, EqPreset {
-            name: "Pink Noise".into(),
             bands: [3.0, 0.0, -3.0, -6.0, -9.0],
             tolerances: shared_analysis::DEFAULT_TOLERANCES,
             pans: [0.0; 5], widths: [100.0; 5],
-            mono_floor_hz: 0.0, output_gain: 0.0,
+            mono_floor_hz: 0.0,
         }),
     ];
     let custom = shared_analysis::list_custom_presets("Equilibrium", vault_path);
@@ -145,13 +142,11 @@ fn load_presets(vault_path: Option<&str>) -> Vec<(String, Option<PathBuf>, EqPre
             name,
             Some(path),
             EqPreset {
-                name: profile.name.clone(),
                 bands: profile.bands,
                 tolerances: profile.tolerances,
                 pans: profile.pans,
                 widths: profile.widths,
                 mono_floor_hz: profile.mono_floor_hz,
-                output_gain: 0.0,
             },
         ));
     }
