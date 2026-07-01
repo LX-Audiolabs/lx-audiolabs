@@ -179,6 +179,17 @@ pub struct AurumParams {
 
     #[skip]
     pub shared: Arc<SharedState>,
+
+    /// Test-only hook: lets screenshot tests pick which tab
+    /// `AurumEditor::new()` starts on. `selected_tab` is pure UI state
+    /// with no CLAP-facing equivalent, and `truce_test::screenshot!`
+    /// only exposes `.set_param()` / `.setup(|plugin| ..)` (mutates the
+    /// plugin, not the editor) before the single-shot render - this is
+    /// the smallest way to reach it. Compiled out entirely in release
+    /// builds (`#[cfg(test)]`), zero runtime/state-serialization impact.
+    #[cfg(test)]
+    #[skip]
+    pub test_initial_tab: std::sync::atomic::AtomicUsize,
 }
 
 // ─── Plugin ───────────────────────────────────────────────────────────────────
@@ -192,7 +203,6 @@ pub struct Aurum {
     corr_avg_lr: f32,
     corr_avg_l2: f32,
     corr_avg_r2: f32,
-    gonio_env: f32,
     sample_rate: f32,
     ms_eq: MsEq,
     two_band_comp: TwoBandCompressor,
@@ -216,7 +226,6 @@ impl Aurum {
             peak_hold_l_value: -90.0,
             peak_hold_r_value: -90.0,
             corr_avg_lr: 0.0, corr_avg_l2: 1e-9, corr_avg_r2: 1e-9,
-            gonio_env: 0.0,
             sample_rate: 44100.0,
             ms_eq: MsEq::new(),
             two_band_comp: TwoBandCompressor::new(),
@@ -495,6 +504,8 @@ truce::plugin! { logic: Aurum, params: AurumParams }
 mod tests {
     use crate::Plugin;
     use std::time::Duration;
+    use std::sync::atomic::Ordering;
+    use truce_core::PluginExport;
 
     #[test]
     fn renders_pass_through() {
@@ -519,6 +530,7 @@ mod tests {
         truce_test::screenshot!(Plugin, "screenshots/aurum-color.png")
             .set_param(crate::AurumParamsParamId::CompSplit, 0.5)
             .set_param(crate::AurumParamsParamId::SatDriveStereo, 0.3)
+            .setup(|p| p.params().test_initial_tab.store(1, Ordering::Relaxed))
             .tolerance(200)
             .run();
     }
@@ -528,6 +540,7 @@ mod tests {
         truce_test::screenshot!(Plugin, "screenshots/aurum-limit.png")
             .set_param(crate::AurumParamsParamId::MbThreshMidLo, 0.4)
             .set_param(crate::AurumParamsParamId::LimCeiling, 0.7)
+            .setup(|p| p.params().test_initial_tab.store(2, Ordering::Relaxed))
             .tolerance(200)
             .run();
     }
