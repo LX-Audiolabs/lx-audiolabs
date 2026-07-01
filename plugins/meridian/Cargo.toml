@@ -1,0 +1,41 @@
+[package]
+name = "meridian"
+version = "1.6.0"
+edition = "2024"
+description = "LX Audiolabs — Meridian (Track and group shaper with 5-band EQ, compressor, and saturation)"
+license = "MIT"
+authors = ["LX Audiolabs"]
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[[bin]]
+name = "meridian-standalone"
+path = "src/main.rs"
+required-features = ["standalone"]
+
+[features]
+default = ["clap", "standalone"]
+clap = ["dep:truce-clap", "dep:clap-sys"]
+vst3 = ["dep:truce-vst3"]
+standalone = ["dep:truce-standalone"]
+shell = ["truce/shell", "clap"]
+
+[dependencies]
+truce        = { workspace = true }
+truce-core   = { workspace = true }
+truce-params = { workspace = true }
+truce-clap   = { workspace = true, optional = true }
+truce-vst3   = { workspace = true, optional = true }
+truce-standalone = { workspace = true, optional = true }
+truce-loader = { workspace = true }
+truce-iced   = { workspace = true }
+clap-sys     = { workspace = true, optional = true }
+
+shared-dsp      = { path = "../../shared-dsp" }
+shared-analysis = { path = "../../shared-analysis" }
+realfft         = "3"
+tracing         = "0.1"
+
+[dev-dependencies]
+truce-test = { workspace = true }
