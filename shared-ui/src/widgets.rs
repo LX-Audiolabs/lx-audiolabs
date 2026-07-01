@@ -46,7 +46,7 @@ pub fn reset_slider<'a, Message: Clone + 'a>(
         on_change: Box::new(move |v| Some(on_change(v))),
     })
     .width(Length::Fill)
-    .height(Length::Fixed(18.0))
+    .height(Length::Fixed(22.0))
     .into()
 }
 
