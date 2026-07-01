@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-truce       = { version = "1.0.1", default-features = false }
-truce-iced  = "1.0.1"
+truce       = { workspace = true }
+truce-iced  = { workspace = true }
 shared-analysis = { path = "../shared-analysis" }

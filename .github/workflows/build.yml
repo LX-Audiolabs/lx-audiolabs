@@ -35,19 +35,23 @@ jobs:
       - name: Package (Linux)
         if: runner.os == 'Linux'
         run: |
-          mkdir -p dist/aether dist/aurum dist/lucent-bundle
+          mkdir -p dist/aether dist/aurum dist/lucent-bundle dist/equilibrium dist/meridian
           cp target/bundles/Aether.clap dist/aether/
           cp target/bundles/Aurum.clap dist/aurum/
           cp "target/bundles/Lucent.clap" "target/bundles/Lucent Relay.clap" dist/lucent-bundle/
+          cp target/bundles/Equilibrium.clap dist/equilibrium/
+          cp target/bundles/Meridian.clap dist/meridian/
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist\aether, dist\aurum, dist\lucent-bundle | Out-Null
+          New-Item -ItemType Directory -Force -Path dist\aether, dist\aurum, dist\lucent-bundle, dist\equilibrium, dist\meridian | Out-Null
           Copy-Item target\bundles\Aether.clap dist\aether\
           Copy-Item target\bundles\Aurum.clap dist\aurum\
           Copy-Item 'target\bundles\Lucent.clap', 'target\bundles\Lucent Relay.clap' dist\lucent-bundle\
+          Copy-Item target\bundles\Equilibrium.clap dist\equilibrium\
+          Copy-Item target\bundles\Meridian.clap dist\meridian\
 
       - uses: actions/upload-artifact@v5
         with:
@@ -65,4 +69,16 @@ jobs:
         with:
           name: lucent-bundle-${{ runner.os == 'Linux' && 'linux' || 'win' }}
           path: dist/lucent-bundle/
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: equilibrium-${{ runner.os == 'Linux' && 'linux' || 'win' }}
+          path: dist/equilibrium/
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: meridian-${{ runner.os == 'Linux' && 'linux' || 'win' }}
+          path: dist/meridian/
           if-no-files-found: error

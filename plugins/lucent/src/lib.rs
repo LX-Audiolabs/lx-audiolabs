@@ -333,7 +333,7 @@ impl PluginLogic for Lucent {
             sum_r2 += in_r * in_r;
 
             let scope_pos = self.params.shared.scope_write_pos.load(Ordering::Relaxed);
-            if let Ok(mut scope) = self.params.shared.scope_samples.lock() {
+            if let Ok(mut scope) = self.params.shared.scope_samples.try_lock() {
                 if scope_pos < scope.len() {
                     scope[scope_pos] = [in_l, in_r];
                 }
@@ -362,14 +362,14 @@ impl PluginLogic for Lucent {
                             let peaks = self.peak_tracker.find_peaks(&frame);
                             self.peak_tracker.update(&peaks);
                             let last_resonances = self.peak_tracker.resonance_peaks();
-                            if let Ok(mut peaks) = resonance_hub().lock() { *peaks = last_resonances; }
+                            if let Ok(mut peaks) = resonance_hub().try_lock() { *peaks = last_resonances; }
                             if let Ok(mut mm) = self.params.shared.masking_map.try_lock() {
                                 mm.iter_mut().for_each(|m| *m = -90.0);
                             }
-                            if let Ok(mut bins) = self.params.shared.spectrum_bins.lock() {
+                            if let Ok(mut bins) = self.params.shared.spectrum_bins.try_lock() {
                                 bins.copy_from_slice(&frame);
                             }
-                            if let Ok(mut avg) = self.params.shared.spectrum_avg.lock() {
+                            if let Ok(mut avg) = self.params.shared.spectrum_avg.try_lock() {
                                 for k in 0..n_bins {
                                     avg[k] = avg[k] * (49.0 / 50.0) + frame[k] * (1.0 / 50.0);
                                 }
@@ -379,7 +379,7 @@ impl PluginLogic for Lucent {
                             let peaks = self.peak_tracker.find_peaks(&frame);
                             self.peak_tracker.update(&peaks);
                             let last_resonances = self.peak_tracker.resonance_peaks();
-                            if let Ok(mut peaks) = resonance_hub().lock() { *peaks = last_resonances; }
+                            if let Ok(mut peaks) = resonance_hub().try_lock() { *peaks = last_resonances; }
                             let my_name = self.claimed_lucent_slot
                                 .map(|s| shared_analysis::shm::display_name(&self.cached_name, s))
                                 .unwrap_or_else(|| self.cached_name.clone());
@@ -393,23 +393,23 @@ impl PluginLogic for Lucent {
                             if let Ok(mut mm) = self.params.shared.masking_map.try_lock() {
                                 mm.copy_from_slice(&self.masking_analyzer.masking_map);
                             }
-                            if let Ok(mut bins) = self.params.shared.spectrum_bins.lock() {
+                            if let Ok(mut bins) = self.params.shared.spectrum_bins.try_lock() {
                                 bins.copy_from_slice(&frame);
                             }
-                            if let Ok(mut avg) = self.params.shared.spectrum_avg.lock() {
+                            if let Ok(mut avg) = self.params.shared.spectrum_avg.try_lock() {
                                 for k in 0..n_bins {
                                     avg[k] = avg[k] * (49.0 / 50.0) + frame[k] * (1.0 / 50.0);
                                 }
                             }
                         }
                         _ => {
-                            if let Ok(mut bins) = self.params.shared.spectrum_bins.lock() {
+                            if let Ok(mut bins) = self.params.shared.spectrum_bins.try_lock() {
                                 bins.iter_mut().for_each(|b| *b = -90.0);
                             }
-                            if let Ok(mut avg) = self.params.shared.spectrum_avg.lock() {
+                            if let Ok(mut avg) = self.params.shared.spectrum_avg.try_lock() {
                                 avg.iter_mut().for_each(|b| *b = -90.0);
                             }
-                            if let Ok(mut peaks) = resonance_hub().lock() { peaks.clear(); }
+                            if let Ok(mut peaks) = resonance_hub().try_lock() { peaks.clear(); }
                             let my_name = self.claimed_lucent_slot
                                 .map(|s| shared_analysis::shm::display_name(&self.cached_name, s))
                                 .unwrap_or_else(|| self.cached_name.clone());
