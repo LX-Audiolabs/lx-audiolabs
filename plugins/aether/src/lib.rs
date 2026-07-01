@@ -253,7 +253,7 @@ impl PluginLogic for Aether {
             let cf_l = h_l + self.cf_lp_l * cf_mix;
             let cf_r = h_r + self.cf_lp_r * cf_mix;
 
-            let gain_smoothed = self.params.gain.smoother.next(self.params.gain.raw_target());
+            let gain_smoothed = self.params.gain.value() as f32;
             let g = 10.0_f32.powf(gain_smoothed / 20.0);
             buffer.output(0)[i] = cf_l * g;
             buffer.output(1)[i] = cf_r * g;

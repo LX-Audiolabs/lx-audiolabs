@@ -426,25 +426,25 @@ impl PluginLogic for Equilibrium {
             let mut bands_r = [band1_r, band2_r, band3_r, band4_r, band5_r];
 
             let band_gains = [
-                db_to_gain(self.params.low_gain.smoother.next(self.params.low_gain.raw_target())),
-                db_to_gain(self.params.bass_gain.smoother.next(self.params.bass_gain.raw_target())),
-                db_to_gain(self.params.mid_gain.smoother.next(self.params.mid_gain.raw_target())),
-                db_to_gain(self.params.high_mid_gain.smoother.next(self.params.high_mid_gain.raw_target())),
-                db_to_gain(self.params.high_gain.smoother.next(self.params.high_gain.raw_target())),
+                db_to_gain(self.params.low_gain.value() as f32),
+                db_to_gain(self.params.bass_gain.value() as f32),
+                db_to_gain(self.params.mid_gain.value() as f32),
+                db_to_gain(self.params.high_mid_gain.value() as f32),
+                db_to_gain(self.params.high_gain.value() as f32),
             ];
             let band_widths = [
-                self.params.low_width.smoother.next(self.params.low_width.raw_target()) / 100.0,
-                self.params.bass_width.smoother.next(self.params.bass_width.raw_target()) / 100.0,
-                self.params.mid_width.smoother.next(self.params.mid_width.raw_target()) / 100.0,
-                self.params.high_mid_width.smoother.next(self.params.high_mid_width.raw_target()) / 100.0,
-                self.params.high_width.smoother.next(self.params.high_width.raw_target()) / 100.0,
+                self.params.low_width.value() as f32 / 100.0,
+                self.params.bass_width.value() as f32 / 100.0,
+                self.params.mid_width.value() as f32 / 100.0,
+                self.params.high_mid_width.value() as f32 / 100.0,
+                self.params.high_width.value() as f32 / 100.0,
             ];
             let band_pans = [
-                self.params.low_pan.smoother.next(self.params.low_pan.raw_target()),
-                self.params.bass_pan.smoother.next(self.params.bass_pan.raw_target()),
-                self.params.mid_pan.smoother.next(self.params.mid_pan.raw_target()),
-                self.params.high_mid_pan.smoother.next(self.params.high_mid_pan.raw_target()),
-                self.params.high_pan.smoother.next(self.params.high_pan.raw_target()),
+                self.params.low_pan.value() as f32,
+                self.params.bass_pan.value() as f32,
+                self.params.mid_pan.value() as f32,
+                self.params.high_mid_pan.value() as f32,
+                self.params.high_pan.value() as f32,
             ];
             let band_solos = [s_low, s_bass, s_mid, s_high_mid, s_high];
 
@@ -526,7 +526,7 @@ impl PluginLogic for Equilibrium {
                 processed_r = out_r - cut_r;
             }
 
-            let out_gain = db_to_gain(self.params.output_gain.smoother.next(self.params.output_gain.raw_target()));
+            let out_gain = db_to_gain(self.params.output_gain.value() as f32);
             processed_l *= out_gain;
             processed_r *= out_gain;
 
