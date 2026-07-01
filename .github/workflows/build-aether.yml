@@ -2,10 +2,6 @@ name: Build Aether (CI)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [develop]
-    paths:
-      - 'plugins/aether/**'
       - 'shared-dsp/**'
       - 'shared-analysis/**'
       - 'shared-ui/**'

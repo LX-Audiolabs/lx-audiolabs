@@ -2,10 +2,6 @@ name: Build Lucent Bundle
 
 on:
   workflow_dispatch:
-  push:
-    branches: [develop]
-    paths:
-      - 'plugins/lucent/**'
       - 'plugins/lucent-relay/**'
       - 'shm-hub/**'
       - 'shared-dsp/**'

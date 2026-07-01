@@ -2,10 +2,6 @@ name: Build Equilibrium (CI)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [develop]
-    paths:
-      - 'plugins/equilibrium/**'
       - 'shared-dsp/**'
       - 'shared-analysis/**'
       - 'shared-ui/**'
