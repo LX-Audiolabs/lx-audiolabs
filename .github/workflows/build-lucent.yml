@@ -2,9 +2,6 @@ name: Build Lucent Bundle
 
 on:
   workflow_dispatch:
-      - 'truce.toml'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
 
 jobs:
   build:
