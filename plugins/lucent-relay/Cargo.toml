@@ -1,0 +1,42 @@
+[package]
+name = "lucent-relay"
+version = "0.1.0"
+edition = "2024"
+description = "LX Audiolabs — Lucent Relay (FFT sender, pure pass-through)"
+license = "MIT"
+authors = ["LX Audiolabs"]
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[[bin]]
+name = "lucent-relay-standalone"
+path = "src/main.rs"
+required-features = ["standalone"]
+
+[features]
+default = ["clap", "standalone"]
+clap = ["dep:truce-clap", "dep:clap-sys"]
+vst3 = ["dep:truce-vst3"]
+standalone = ["dep:truce-standalone"]
+shell = ["truce/shell", "clap"]
+
+[dependencies]
+truce        = { workspace = true }
+truce-core   = { workspace = true }
+truce-params = { workspace = true }
+truce-clap   = { workspace = true, optional = true }
+truce-vst3   = { workspace = true, optional = true }
+truce-standalone = { workspace = true, optional = true }
+truce-loader = { workspace = true }
+truce-iced   = { workspace = true }
+clap-sys     = { workspace = true, optional = true }
+
+shared-dsp      = { path = "../../shared-dsp" }
+shared-analysis = { path = "../../shared-analysis" }
+shared-ui       = { path = "../../shared-ui" }
+tracing         = "0.1"
+realfft         = "3"
+
+[dev-dependencies]
+truce-test = { workspace = true }

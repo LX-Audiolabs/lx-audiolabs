@@ -1,11 +1,11 @@
-name: Build Aether (CI)
+name: Build Equilibrium (CI)
 
 on:
   workflow_dispatch:
   push:
     branches: [develop]
     paths:
-      - 'plugins/aether/**'
+      - 'plugins/equilibrium/**'
       - 'shared-dsp/**'
       - 'shared-analysis/**'
       - 'shared-ui/**'
@@ -30,8 +30,8 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target/
-          key: ${{ runner.os }}-aether-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-aether-
+          key: ${{ runner.os }}-equilibrium-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-equilibrium-
 
       - name: Install Linux deps
         if: runner.os == 'Linux'
@@ -40,31 +40,31 @@ jobs:
       - name: Install cargo-truce
         run: cargo install --git https://github.com/truce-audio/truce cargo-truce
 
-      - name: Build Aether
-        run: cargo truce build --clap -p aether
+      - name: Build Equilibrium
+        run: cargo truce build --clap -p equilibrium
 
       - name: Read version
         id: version
         shell: bash
-        run: echo "version=$(grep '^version' plugins/aether/Cargo.toml | head -1 | sed 's/.*\"\(.*\)\"/\1/')" >> $GITHUB_OUTPUT
+        run: echo "version=$(grep '^version' plugins/equilibrium/Cargo.toml | head -1 | sed 's/.*\"\(.*\)\"/\1/')" >> $GITHUB_OUTPUT
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
         run: |
           mkdir -p dist
-          cp target/bundles/Aether.clap dist/
-          echo "Aether v${{ steps.version.outputs.version }} — Linux"
+          cp target/bundles/Equilibrium.clap dist/
+          echo "Equilibrium v${{ steps.version.outputs.version }} — Linux"
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item target\bundles\Aether.clap dist\
-          Write-Host "Aether v${{ steps.version.outputs.version }} — Windows"
+          Copy-Item target\bundles\Equilibrium.clap dist\
+          Write-Host "Equilibrium v${{ steps.version.outputs.version }} — Windows"
 
       - uses: actions/upload-artifact@v5
         with:
-          name: Aether-v${{ steps.version.outputs.version }}-${{ runner.os == 'Linux' && 'linux' || 'win' }}
+          name: Equilibrium-v${{ steps.version.outputs.version }}-${{ runner.os == 'Linux' && 'linux' || 'win' }}
           path: dist/
           if-no-files-found: error

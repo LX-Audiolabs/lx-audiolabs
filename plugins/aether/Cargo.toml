@@ -1,0 +1,41 @@
+[package]
+name = "aether"
+version = "1.1.0"
+edition = "2024"
+description = "LX Audiolabs — Aether (Headphone monitoring corrector — Harman 5-band EQ + crossfeed)"
+license = "MIT"
+authors = ["LX Audiolabs"]
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[[bin]]
+name = "aether-standalone"
+path = "src/main.rs"
+required-features = ["standalone"]
+
+[features]
+default = ["clap", "standalone"]
+clap = ["dep:truce-clap", "dep:clap-sys"]
+vst3 = ["dep:truce-vst3"]
+standalone = ["dep:truce-standalone"]
+shell = ["truce/shell", "clap"]
+
+[dependencies]
+truce        = { workspace = true }
+truce-core   = { workspace = true }
+truce-params = { workspace = true }
+truce-clap   = { workspace = true, optional = true }
+truce-vst3   = { workspace = true, optional = true }
+truce-standalone = { workspace = true, optional = true }
+truce-loader = { workspace = true }
+truce-iced   = { workspace = true }
+clap-sys     = { workspace = true, optional = true }
+
+shared-dsp      = { path = "../../shared-dsp" }
+shared-analysis = { path = "../../shared-analysis" }
+shared-ui       = { path = "../../shared-ui" }
+tracing         = "0.1"
+
+[dev-dependencies]
+truce-test = { workspace = true }

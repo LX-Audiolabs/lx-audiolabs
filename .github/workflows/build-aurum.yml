@@ -5,7 +5,7 @@ on:
   push:
     branches: [develop]
     paths:
-      - 'aurum/**'
+      - 'plugins/aurum/**'
       - 'shared-dsp/**'
       - 'shared-analysis/**'
       - 'shared-ui/**'
