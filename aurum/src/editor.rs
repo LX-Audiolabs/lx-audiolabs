@@ -90,7 +90,11 @@ impl IcedPlugin<AurumParams> for AurumEditor {
     fn new(params: Arc<AurumParams>) -> Self {
         let shared = params.shared.clone();
         let cfg = shared_analysis::load_config("Aurum");
-        Self { params, shared_state: shared, selected_tab: 0,
+        #[cfg(test)]
+        let selected_tab = params.test_initial_tab.load(Ordering::Relaxed);
+        #[cfg(not(test))]
+        let selected_tab = 0;
+        Self { params, shared_state: shared, selected_tab,
             output_peak: -90.0, peak_hold: -90.0, peak_l: -90.0, peak_r: -90.0,
             peak_hold_l: -90.0, peak_hold_r: -90.0, phase_correlation: 1.0, balance: 0.0,
             vault_path: cfg.vault_path.clone(), show_setup: false,
