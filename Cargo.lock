@@ -3065,8 +3065,6 @@ dependencies = [
 [[package]]
 name = "truce-clap"
 version = "1.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b03a9272d17d8990af2969d873669350b25c6d72100dd5d7a9649a7d440eb31"
 dependencies = [
  "clap-sys",
  "crossbeam-queue",
