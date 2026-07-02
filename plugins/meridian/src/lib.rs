@@ -5,7 +5,7 @@
 //
 // Signal chain:
 //   HPF/LPF → 5-band Series EQ → Tilt → Exciter → Compressor →
-//   Warmth → Pan → Stereo Width → Mono/Delta → Gain → clamp
+//   Warmth → Inflate → Pan → Stereo Width → Mono/Delta → Gain → clamp
 
 use truce::prelude::*;
 use truce_core::editor::Editor;
@@ -47,6 +47,18 @@ fn soft_clip(x: f32) -> f32 {
 fn tube_warm(x: f32) -> f32 {
     const BIAS: f32 = 0.1;
     (x + BIAS).tanh() - BIAS.tanh()
+}
+
+/// Approximated Oxford-Inflator-style loudness/density waveshaper (Inflate).
+/// Not a Sonnox algorithm clone — the "probability density shifting" process is
+/// patented/undocumented. `curve` -50..+50: negative = subtle/tight, 0 = balanced,
+/// positive = fat/loud. Drive-varying tanh, always finite for finite input.
+#[inline]
+fn inflate_shape(x: f32, curve: f32) -> f32 {
+    let t = (curve + 50.0) / 100.0; // -50..+50 -> 0..1
+    let drive = 1.0 + t * t * 5.0; // quadratic: 0=1 (clean), 0.5=2.25 (gentle), 1=6 (fat/aggressive)
+    let norm = drive.tanh().max(1e-6);
+    (x * drive).tanh() / norm
 }
 
 // ─── Params ──────────────────────────────────────────────────────────────────
@@ -135,6 +147,16 @@ pub struct MeridianParams {
     #[param(name = "Comp Makeup", default = 0.0, range = "linear(0.0, 12.0)", unit = "dB", smooth = "linear(20)")]
     pub comp_makeup: FloatParam,
 
+    // Inflate (Oxford-Inflator-inspired loudness/density waveshaper)
+    #[param(name = "Inflate Effect", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)")]
+    pub inflate_effect: FloatParam,
+    #[param(name = "Inflate Curve", default = 0.0, range = "linear(-50.0, 50.0)", smooth = "linear(20)")]
+    pub inflate_curve: FloatParam,
+    #[param(name = "Inflate Band Split", default = 0)]
+    pub inflate_band_split: BoolParam,
+    #[param(name = "Inflate Clip", default = 0)]
+    pub inflate_clip: BoolParam,
+
     // Stereo Width
     #[param(name = "Stereo Width", default = 100.0, range = "linear(0.0, 200.0)", unit = "%", smooth = "linear(20)")]
     pub stereo_width: FloatParam,
@@ -180,6 +202,10 @@ pub struct Meridian {
     excite_hp_l: Biquad, excite_hp_r: Biquad,
 
     compressor: Compressor,
+
+    // Inflate band-split (LF/MF/HF, Linkwitz-Riley, sums flat)
+    xo_inflate_lo_l: LR2Crossover, xo_inflate_lo_r: LR2Crossover,
+    xo_inflate_hi_l: LR2Crossover, xo_inflate_hi_r: LR2Crossover,
 
     // Crossover analysis (for GUI visualizer)
     xo_bass_mid_l: LR2Crossover, xo_bass_mid_r: LR2Crossover,
@@ -243,6 +269,8 @@ impl Meridian {
             tilt_l: TiltEq::new(), tilt_r: TiltEq::new(),
             excite_hp_l: Biquad::new(), excite_hp_r: Biquad::new(),
             compressor: Compressor::new(),
+            xo_inflate_lo_l: LR2Crossover::new(), xo_inflate_lo_r: LR2Crossover::new(),
+            xo_inflate_hi_l: LR2Crossover::new(), xo_inflate_hi_r: LR2Crossover::new(),
             xo_bass_mid_l: LR2Crossover::new(), xo_bass_mid_r: LR2Crossover::new(),
             xo_low_bass_l: LR2Crossover::new(), xo_low_bass_r: LR2Crossover::new(),
             xo_mid_high_l: LR2Crossover::new(), xo_mid_high_r: LR2Crossover::new(),
@@ -292,6 +320,11 @@ impl PluginLogic for Meridian {
         let sr = sr as f32;
 
         self.compressor.set_sample_rate(sr);
+
+        self.xo_inflate_lo_l.set_cutoff(300.0, sr);
+        self.xo_inflate_lo_r.set_cutoff(300.0, sr);
+        self.xo_inflate_hi_l.set_cutoff(3000.0, sr);
+        self.xo_inflate_hi_r.set_cutoff(3000.0, sr);
 
         // Recreate Auto-Loud meters at host sample rate
         self.auto_loud_in = AutoLoudMeter::new(sr);
@@ -346,6 +379,8 @@ impl PluginLogic for Meridian {
             self.excite_l.reset(); self.excite_r.reset();
             self.tilt_l.reset(); self.tilt_r.reset();
             self.excite_hp_l.reset(); self.excite_hp_r.reset();
+            self.xo_inflate_lo_l.reset(); self.xo_inflate_lo_r.reset();
+            self.xo_inflate_hi_l.reset(); self.xo_inflate_hi_r.reset();
             self.xo_bass_mid_l.reset(); self.xo_bass_mid_r.reset();
             self.xo_low_bass_l.reset(); self.xo_low_bass_r.reset();
             self.xo_mid_high_l.reset(); self.xo_mid_high_r.reset();
@@ -496,6 +531,11 @@ impl PluginLogic for Meridian {
         let knee = (1.0 - (ratio - 1.5) / 2.5) * 6.0;
         let comp_makeup_gain = db_to_gain(self.params.comp_makeup.value() as f32);
 
+        let inflate_effect = self.params.inflate_effect.value() as f32 / 100.0;
+        let inflate_curve = self.params.inflate_curve.value() as f32;
+        let inflate_band_split = self.params.inflate_band_split.value();
+        let inflate_clip = self.params.inflate_clip.value();
+
         let width = self.params.stereo_width.value() as f32 / 100.0;
         let pan = self.params.pan.value() as f32;
         let out_gain = db_to_gain(self.params.output_gain.value() as f32);
@@ -592,6 +632,26 @@ impl PluginLogic for Meridian {
                 let mix = warmth_mix_pct / 100.0;
                 comp_l = comp_l * (1.0 - mix) + wet_l * mix;
                 comp_r = comp_r * (1.0 - mix) + wet_r * mix;
+            }
+
+            // Inflate (Oxford-Inflator-inspired loudness/density waveshaper)
+            if inflate_effect > 0.0 {
+                let shape_one = |v: f32| -> f32 {
+                    let v = if inflate_clip { v.clamp(-1.0, 1.0) } else { v.clamp(-2.0, 2.0) };
+                    inflate_shape(v, inflate_curve)
+                };
+                let (wet_l, wet_r) = if inflate_band_split {
+                    let (lo_l, hi_l) = self.xo_inflate_lo_l.process(comp_l);
+                    let (mid_l, top_l) = self.xo_inflate_hi_l.process(hi_l);
+                    let (lo_r, hi_r) = self.xo_inflate_lo_r.process(comp_r);
+                    let (mid_r, top_r) = self.xo_inflate_hi_r.process(hi_r);
+                    (shape_one(lo_l) + shape_one(mid_l) + shape_one(top_l),
+                     shape_one(lo_r) + shape_one(mid_r) + shape_one(top_r))
+                } else {
+                    (shape_one(comp_l), shape_one(comp_r))
+                };
+                comp_l = comp_l * (1.0 - inflate_effect) + wet_l * inflate_effect;
+                comp_r = comp_r * (1.0 - inflate_effect) + wet_r * inflate_effect;
             }
 
             // Pan

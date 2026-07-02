@@ -449,11 +449,24 @@ impl IcedPlugin<crate::LucentParams> for LucentEditor {
                                 Text::new(masking_text).size(10)
                                     .color(Color::from_rgb(0.8, 0.8, 0.8)),
                             ].spacing(2).width(Length::Fill),
-                            toggle_button(
-                                if show_mask { "ON" } else { "OFF" },
-                                show_mask,
-                                Message::Plugin(LucentMsg::MaskingToggled),
-                            ),
+                            if mode == 0 {
+                                Element::from(
+                                    button(Text::new("OFF").size(12).font(bold_font()))
+                                        .padding([5, 10])
+                                        .style(|_theme, _status| button::Style {
+                                            background: Some(Color::from_rgb(0.1, 0.1, 0.1).into()),
+                                            text_color: Color::from_rgb(0.35, 0.35, 0.35),
+                                            border: Border { radius: 2.0.into(), ..Default::default() },
+                                            ..Default::default()
+                                        })
+                                )
+                            } else {
+                                toggle_button(
+                                    if show_mask { "ON" } else { "OFF" },
+                                    show_mask,
+                                    Message::Plugin(LucentMsg::MaskingToggled),
+                                )
+                            },
                         ].spacing(4).align_y(Alignment::Center)
                     )
                     .width(Length::FillPortion(1)).height(Length::Fixed(80.0))
