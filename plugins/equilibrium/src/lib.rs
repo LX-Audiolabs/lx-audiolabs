@@ -10,8 +10,10 @@
 
 use truce::prelude::*;
 use truce_core::editor::Editor;
+use truce_core::state::StateLoadError;
 use truce_iced::IcedEditor;
 use std::sync::Arc;
+use shared_dsp::state_migration;
 use std::f32::consts::FRAC_PI_4;
 
 use shared_dsp::{Biquad, LR2Crossover, AutoLoudMeter, DBTP_CEILING};
@@ -853,7 +855,45 @@ impl PluginLogic for Equilibrium {
     }
 
     fn save_state(&self) -> Vec<u8> { Vec::new() }
-    fn load_state(&mut self, _: &[u8]) -> Result<(), truce_core::state::StateLoadError> { Ok(()) }
+    fn load_state(&mut self, data: &[u8]) -> Result<(), StateLoadError> {
+        if let Some(params) = state_migration::try_parse_niceplug_state(data) {
+            for (name, value) in params {
+                match name.as_str() {
+                    "Low Gain" => self.params.low_gain.set_value(value),
+                    "Bass Gain" => self.params.bass_gain.set_value(value),
+                    "Mid Gain" => self.params.mid_gain.set_value(value),
+                    "High-Mid Gain" => self.params.high_mid_gain.set_value(value),
+                    "High Gain" => self.params.high_gain.set_value(value),
+                    "Low Width" => self.params.low_width.set_value(value),
+                    "Bass Width" => self.params.bass_width.set_value(value),
+                    "Mid Width" => self.params.mid_width.set_value(value),
+                    "High-Mid Width" => self.params.high_mid_width.set_value(value),
+                    "High Width" => self.params.high_width.set_value(value),
+                    "Low Pan" => self.params.low_pan.set_value(value),
+                    "Bass Pan" => self.params.bass_pan.set_value(value),
+                    "Mid Pan" => self.params.mid_pan.set_value(value),
+                    "High-Mid Pan" => self.params.high_mid_pan.set_value(value),
+                    "High Pan" => self.params.high_pan.set_value(value),
+                    "Mono Floor" => self.params.mono_floor.set_value(value),
+                    "Output Gain" => self.params.output_gain.set_value(value),
+                    "Solo Low" => self.params.solo_low.set_value(value != 0.0),
+                    "Solo Bass" => self.params.solo_bass.set_value(value != 0.0),
+                    "Solo Mid" => self.params.solo_mid.set_value(value != 0.0),
+                    "Solo High-Mid" => self.params.solo_high_mid.set_value(value != 0.0),
+                    "Solo High" => self.params.solo_high.set_value(value != 0.0),
+                    "Mono Sum" => self.params.mono_active.set_value(value != 0.0),
+                    "Delta Diff" => self.params.delta_active.set_value(value != 0.0),
+                    "Listen Profile" => self.params.listen_active.set_value(value != 0.0),
+                    "Auto Loudness" => self.params.auto_gain_active.set_value(value != 0.0),
+                    "Bypass" => self.params.bypass_active.set_value(value != 0.0),
+                    "Pre-Master" => self.params.pre_master_active.set_value(value != 0.0),
+                    "Pre-Master Target" => self.params.pre_master_target_db.set_value(value),
+                    _ => {} // Unknown param — skip silently
+                }
+            }
+        }
+        Ok(())
+    }
     fn state_changed(&mut self) {}
 
     fn editor(&self) -> Box<dyn Editor> {

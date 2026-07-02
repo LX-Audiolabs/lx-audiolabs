@@ -9,10 +9,12 @@
 
 use truce::prelude::*;
 use truce_core::editor::Editor;
+use truce_core::state::StateLoadError;
 use truce_iced::IcedEditor;
 use std::sync::Arc;
 use std::f32::consts::FRAC_PI_4;
 use std::sync::atomic::Ordering;
+use shared_dsp::state_migration;
 use realfft::RealFftPlanner;
 
 use shared_dsp::{Biquad, LR2Crossover, TiltEq, Compressor, AutoLoudMeter, DBTP_CEILING};
@@ -935,7 +937,56 @@ impl PluginLogic for Meridian {
     }
 
     fn save_state(&self) -> Vec<u8> { Vec::new() }
-    fn load_state(&mut self, _: &[u8]) -> Result<(), truce_core::state::StateLoadError> { Ok(()) }
+    fn load_state(&mut self, data: &[u8]) -> Result<(), StateLoadError> {
+        if let Some(params) = state_migration::try_parse_niceplug_state(data) {
+            for (name, value) in params {
+                match name.as_str() {
+                    "Low Cut" => self.params.hpf_freq.set_value(value),
+                    "High Cut" => self.params.lpf_freq.set_value(value),
+                    "Cut Slope" => self.params.cut_slope.set_value(value as i64),
+                    "Bass Gain" => self.params.bass_gain.set_value(value),
+                    "Bass Slope" => self.params.bass_slope.set_value(value as i64),
+                    "Lo-Mid Gain" => self.params.lo_mid_gain.set_value(value),
+                    "Lo-Mid Slope" => self.params.lo_mid_slope.set_value(value as i64),
+                    "Mid Gain" => self.params.mid_gain.set_value(value),
+                    "Mid Slope" => self.params.mid_slope.set_value(value as i64),
+                    "High Gain" => self.params.high_gain.set_value(value),
+                    "High Slope" => self.params.high_slope.set_value(value as i64),
+                    "Excite Gain" => self.params.excite_gain.set_value(value),
+                    "Excite Slope" => self.params.excite_slope.set_value(value as i64),
+                    "EQ Freq 1" => self.params.eq_freq_1.set_value(value),
+                    "EQ Freq 2" => self.params.eq_freq_2.set_value(value),
+                    "EQ Freq 3" => self.params.eq_freq_3.set_value(value),
+                    "EQ Freq 4" => self.params.eq_freq_4.set_value(value),
+                    "EQ Freq 5" => self.params.eq_freq_5.set_value(value),
+                    "Tilt" => self.params.tilt_gain.set_value(value),
+                    "Warmth Drive" => self.params.warmth_drive.set_value(value),
+                    "Warmth Mix" => self.params.warmth_mix.set_value(value),
+                    "Excite Amount" => self.params.excite_amount.set_value(value),
+                    "Excite Blend" => self.params.excite_blend.set_value(value),
+                    "Excite Freq" => self.params.excite_freq.set_value(value),
+                    "Comp Threshold" => self.params.comp_threshold.set_value(value),
+                    "Comp Mix" => self.params.comp_mix.set_value(value),
+                    "Comp Attack" => self.params.comp_attack.set_value(value),
+                    "Comp Release" => self.params.comp_release.set_value(value),
+                    "Comp Ratio" => self.params.comp_character.set_value(value),
+                    "Comp Makeup" => self.params.comp_makeup.set_value(value),
+                    "Inflate Effect" => self.params.inflate_effect.set_value(value),
+                    "Inflate Curve" => self.params.inflate_curve.set_value(value),
+                    "Inflate Band Split" => self.params.inflate_band_split.set_value(value != 0.0),
+                    "Inflate Clip" => self.params.inflate_clip.set_value(value != 0.0),
+                    "Stereo Width" => self.params.stereo_width.set_value(value),
+                    "Pan" => self.params.pan.set_value(value),
+                    "Output Gain" => self.params.output_gain.set_value(value),
+                    "Mono Sum" => self.params.mono_active.set_value(value != 0.0),
+                    "Delta Diff" => self.params.delta_active.set_value(value != 0.0),
+                    "Bypass" => self.params.bypass_active.set_value(value != 0.0),
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
     fn state_changed(&mut self) {}
 
     fn editor(&self) -> Box<dyn Editor> {
