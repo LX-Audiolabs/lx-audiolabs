@@ -1552,7 +1552,7 @@ dependencies = [
 
 [[package]]
 name = "meridian"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "clap-sys",
  "realfft",

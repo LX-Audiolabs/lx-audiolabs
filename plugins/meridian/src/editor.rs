@@ -69,6 +69,10 @@ pub enum MeridianMsg {
     CompReleaseGesture(Gesture),
     CompCharacterGesture(Gesture),
     CompMakeupGesture(Gesture),
+    InflateEffectGesture(Gesture),
+    InflateCurveGesture(Gesture),
+    InflateBandSplitToggled,
+    InflateClipToggled,
     StereoWidthGesture(Gesture),
     PanGesture(Gesture),
     OutputGainGesture(Gesture),
@@ -103,6 +107,7 @@ pub struct MeridianProfile {
     pub excite_amount: f32, pub excite_blend: f32, pub excite_freq: f32,
     pub comp_threshold: f32, pub comp_mix: f32, pub comp_attack: f32, pub comp_release: f32,
     pub comp_character: f32, pub comp_makeup: f32,
+    pub inflate_effect: f32, pub inflate_curve: f32, pub inflate_band_split: bool, pub inflate_clip: bool,
     pub stereo_width: f32, pub pan: f32, pub output_gain: f32,
 }
 
@@ -121,6 +126,7 @@ impl Default for MeridianProfile {
             excite_amount: 0.0, excite_blend: 0.0, excite_freq: 8000.0,
             comp_threshold: 0.0, comp_mix: 40.0, comp_attack: 15.0, comp_release: 120.0,
             comp_character: 2.0, comp_makeup: 0.0,
+            inflate_effect: 0.0, inflate_curve: 0.0, inflate_band_split: false, inflate_clip: false,
             stereo_width: 100.0, pan: 0.0, output_gain: 0.0,
         }
     }
@@ -514,7 +520,7 @@ impl IcedPlugin<MeridianParams> for MeridianEditor {
             history: self.gr_history.clone(),
             current: self.gain_reduction,
             peak_hold: self.gr_peak_hold,
-        }).width(Length::Fixed(160.0)).height(Length::Fixed(60.0));
+        }).width(Length::Fixed(110.0)).height(Length::Fixed(60.0));
 
         let compressor_section = column![
             comp_label,
@@ -535,6 +541,37 @@ impl IcedPlugin<MeridianParams> for MeridianEditor {
             ].spacing(14).align_y(Alignment::Center),
         ].spacing(4).align_x(Alignment::Center);
 
+        let inflate_band_split_on = self.params.inflate_band_split.value();
+        let inflate_clip_on = self.params.inflate_clip.value();
+        let toggle_style = move |active: bool| {
+            move |_t: &iced::Theme, st: button::Status| {
+                let bg = if active { Color::from_rgb(1.0, 0.45, 0.1) }
+                    else if st == button::Status::Hovered { Color::from_rgb(0.25, 0.25, 0.25) }
+                    else { Color::from_rgb(0.15, 0.15, 0.15) };
+                button::Style { background: Some(bg.into()), text_color: Color::WHITE,
+                    border: Border { radius: 3.0.into(), ..Default::default() }, ..Default::default() }
+            }
+        };
+        let inflate_toggles = column![
+            button(Text::new("SPLIT").size(9).font(bold_font()))
+                .on_press(pm(MeridianMsg::InflateBandSplitToggled))
+                .padding(4)
+                .style(toggle_style(inflate_band_split_on)),
+            button(Text::new("CLIP").size(9).font(bold_font()))
+                .on_press(pm(MeridianMsg::InflateClipToggled))
+                .padding(4)
+                .style(toggle_style(inflate_clip_on)),
+        ].spacing(4);
+
+        let inflate_section = column![
+            Text::new("INFLATE").size(10).font(bold_font()).color(Color::from_rgb(1.0, 0.55, 0.15)),
+            row![
+                knob_gesture("EFFECT", self.params.inflate_effect.raw_target() as f32, 0.0, 100.0, 0.0, move |g| pm(MeridianMsg::InflateEffectGesture(g))),
+                knob_gesture_bipolar("CURVE", self.params.inflate_curve.raw_target() as f32, -50.0, 50.0, 0.0, move |g| pm(MeridianMsg::InflateCurveGesture(g))),
+                inflate_toggles,
+            ].spacing(10).align_y(Alignment::Center),
+        ].spacing(4).align_x(Alignment::Center);
+
         let stereo_section = column![
             Text::new("STEREO / ROUTING").size(10).font(bold_font()).color(Color::from_rgb(1.0, 0.55, 0.15)),
             row![
@@ -547,7 +584,8 @@ impl IcedPlugin<MeridianParams> for MeridianEditor {
 
         let footer = container(row![
             container(compressor_section).padding(5),
-            vsep(), Space::new().width(Length::Fill),
+            vsep(), container(inflate_section).padding(5),
+            Space::new().width(Length::Fill),
             vsep(), container(stereo_section).padding(5),
             vsep(), container(tools).padding(5),
         ].align_y(Alignment::Center).spacing(15))
@@ -625,6 +663,10 @@ impl MeridianEditor {
             MeridianMsg::CompReleaseGesture(g) => self.do_gesture(|p| &p.comp_release, g, ctx),
             MeridianMsg::CompCharacterGesture(g) => self.do_gesture(|p| &p.comp_character, g, ctx),
             MeridianMsg::CompMakeupGesture(g) => self.do_gesture(|p| &p.comp_makeup, g, ctx),
+            MeridianMsg::InflateEffectGesture(g) => self.do_gesture(|p| &p.inflate_effect, g, ctx),
+            MeridianMsg::InflateCurveGesture(g) => self.do_gesture(|p| &p.inflate_curve, g, ctx),
+            MeridianMsg::InflateBandSplitToggled => self.do_toggle(|p| &p.inflate_band_split, ctx),
+            MeridianMsg::InflateClipToggled => self.do_toggle(|p| &p.inflate_clip, ctx),
             MeridianMsg::StereoWidthGesture(g) => self.do_gesture(|p| &p.stereo_width, g, ctx),
             MeridianMsg::PanGesture(g) => self.do_gesture(|p| &p.pan, g, ctx),
             MeridianMsg::OutputGainGesture(g) => self.do_gesture(|p| &p.output_gain, g, ctx),
@@ -760,6 +802,8 @@ impl MeridianEditor {
         p.eq_freq_4.set_value(4000.0); p.eq_freq_5.set_value(12000.0);
         p.comp_threshold.set_value(0.0); p.comp_mix.set_value(40.0); p.comp_attack.set_value(15.0);
         p.comp_release.set_value(120.0); p.comp_character.set_value(2.0); p.comp_makeup.set_value(0.0);
+        p.inflate_effect.set_value(0.0); p.inflate_curve.set_value(0.0);
+        p.inflate_band_split.set_value(false); p.inflate_clip.set_value(false);
         p.tilt_gain.set_value(0.0); p.warmth_drive.set_value(0.0); p.warmth_mix.set_value(0.0);
         p.excite_amount.set_value(0.0); p.excite_blend.set_value(0.0); p.excite_freq.set_value(8000.0);
         p.stereo_width.set_value(100.0); p.pan.set_value(0.0); p.output_gain.set_value(0.0);
@@ -802,6 +846,10 @@ impl MeridianEditor {
             comp_release: self.params.comp_release.raw_target() as f32,
             comp_character: self.params.comp_character.raw_target() as f32,
             comp_makeup: self.params.comp_makeup.raw_target() as f32,
+            inflate_effect: self.params.inflate_effect.raw_target() as f32,
+            inflate_curve: self.params.inflate_curve.raw_target() as f32,
+            inflate_band_split: self.params.inflate_band_split.value(),
+            inflate_clip: self.params.inflate_clip.value(),
             stereo_width: self.params.stereo_width.raw_target() as f32,
             pan: self.params.pan.raw_target() as f32,
             output_gain: self.params.output_gain.raw_target() as f32,
@@ -930,6 +978,10 @@ fn apply_profile(_ctx: &PluginContext<MeridianParams>, params: &MeridianParams, 
     params.comp_release.set_value(profile.comp_release as f64);
     params.comp_character.set_value(profile.comp_character as f64);
     params.comp_makeup.set_value(profile.comp_makeup as f64);
+    params.inflate_effect.set_value(profile.inflate_effect as f64);
+    params.inflate_curve.set_value(profile.inflate_curve as f64);
+    params.inflate_band_split.set_value(profile.inflate_band_split);
+    params.inflate_clip.set_value(profile.inflate_clip);
     params.stereo_width.set_value(profile.stereo_width as f64);
     params.pan.set_value(profile.pan as f64);
     params.output_gain.set_value(profile.output_gain as f64);
@@ -964,6 +1016,10 @@ fn export_meridian_markdown(p: &MeridianProfile) -> String {
     s.push_str(&format!("| Comp Release | {:.1} | ms |\n", p.comp_release));
     s.push_str(&format!("| Comp Character | {:.1} | |\n", p.comp_character));
     s.push_str(&format!("| Comp Makeup | {:.1} | dB |\n", p.comp_makeup));
+    s.push_str(&format!("| Inflate Effect | {:.1} | % |\n", p.inflate_effect));
+    s.push_str(&format!("| Inflate Curve | {:.1} | |\n", p.inflate_curve));
+    s.push_str(&format!("| Inflate Band Split | {} | |\n", if p.inflate_band_split { "On" } else { "Off" }));
+    s.push_str(&format!("| Inflate Clip | {} | |\n", if p.inflate_clip { "On" } else { "Off" }));
     s.push_str(&format!("| Warmth Drive | {:.1} | dB |\n", p.warmth_drive));
     s.push_str(&format!("| Warmth Mix | {:.1} | % |\n", p.warmth_mix));
     s.push_str(&format!("| Excite Amount | {:.1} | % |\n", p.excite_amount));
@@ -1014,6 +1070,10 @@ fn parse_meridian_markdown(content: &str) -> Option<MeridianProfile> {
                     "comp release" => { if let Ok(v) = parts[2].parse() { p.comp_release = v; } }
                     "comp character" => { if let Ok(v) = parts[2].parse() { p.comp_character = v; } }
                     "comp makeup" => { if let Ok(v) = parts[2].parse() { p.comp_makeup = v; } }
+                    "inflate effect" => { if let Ok(v) = parts[2].parse() { p.inflate_effect = v; } }
+                    "inflate curve" => { if let Ok(v) = parts[2].parse() { p.inflate_curve = v; } }
+                    "inflate band split" => { p.inflate_band_split = parts[2] == "On"; }
+                    "inflate clip" => { p.inflate_clip = parts[2] == "On"; }
                     "warmth drive" => { if let Ok(v) = parts[2].parse() { p.warmth_drive = v; } }
                     "warmth mix" => { if let Ok(v) = parts[2].parse() { p.warmth_mix = v; } }
                     "excite amount" => { if let Ok(v) = parts[2].parse() { p.excite_amount = v; } }
@@ -1100,4 +1160,45 @@ fn snap_markdown(stereo: &[f32], mono: &[f32], delta: &[f32],
         pl=pl, pr=pr, co=corr, st=tbl(stereo), mn=tbl(mono), dt=tbl(delta),
         b0=band_levels[0], b1=band_levels[1], b2=band_levels[2], b3=band_levels[3], b4=band_levels[4],
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Old-format preset without any Inflate rows must still load, falling back
+    /// to MeridianProfile::default() (effect=0, curve=0, split=off, clip=off).
+    #[test]
+    fn old_preset_without_inflate_rows_loads_with_defaults() {
+        let old_md = "---\nplugin: meridian\ntype: preset\n---\n\n\
+            | Parameter | Wert | Einheit |\n|---|---|---|\n\
+            | HPF | 2.0 | Hz |\n| LPF | 35000.0 | Hz |\n\
+            | Bass Gain | 1.5 | dB |\n| Mid Gain | -2.0 | dB |\n\
+            | Output Gain | 0.0 | dB |\n";
+        let profile = parse_meridian_markdown(old_md).expect("old preset must still parse");
+        assert_eq!(profile.inflate_effect, 0.0);
+        assert_eq!(profile.inflate_curve, 0.0);
+        assert!(!profile.inflate_band_split);
+        assert!(!profile.inflate_clip);
+        // Re-exporting an old preset must extend it with the new rows.
+        let extended = export_meridian_markdown(&profile);
+        assert!(extended.contains("| Inflate Effect | 0.0 | % |"));
+        assert!(extended.contains("| Inflate Clip | Off | |"));
+    }
+
+    /// Round-trip: export then parse must preserve Inflate values exactly.
+    #[test]
+    fn inflate_roundtrips_through_markdown() {
+        let mut p = MeridianProfile::default();
+        p.inflate_effect = 42.0;
+        p.inflate_curve = -25.0;
+        p.inflate_band_split = true;
+        p.inflate_clip = false;
+        let md = export_meridian_markdown(&p);
+        let parsed = parse_meridian_markdown(&md).expect("exported preset must parse");
+        assert_eq!(parsed.inflate_effect, 42.0);
+        assert_eq!(parsed.inflate_curve, -25.0);
+        assert!(parsed.inflate_band_split);
+        assert!(!parsed.inflate_clip);
+    }
 }
