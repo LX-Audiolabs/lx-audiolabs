@@ -556,12 +556,12 @@ impl IcedPlugin<MeridianParams> for MeridianEditor {
             button(Text::new("SPLIT").size(9).font(bold_font()))
                 .on_press(pm(MeridianMsg::InflateBandSplitToggled))
                 .padding(4)
-                .width(Length::Fill)
+                .width(Length::Fixed(48.0))
                 .style(toggle_style(inflate_band_split_on)),
             button(Text::new("CLIP").size(9).font(bold_font()))
                 .on_press(pm(MeridianMsg::InflateClipToggled))
                 .padding(4)
-                .width(Length::Fill)
+                .width(Length::Fixed(48.0))
                 .style(toggle_style(inflate_clip_on)),
         ].spacing(4);
 
