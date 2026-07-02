@@ -1,6 +1,6 @@
 [package]
 name = "equilibrium"
-version = "1.4.0"
+version = "1.4.1"
 edition = "2024"
 description = "LX Audiolabs — Equilibrium (Pre-master spectral balancer with 5-band crossover)"
 license = "MIT"
