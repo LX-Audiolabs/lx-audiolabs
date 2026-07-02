@@ -1,6 +1,6 @@
 [package]
 name = "aether"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2024"
 description = "LX Audiolabs — Aether (Headphone monitoring corrector — Harman 5-band EQ + crossfeed)"
 license = "MIT"
