@@ -894,10 +894,10 @@ impl PluginLogic for Meridian {
             let target_samples = (5.0 * sample_rate as f64) as u64;
             if self.auto_loud_out.sample_count() >= target_samples {
                 let in_lufs = self.auto_loud_in.loudness_db();
-                let pre_lufs = self.auto_loud_pre_sat.loudness_db();
+                let _pre_lufs = self.auto_loud_pre_sat.loudness_db();
                 let out_lufs = self.auto_loud_out.loudness_db();
                 let out_tp = self.auto_loud_out.true_peak_db();
-                let lufs_offset = if pre_lufs > -120.0 { in_lufs - pre_lufs } else { in_lufs - out_lufs };
+                let lufs_offset = in_lufs - out_lufs;
                 let peak_limit = DBTP_CEILING - out_tp;
                 let offset_clamped = lufs_offset.clamp(-24.0, peak_limit);
                 self.params.shared.auto_loud_gain_offset.store(offset_clamped, Ordering::Release);
