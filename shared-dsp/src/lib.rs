@@ -1,3 +1,5 @@
+pub mod state_migration;
+
 /// 2nd-order Biquad Filter structure for Butterworth LP/HP and Mono Maker.
 ///
 /// Runs in **Transposed Direct Form II**: the state (`s1`/`s2`) holds partial

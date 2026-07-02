@@ -14,7 +14,7 @@ use truce_core::editor::Editor;
 use truce_core::state::StateLoadError;
 use truce_iced::IcedEditor;
 use std::sync::Arc;
-use shared_dsp::Biquad;
+use shared_dsp::{Biquad, state_migration};
 use shared_analysis::SharedState;
 
 mod editor;
@@ -263,7 +263,42 @@ impl PluginLogic for Aether {
     }
 
     fn save_state(&self) -> Vec<u8> { Vec::new() }
-    fn load_state(&mut self, _: &[u8]) -> Result<(), StateLoadError> { Ok(()) }
+    fn load_state(&mut self, data: &[u8]) -> Result<(), StateLoadError> {
+        if let Some(params) = state_migration::try_parse_niceplug_state(data) {
+            for (name, value) in params {
+                match name.as_str() {
+                    "EQ1 Freq" => self.params.eq1_freq.set_value(value),
+                    "EQ1 Gain" => self.params.eq1_gain.set_value(value),
+                    "EQ1 Q" => self.params.eq1_q.set_value(value),
+                    "EQ2 Freq" => self.params.eq2_freq.set_value(value),
+                    "EQ2 Gain" => self.params.eq2_gain.set_value(value),
+                    "EQ2 Q" => self.params.eq2_q.set_value(value),
+                    "EQ3 Freq" => self.params.eq3_freq.set_value(value),
+                    "EQ3 Gain" => self.params.eq3_gain.set_value(value),
+                    "EQ3 Q" => self.params.eq3_q.set_value(value),
+                    "EQ4 Freq" => self.params.eq4_freq.set_value(value),
+                    "EQ4 Gain" => self.params.eq4_gain.set_value(value),
+                    "EQ4 Q" => self.params.eq4_q.set_value(value),
+                    "EQ5 Freq" => self.params.eq5_freq.set_value(value),
+                    "EQ5 Gain" => self.params.eq5_gain.set_value(value),
+                    "EQ5 Q" => self.params.eq5_q.set_value(value),
+                    "EQ1 Type" => self.params.eq1_type.set_value(value as i64),
+                    "EQ2 Type" => self.params.eq2_type.set_value(value as i64),
+                    "EQ3 Type" => self.params.eq3_type.set_value(value as i64),
+                    "EQ4 Type" => self.params.eq4_type.set_value(value as i64),
+                    "EQ5 Type" => self.params.eq5_type.set_value(value as i64),
+                    "Blend" => self.params.blend.set_value(value),
+                    "Crossfeed Angle" => self.params.cf_angle.set_value(value),
+                    "Crossfeed Amount" => self.params.cf_amount.set_value(value),
+                    "Crossfeed Realism" => self.params.cf_realism.set_value(value as i64),
+                    "Gain" => self.params.gain.set_value(value),
+                    "Bypass" => self.params.bypass.set_value(value != 0.0),
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
     fn state_changed(&mut self) {}
 
     fn editor(&self) -> Box<dyn Editor> {
