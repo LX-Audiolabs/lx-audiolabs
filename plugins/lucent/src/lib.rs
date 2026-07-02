@@ -1,17 +1,71 @@
 use truce::prelude::*;
 use truce_core::{custom_state::State as StateSerialize, state::StateLoadError, editor::Editor};
 use truce_iced::IcedEditor;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::sync::atomic::Ordering;
 use realfft::{RealFftPlanner, RealToComplex, num_complex::Complex};
 
 use shared_analysis::{SPECTRUM_BINS, SharedState, relay_hub, SnapFFT, SnapMode};
 
-type ResonanceHub = Arc<Mutex<Vec<(usize, f32)>>>;
+/// Resonance findings for one Lucent instance: `own` = peaks found in this
+/// instance's own bus signal, `relay` = peaks found in the power-summed
+/// spectrum of the Relay tracks it's listening to (group-level resonance
+/// that can emerge from the sum even if no single track shows it).
+#[derive(Default, Clone)]
+pub struct ResonanceLists {
+    pub own: Vec<(usize, f32)>,
+    pub relay: Vec<(usize, f32)>,
+}
 
-pub fn resonance_hub() -> &'static ResonanceHub {
-    static HUB: OnceLock<ResonanceHub> = OnceLock::new();
-    HUB.get_or_init(|| Arc::new(Mutex::new(Vec::new())))
+/// Keyed by `Arc::as_ptr(&params)` — unique per plugin instance. A bare
+/// `OnceLock<Vec<_>>` here would mean every Lucent instance in the process
+/// overwrites the same global list (same failure mode as the Lucent-Relay
+/// `RELAY_HANDLE` singleton bug).
+type ResonanceRegistry = Arc<Mutex<HashMap<usize, ResonanceLists>>>;
+
+fn resonance_registry() -> &'static ResonanceRegistry {
+    static REG: OnceLock<ResonanceRegistry> = OnceLock::new();
+    REG.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+}
+
+pub fn publish_resonance(key: usize, lists: ResonanceLists) {
+    if let Ok(mut m) = resonance_registry().lock() {
+        m.insert(key, lists);
+    }
+}
+
+pub fn read_resonance(key: usize) -> ResonanceLists {
+    resonance_registry()
+        .lock()
+        .ok()
+        .and_then(|m| m.get(&key).cloned())
+        .unwrap_or_default()
+}
+
+pub fn remove_resonance(key: usize) {
+    if let Ok(mut m) = resonance_registry().lock() {
+        m.remove(&key);
+    }
+}
+
+/// Per-bin power-sum (linear domain) of multiple dB spectra, back to dB.
+/// Models how the tracks actually combine on a bus — e.g. two -6dB signals
+/// at the same frequency sum to ~-3dB, not -6dB (`min`/`max` would say -6dB
+/// and miss the additive buildup).
+fn power_sum_spectrum(spectra: &[Vec<f32>]) -> Vec<f32> {
+    let mut out = vec![-90.0f32; SPECTRUM_BINS];
+    if spectra.is_empty() {
+        return out;
+    }
+    for j in 0..SPECTRUM_BINS {
+        let sum_lin: f32 = spectra
+            .iter()
+            .map(|s| 10f32.powf(s.get(j).copied().unwrap_or(-90.0) / 10.0))
+            .sum();
+        out[j] = if sum_lin < 1e-9 { -90.0 } else { 10.0 * sum_lin.log10() };
+    }
+    out
 }
 
 mod editor;
@@ -176,6 +230,7 @@ pub struct Lucent {
     fft_windowed: Vec<f32>,
     fft_output: Vec<Complex<f32>>,
     peak_tracker: PeakTracker,
+    relay_peak_tracker: PeakTracker,
     masking_analyzer: MaskingAnalyzer,
     snap_fft: SnapFFT,
     sample_rate: f32,
@@ -185,10 +240,12 @@ pub struct Lucent {
     claimed_lucent_slot: Option<u8>,
     cached_name: String,
     liveness: Option<Arc<std::sync::atomic::AtomicBool>>,
+    instance_key: usize,
 }
 
 impl Lucent {
     pub fn new(params: Arc<LucentParams>) -> Self {
+        let instance_key = Arc::as_ptr(&params) as usize;
         let fft_size = SPECTRUM_BINS * 2;
         let mut planner = RealFftPlanner::<f32>::new();
         let fft_fwd = planner.plan_fft_forward(fft_size);
@@ -207,6 +264,7 @@ impl Lucent {
             fft_windowed: vec![0.0; fft_size],
             fft_output,
             peak_tracker: PeakTracker::new(),
+            relay_peak_tracker: PeakTracker::new(),
             masking_analyzer: MaskingAnalyzer::new(44100.0),
             snap_fft: SnapFFT::new(),
             sample_rate: 44100.0,
@@ -216,6 +274,7 @@ impl Lucent {
             claimed_lucent_slot: None,
             cached_name: String::new(),
             liveness: None,
+            instance_key,
         }
     }
 }
@@ -400,8 +459,8 @@ impl PluginLogic for Lucent {
                         0 => {
                             let peaks = self.peak_tracker.find_peaks(&frame);
                             self.peak_tracker.update(&peaks);
-                            let last_resonances = self.peak_tracker.resonance_peaks();
-                            if let Ok(mut peaks) = resonance_hub().try_lock() { *peaks = last_resonances; }
+                            let own_resonances = self.peak_tracker.resonance_peaks();
+                            publish_resonance(self.instance_key, ResonanceLists { own: own_resonances, relay: Vec::new() });
                             if let Ok(mut mm) = self.params.shared.masking_map.try_lock() {
                                 mm.iter_mut().for_each(|m| *m = -90.0);
                             }
@@ -422,8 +481,8 @@ impl PluginLogic for Lucent {
                         1 => {
                             let peaks = self.peak_tracker.find_peaks(&frame);
                             self.peak_tracker.update(&peaks);
-                            let last_resonances = self.peak_tracker.resonance_peaks();
-                            if let Ok(mut peaks) = resonance_hub().try_lock() { *peaks = last_resonances; }
+                            let own_resonances = self.peak_tracker.resonance_peaks();
+
                             let my_name = self.claimed_lucent_slot
                                 .map(|s| shared_analysis::shm::display_name(&self.cached_name, s))
                                 .unwrap_or_else(|| self.cached_name.clone());
@@ -433,6 +492,16 @@ impl PluginLogic for Lucent {
                                         .into_iter().map(|(_, spec)| spec).collect()
                                 })
                                 .unwrap_or_default();
+
+                            // Group-level resonance: power-sum of the Relay tracks can show
+                            // a buildup that no single track (nor this bus's own signal) has.
+                            let relay_sum = power_sum_spectrum(&relay_spectra);
+                            let relay_peaks = self.relay_peak_tracker.find_peaks(&relay_sum);
+                            self.relay_peak_tracker.update(&relay_peaks);
+                            let relay_resonances = self.relay_peak_tracker.resonance_peaks();
+
+                            publish_resonance(self.instance_key, ResonanceLists { own: own_resonances, relay: relay_resonances });
+
                             self.masking_analyzer.compute_masking(Some(&frame), &relay_spectra);
                             if let Ok(mut mm) = self.params.shared.masking_map.try_lock() {
                                 mm.copy_from_slice(&self.masking_analyzer.masking_map);
@@ -457,7 +526,6 @@ impl PluginLogic for Lucent {
                             if let Ok(mut avg) = self.params.shared.spectrum_avg.try_lock() {
                                 avg.iter_mut().for_each(|b| *b = -90.0);
                             }
-                            if let Ok(mut peaks) = resonance_hub().try_lock() { peaks.clear(); }
                             let my_name = self.claimed_lucent_slot
                                 .map(|s| shared_analysis::shm::display_name(&self.cached_name, s))
                                 .unwrap_or_else(|| self.cached_name.clone());
@@ -467,6 +535,16 @@ impl PluginLogic for Lucent {
                                         .into_iter().map(|(_, spec)| spec).collect()
                                 })
                                 .unwrap_or_default();
+
+                            // RELAY mode: no own signal, so resonance is purely the
+                            // Relay tracks "untereinander und zusammen" — masking below
+                            // covers "untereinander" (pairwise), this covers "zusammen".
+                            let relay_sum = power_sum_spectrum(&relay_spectra);
+                            let relay_peaks = self.relay_peak_tracker.find_peaks(&relay_sum);
+                            self.relay_peak_tracker.update(&relay_peaks);
+                            let relay_resonances = self.relay_peak_tracker.resonance_peaks();
+                            publish_resonance(self.instance_key, ResonanceLists { own: Vec::new(), relay: relay_resonances });
+
                             self.masking_analyzer.compute_masking(None, &relay_spectra);
                             if let Ok(mut mm) = self.params.shared.masking_map.try_lock() {
                                 mm.copy_from_slice(&self.masking_analyzer.masking_map);
@@ -552,6 +630,7 @@ impl Drop for Lucent {
                 hub.release_consumer_slot(slot);
             }
         }
+        remove_resonance(self.instance_key);
     }
 }
 

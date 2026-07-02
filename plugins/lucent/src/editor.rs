@@ -5,7 +5,7 @@ use truce_core::editor::PluginContext;
 use std::sync::{Arc, atomic::Ordering};
 
 use shared_analysis::{SharedState, SPECTRUM_BINS};
-use crate::resonance_hub;
+use crate::read_resonance;
 use crate::LucentParamsParamId;
 use shared_ui::{
     bold_font, header_brand, output_level_block, output_tools_strip,
@@ -36,7 +36,9 @@ pub struct LucentEditor {
     params: Arc<crate::LucentParams>,
     shared_state: Arc<SharedState>,
     ui_state: LucentUiState,
-    resonance_cache: Vec<(usize, f32)>,
+    instance_key: usize,
+    resonance_cache_own: Vec<(usize, f32)>,
+    resonance_cache_relay: Vec<(usize, f32)>,
     masking_cache: Vec<f32>,
     show_resonance: bool,
     show_masking: bool,
@@ -64,11 +66,14 @@ impl IcedPlugin<crate::LucentParams> for LucentEditor {
             if !name.is_empty() { ui_state.name = name.clone(); }
         }
         let shared_state = params.shared.clone();
+        let instance_key = Arc::as_ptr(&params) as usize;
         Self {
             params,
             shared_state,
             ui_state,
-            resonance_cache: Vec::new(),
+            instance_key,
+            resonance_cache_own: Vec::new(),
+            resonance_cache_relay: Vec::new(),
             masking_cache: Vec::new(),
             show_resonance: false,
             show_masking: false,
@@ -120,9 +125,9 @@ impl IcedPlugin<crate::LucentParams> for LucentEditor {
                 if let Ok(spectrum) = self.shared_state.spectrum_avg.lock() {
                     self.ui_state.own_spectrum = spectrum.to_vec();
                 }
-                if let Ok(peaks) = resonance_hub().lock() {
-                    self.resonance_cache = peaks.clone();
-                }
+                let lists = read_resonance(self.instance_key);
+                self.resonance_cache_own = lists.own;
+                self.resonance_cache_relay = lists.relay;
                 if let Ok(mm) = self.shared_state.masking_map.lock() {
                     self.masking_cache = mm.to_vec();
                 }
@@ -553,7 +558,13 @@ impl LucentEditor {
             sample_rate: self.shared_state.sample_rate.load(Ordering::Relaxed),
             ..Default::default()
         };
-        let resonance_peaks = if self.show_resonance { self.resonance_cache.clone() } else { Vec::new() };
+        let resonance_peaks = if self.show_resonance {
+            let mut v = self.resonance_cache_own.clone();
+            v.extend(self.resonance_cache_relay.iter().copied());
+            v
+        } else {
+            Vec::new()
+        };
         let masking = if self.show_masking && (!self.ui_state.relays.is_empty() || mode == 2) {
             self.masking_cache.clone()
         } else {
@@ -614,17 +625,28 @@ impl LucentEditor {
     }
 
     fn resonance_summary(&self) -> String {
-        let peaks = &self.resonance_cache;
-        if peaks.is_empty() { return "No resonances detected".to_string(); }
+        if self.resonance_cache_own.is_empty() && self.resonance_cache_relay.is_empty() {
+            return "No resonances detected".to_string();
+        }
         let sr = self.shared_state.sample_rate.load(Ordering::Relaxed).max(1.0);
         let fft_size = (SPECTRUM_BINS * 2) as f32;
-        peaks.iter().take(3)
-            .map(|(bin, score)| {
-                let freq = *bin as f32 * sr / fft_size;
-                format!("{:.0} Hz  {:.1}", freq, score)
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        let fmt = |peaks: &[(usize, f32)]| -> String {
+            peaks.iter().take(3)
+                .map(|(bin, score)| {
+                    let freq = *bin as f32 * sr / fft_size;
+                    format!("{:.0} Hz {:.1}", freq, score)
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let mut lines = Vec::new();
+        if !self.resonance_cache_own.is_empty() {
+            lines.push(format!("Own: {}", fmt(&self.resonance_cache_own)));
+        }
+        if !self.resonance_cache_relay.is_empty() {
+            lines.push(format!("Group: {}", fmt(&self.resonance_cache_relay)));
+        }
+        lines.join("\n")
     }
 
     fn masking_summary(&self, mode: i64) -> String {

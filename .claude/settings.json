@@ -1,7 +1,32 @@
 {
   "permissions": {
     "allow": [
-      "PowerShell(cd c:\\\\Users\\\\lxndr\\\\Documents\\\\LX-AudioLabs\\\\lx-audiolabs-dev && Start-Process powershell -Verb RunAs -ArgumentList \"-NoExit\", \"-Command\", \"cd '$PWD'; .\\\\build.ps1 -InstallAfterBuild\")"
+      "PowerShell(cd c:\\\\Users\\\\lxndr\\\\Documents\\\\LX-AudioLabs\\\\lx-audiolabs-dev && Start-Process powershell -Verb RunAs -ArgumentList \"-NoExit\", \"-Command\", \"cd '$PWD'; .\\\\build.ps1 -InstallAfterBuild\")",
+      "Bash(cd \"/c/Users/lxndr/Documents/LX-AudioLabs/lx-audiolabs-dev\" && ls | head -30 && echo \"---graphify---\" && ls graphify-out 2>/dev/null | head -20 && echo \"---truce fork search---\" && find \"/c/Users/lxndr/Documents/LX-AudioLabs\" -maxdepth 2 -iname \"*truce*\" 2>/dev/null)",
+      "Read(//c/Users/lxndr/Documents/LX-AudioLabs/**)",
+      "Read(//c/Users/lxndr/Documents/LX-AudioLabs/truce-dev/crates/truce-clap/**)",
+      "Read(//c/Users/lxndr/Documents/LX-AudioLabs/truce-dev/crates/truce-clap/src/**)",
+      "Read(//c/Users/lxndr/Documents/LX-AudioLabs/truce-dev/crates/**)",
+      "Read(//c/Users/lxndr/Documents/LX-AudioLabs/truce-dev/crates/truce-core/src/**)",
+      "Bash(gh issue *)",
+      "Bash(gh pr *)",
+      "Bash(powershell -NoProfile -ExecutionPolicy Bypass -File .\\\\build.ps1 -InstallAfterBuild)",
+      "Bash(find \"/c/Users/lxndr\" -iname \"*.rpp\" 2>/dev/null | head -30)",
+      "Read(//c/Users/lxndr/**)",
+      "Bash(grep -n -A3 \"EQUILIBRIUM\\\\|equilibrium\" \"/c/Users/lxndr/Desktop/test_equilibrium.rpp\" -i | head -60)",
+      "Read(//c/Users/lxndr/Desktop/**)",
+      "Bash(find \"/c/Users/lxndr\" -iname \"*.rpp\" -newermt \"2026-07-02 00:00\" 2>/dev/null)",
+      "Read(//c/Users/lxndr/Documents/LX-AudioLabs/Reapertest/Testreaper//**)",
+      "Read(//c/Users/lxndr/AppData/Roaming/REAPER/**)",
+      "Bash(find \"/c/Users/lxndr\" -iname \"*.rpp\" -newermt \"2026-07-02 19:32\" 2>/dev/null)",
+      "Bash(grep -n -A6 '<CLAP \"CLAP: Aether\\\\|<CLAP \"CLAP: Equilibrium' \"/c/Users/lxndr/Documents/LX-AudioLabs/Reapertest/Testreaper/Testreaper.rpp\")",
+      "Read(//c/Users/lxndr/Documents/LX-AudioLabs/Reapertest/Testreaper/**)",
+      "Bash(ls -la \"/c/Users/lxndr/Documents/LX-AudioLabs/Reapertest/Testreaper/\")",
+      "Bash(grep -n -A6 '<CLAP \"CLAP: Aether\\\\|<CLAP \"CLAP: Equilibrium\\\\|<CLAP \"CLAP: Meridian' \"/c/Users/lxndr/Documents/LX-AudioLabs/Reapertest/Testreaper/Testreaper.rpp\")",
+      "Bash(grep -ni \"aether\" \"/c/Users/lxndr/Documents/LX-AudioLabs/Reapertest/Testreaper/Testreaper.rpp\" | head -10)",
+      "Bash(grep -n '<CLAP\\\\|<VST\\\\|MASTER_FX\\\\|MONITORING\\\\|MONFX\\\\|<FXCHAIN' \"/c/Users/lxndr/Documents/LX-AudioLabs/Reapertest/Testreaper/Testreaper.rpp\")",
+      "Bash(cargo test *)",
+      "Bash(tasklist //FI \"IMAGENAME eq git.exe\")"
     ]
   },
   "enabledMcpjsonServers": [
@@ -23,7 +48,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "HIT=$(python3 -c \"import json,sys;d=json.load(sys.stdin);t=d.get('tool_input',d);exts=('.py','.js','.ts','.tsx','.jsx','.astro','.vue','.svelte','.go','.rs','.java','.rb','.c','.h','.cpp','.hpp','.cc','.cs','.kt','.swift','.php','.scala','.lua','.sh','.md','.rst','.txt','.mdx');vals=[str(t.get('file_path') or ''),str(t.get('pattern') or ''),str(t.get('path') or '')];j=' '.join(vals).lower().replace(chr(92),'/');tails=[('.'+x.rsplit('.',1)[-1]) for v in vals if v for x in [v.lower().replace(chr(92),'/').rsplit('/',1)[-1]] if '.' in x];sys.stdout.write('1' if 'graphify-out/' not in j and any(tl in exts for tl in tails) else '')\" 2>/dev/null || true); if [ \"$HIT\" = 1 ] && [ -f graphify-out/graph.json ]; then echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"MANDATORY: graphify-out/graph.json exists. You MUST run graphify before reading source files. Use: `graphify query \\\"<question>\\\"` (scoped subgraph), `graphify explain \\\"<concept>\\\"`, or `graphify path \\\"<A>\\\" \\\"<B>\\\"`. Only read raw files after graphify has oriented you, or to modify/debug specific lines. This rule applies to subagents too \u2014 include it in every subagent prompt involving code exploration.\"}}'; fi || true"
+            "command": "HIT=$(python3 -c \"import json,sys;d=json.load(sys.stdin);t=d.get('tool_input',d);exts=('.py','.js','.ts','.tsx','.jsx','.astro','.vue','.svelte','.go','.rs','.java','.rb','.c','.h','.cpp','.hpp','.cc','.cs','.kt','.swift','.php','.scala','.lua','.sh','.md','.rst','.txt','.mdx');vals=[str(t.get('file_path') or ''),str(t.get('pattern') or ''),str(t.get('path') or '')];j=' '.join(vals).lower().replace(chr(92),'/');tails=[('.'+x.rsplit('.',1)[-1]) for v in vals if v for x in [v.lower().replace(chr(92),'/').rsplit('/',1)[-1]] if '.' in x];sys.stdout.write('1' if 'graphify-out/' not in j and any(tl in exts for tl in tails) else '')\" 2>/dev/null || true); if [ \"$HIT\" = 1 ] && [ -f graphify-out/graph.json ]; then echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"MANDATORY: graphify-out/graph.json exists. You MUST run graphify before reading source files. Use: `graphify query \\\"<question>\\\"` (scoped subgraph), `graphify explain \\\"<concept>\\\"`, or `graphify path \\\"<A>\\\" \\\"<B>\\\"`. Only read raw files after graphify has oriented you, or to modify/debug specific lines. This rule applies to subagents too — include it in every subagent prompt involving code exploration.\"}}'; fi || true"
           }
         ]
       }
