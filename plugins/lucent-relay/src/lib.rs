@@ -16,11 +16,16 @@ const WINDOW_H: u32 = 160;
 // ─── Parameters ──────────────────────────────────────────────────────────────
 // Truce requires at least one Param field. Bypass is semantically correct
 // for a pass-through analyzer.
+// ponytail: _flush_sentinel FloatParam works around truce flush edge-case
+// with single-BoolParam plugins (clap-validator state-reproducibility-flush).
+// flags="hidden" would hide it from DAW but makes validator skip it too.
 
 #[derive(Params)]
 pub struct LucentRelayParams {
-    #[param(name = "Bypass", default = 0)]
+    #[param(name = "Bypass", default = 0, flags = "bypass")]
     pub bypass: BoolParam,
+    #[param(name = "_flush_sentinel", default = 0.0, range = "linear(0.0, 1.0)")]
+    pub _flush_sentinel: FloatParam,
 }
 
 // ─── Persistent state (strings → State, not Params in Truce) ─────────────────
