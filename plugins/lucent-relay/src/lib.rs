@@ -79,7 +79,7 @@ impl LucentRelay {
         let fft_fwd = planner.plan_fft_forward(FFT_SIZE);
         let fft_output = fft_fwd.make_output_vec();
         let relay_handle = RelayHandle::default();
-        editor::set_relay_handle(relay_handle.clone());
+        editor::set_relay_handle(Arc::as_ptr(&params) as usize, relay_handle.clone());
         Self {
             params,
             relay_handle,
@@ -267,6 +267,7 @@ impl Drop for LucentRelay {
         if let Some(slot) = self.claimed_slot.take() {
             if let Some(hub) = relay_hub() { hub.release_slot(slot); }
         }
+        editor::remove_relay_handle(Arc::as_ptr(&self.params) as usize);
     }
 }
 

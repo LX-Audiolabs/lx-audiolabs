@@ -1,4 +1,5 @@
-use std::sync::{Arc, OnceLock};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use truce_iced::iced::widget::{column, container, pick_list, row, text, text_input, Space};
 use truce_iced::iced::{Alignment, Border, Color, Element, Length, Subscription};
@@ -11,13 +12,36 @@ use crate::{LucentRelayParams, RelayHandle};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Static slot so `RelayUi::new()` can reach the handle without changing
-/// the `IcedPlugin::new(params)` trait signature. Set once in the plugin
-/// constructor, read once in the editor constructor.
-static RELAY_HANDLE: OnceLock<RelayHandle> = OnceLock::new();
+/// Registry so `RelayUi::new()` can reach the handle belonging to the same
+/// plugin instance without changing the `IcedPlugin::new(params)` trait
+/// signature. Keyed by `Arc::as_ptr(&params)` — that Arc is the same
+/// allocation the plugin constructor and the editor constructor both see,
+/// so the key is unique per instance regardless of how many Lucent-Relay
+/// instances share the process (was: single `OnceLock`, so every instance
+/// after the first read/wrote the first instance's handle).
+static RELAY_HANDLES: OnceLock<Mutex<HashMap<usize, RelayHandle>>> = OnceLock::new();
 
-pub fn set_relay_handle(h: RelayHandle) {
-    let _ = RELAY_HANDLE.set(h);
+fn params_key(params: &Arc<LucentRelayParams>) -> usize {
+    Arc::as_ptr(params) as usize
+}
+
+pub fn set_relay_handle(key: usize, h: RelayHandle) {
+    let map = RELAY_HANDLES.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut m) = map.lock() {
+        m.insert(key, h);
+    }
+}
+
+pub fn remove_relay_handle(key: usize) {
+    if let Some(map) = RELAY_HANDLES.get() {
+        if let Ok(mut m) = map.lock() {
+            m.remove(&key);
+        }
+    }
+}
+
+fn take_relay_handle(key: usize) -> Option<RelayHandle> {
+    RELAY_HANDLES.get()?.lock().ok()?.get(&key).cloned()
 }
 
 #[derive(Debug, Clone)]
@@ -38,8 +62,8 @@ pub struct RelayUi {
 impl IcedPlugin<LucentRelayParams> for RelayUi {
     type Message = RelayMsg;
 
-    fn new(_params: Arc<LucentRelayParams>) -> Self {
-        let handle = RELAY_HANDLE.get().cloned().unwrap_or_default();
+    fn new(params: Arc<LucentRelayParams>) -> Self {
+        let handle = take_relay_handle(params_key(&params)).unwrap_or_default();
         let name_buf = handle.name();
         let target = handle.target();
         Self {
