@@ -184,8 +184,10 @@ impl<M> canvas::Program<M> for EqSpectrumCanvas {
 
         frame.fill(&Path::rectangle(Point::ORIGIN, bounds.size()), Color::from_rgb(0.08, 0.08, 0.08));
 
-        // Pink noise tilt: +3 dB/octave compensation so pink noise appears flat.
-        const TILT: [f32; 5] = [-3.0, 0.0, 3.0, 6.0, 9.0];
+        // Pink noise tilt, halved from the original +3dB/band (was tuned for pure
+        // pink noise, over-boosted the Air bar on real mix material — 2026-07-03).
+        // ponytail: flat per-band step, not true dB/octave against band center freq.
+        const TILT: [f32; 5] = [-1.5, 0.0, 1.5, 3.0, 4.5];
 
         // Silence detection uses RAW band levels (before clamping/tilt)
         let raw_band_avg: f32 = (0..5).map(|b| self.band_levels[b]).sum::<f32>() / 5.0;
@@ -644,6 +646,26 @@ impl EquilibriumEditor {
                     ctx.begin_edit(param.info.id);
                     ctx.set_param(param.info.id, param.info.range.normalize(val));
                     ctx.end_edit(param.info.id);
+                }
+                for bp in [&p.solo_low, &p.solo_bass, &p.solo_mid, &p.solo_high_mid, &p.solo_high, &p.pre_master_active] {
+                    if bp.value() {
+                        bp.set_value(false);
+                        ctx.begin_edit(bp.info.id);
+                        ctx.set_param(bp.info.id, 0.0);
+                        ctx.end_edit(bp.info.id);
+                    }
+                }
+                let (target_levels, target_tolerances) = if let Some(idx) = self.selected_preset_index.filter(|&i| i < self.presets.len()) {
+                    let prof = &self.presets[idx].2;
+                    (prof.bands, prof.tolerances)
+                } else {
+                    ([0.0f32; 5], shared_analysis::DEFAULT_TOLERANCES)
+                };
+                self.target_levels = target_levels;
+                self.target_tolerances = target_tolerances;
+                for b in 0..5 {
+                    self.shared_state.target_levels[b].store(target_levels[b], Ordering::Release);
+                    self.shared_state.target_tolerances[b].store(target_tolerances[b], Ordering::Release);
                 }
                 self.shared_state.auto_loud_gain_offset.store(0.0, Ordering::Release);
                 self.shared_state.reset_analysis.store(true, Ordering::Release);
