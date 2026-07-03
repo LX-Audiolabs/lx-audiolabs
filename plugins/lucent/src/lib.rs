@@ -15,7 +15,30 @@ use shared_analysis::{SPECTRUM_BINS, SharedState, relay_hub, SnapFFT, SnapMode};
 #[derive(Default, Clone)]
 pub struct ResonanceLists {
     pub own: Vec<(usize, f32)>,
-    pub relay: Vec<(usize, f32)>,
+    /// (bin, resonance score, contributor track names) — contributors are the
+    /// Relay tracks whose own spectrum is above `CONTRIB_FLOOR_DB` at that bin,
+    /// i.e. which tracks are actually feeding this group-level peak.
+    pub relay: Vec<(usize, f32, Vec<String>)>,
+}
+
+/// Magnitude floor (dB) above which a Relay track counts as a contributor to
+/// a group resonance peak. Same value as `MaskingAnalyzer`'s `FLOOR`, kept as
+/// its own constant here since the two aren't the same computation.
+const CONTRIB_FLOOR_DB: f32 = -70.0;
+
+/// For each (bin, score) group-level peak, find which named Relay spectra
+/// are actually above the floor at that bin.
+fn attribute_contributors(
+    peaks: &[(usize, f32)],
+    relay_spectra: &[(String, Vec<f32>)],
+) -> Vec<(usize, f32, Vec<String>)> {
+    peaks.iter().map(|(bin, score)| {
+        let contributors = relay_spectra.iter()
+            .filter(|(_, spec)| spec.get(*bin).copied().unwrap_or(-90.0) > CONTRIB_FLOOR_DB)
+            .map(|(name, _)| name.clone())
+            .collect();
+        (*bin, *score, contributors)
+    }).collect()
 }
 
 /// Keyed by `Arc::as_ptr(&params)` — unique per plugin instance. A bare
@@ -45,6 +68,35 @@ pub fn read_resonance(key: usize) -> ResonanceLists {
 
 pub fn remove_resonance(key: usize) {
     if let Ok(mut m) = resonance_registry().lock() {
+        m.remove(&key);
+    }
+}
+
+/// Same instance-keyed pattern as `ResonanceRegistry`, for the top masking
+/// collisions (bin, dB, contributor track names) of each Lucent instance.
+type MaskingRegistry = Arc<Mutex<HashMap<usize, Vec<(usize, f32, Vec<String>)>>>>;
+
+fn masking_registry() -> &'static MaskingRegistry {
+    static REG: OnceLock<MaskingRegistry> = OnceLock::new();
+    REG.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+}
+
+pub fn publish_masking(key: usize, peaks: Vec<(usize, f32, Vec<String>)>) {
+    if let Ok(mut m) = masking_registry().lock() {
+        m.insert(key, peaks);
+    }
+}
+
+pub fn read_masking(key: usize) -> Vec<(usize, f32, Vec<String>)> {
+    masking_registry()
+        .lock()
+        .ok()
+        .and_then(|m| m.get(&key).cloned())
+        .unwrap_or_default()
+}
+
+pub fn remove_masking(key: usize) {
+    if let Ok(mut m) = masking_registry().lock() {
         m.remove(&key);
     }
 }
@@ -79,6 +131,10 @@ const WINDOW_H: u32 = 550;
 struct MaskingAnalyzer {
     masking_map: Vec<f32>,
     scratch: Vec<f32>,
+    /// Names of the two tracks whose pairwise collision produced `scratch[j]`
+    /// / `masking_map[j]` (empty when no collision above floor at that bin).
+    scratch_contributors: Vec<Vec<String>>,
+    masking_contributors: Vec<Vec<String>>,
 }
 
 impl MaskingAnalyzer {
@@ -86,52 +142,82 @@ impl MaskingAnalyzer {
         Self {
             masking_map: vec![-90.0; SPECTRUM_BINS],
             scratch: vec![-90.0; SPECTRUM_BINS],
+            scratch_contributors: vec![Vec::new(); SPECTRUM_BINS],
+            masking_contributors: vec![Vec::new(); SPECTRUM_BINS],
         }
     }
 
-    fn compute_masking(&mut self, own_spectrum: Option<&[f32]>, relay_spectra: &[Vec<f32>]) {
+    /// `relay_named` pairs each Relay spectrum with its track name so a
+    /// masking collision can be attributed to the two tracks that caused it.
+    fn compute_masking(&mut self, own_spectrum: Option<&[f32]>, relay_named: &[(String, Vec<f32>)]) {
         const FLOOR: f32 = -70.0;
         let n = self.masking_map.len();
 
         for j in 0..n {
-            let mut active: [f32; 17] = [-90.0f32; 17];
+            let mut active: [(f32, &str); 17] = [(-90.0f32, ""); 17];
             let mut count = 0usize;
 
             if let Some(own_spec) = own_spectrum {
                 let own = own_spec.get(j).copied().unwrap_or(-90.0);
                 if own > FLOOR {
-                    active[count] = own;
+                    active[count] = (own, "Own");
                     count += 1;
                 }
             }
-            for relay in relay_spectra {
+            for (name, relay) in relay_named {
                 if let Some(&v) = relay.get(j) {
                     if v > FLOOR && count < active.len() {
-                        active[count] = v;
+                        active[count] = (v, name.as_str());
                         count += 1;
                     }
                 }
             }
 
             let mut best = -90.0f32;
+            let mut best_pair = ("", "");
             for a in 0..count {
                 for b in (a + 1)..count {
-                    let collision = active[a].min(active[b]);
-                    if collision > best { best = collision; }
+                    let collision = active[a].0.min(active[b].0);
+                    if collision > best {
+                        best = collision;
+                        best_pair = (active[a].1, active[b].1);
+                    }
                 }
             }
             self.scratch[j] = best;
+            self.scratch_contributors[j] = if best > -90.0 {
+                vec![best_pair.0.to_string(), best_pair.1.to_string()]
+            } else {
+                Vec::new()
+            };
         }
 
         for j in 0..n {
             let lo = j.saturating_sub(2);
             let hi = (j + 2).min(n - 1);
             let mut m = -90.0f32;
+            let mut m_idx = j;
             for k in lo..=hi {
-                if self.scratch[k] > m { m = self.scratch[k]; }
+                if self.scratch[k] > m { m = self.scratch[k]; m_idx = k; }
             }
             self.masking_map[j] = m;
+            self.masking_contributors[j] = self.scratch_contributors[m_idx].clone();
         }
+    }
+
+    /// Top `n` masking-collision bins (frequency + dB + the two contributing
+    /// track names), sorted by severity. Mirrors the selection logic that
+    /// used to live in `editor.rs::masking_summary`, moved here so the
+    /// contributor names travel with the peak instead of being dropped.
+    fn top_peaks(&self, n: usize) -> Vec<(usize, f32, Vec<String>)> {
+        const FLOOR: f32 = -70.0;
+        let mut peaks: Vec<(usize, f32, Vec<String>)> = self.masking_map.iter().enumerate()
+            .filter(|&(_, &db)| db > FLOOR)
+            .map(|(i, &db)| (i, db, self.masking_contributors[i].clone()))
+            .collect();
+        peaks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        peaks.truncate(n);
+        peaks
     }
 }
 
@@ -461,6 +547,7 @@ impl PluginLogic for Lucent {
                             self.peak_tracker.update(&peaks);
                             let own_resonances = self.peak_tracker.resonance_peaks();
                             publish_resonance(self.instance_key, ResonanceLists { own: own_resonances, relay: Vec::new() });
+                            publish_masking(self.instance_key, Vec::new());
                             if let Ok(mut mm) = self.params.shared.masking_map.try_lock() {
                                 mm.iter_mut().for_each(|m| *m = -90.0);
                             }
@@ -486,23 +573,25 @@ impl PluginLogic for Lucent {
                             let my_name = self.claimed_lucent_slot
                                 .map(|s| shared_analysis::shm::display_name(&self.cached_name, s))
                                 .unwrap_or_else(|| self.cached_name.clone());
-                            let relay_spectra: Vec<Vec<f32>> = relay_hub()
-                                .map(|hub| {
-                                    hub.read_active(&my_name, now_ms)
-                                        .into_iter().map(|(_, spec)| spec).collect()
-                                })
+                            let relay_named: Vec<(String, Vec<f32>)> = relay_hub()
+                                .map(|hub| hub.read_active(&my_name, now_ms))
                                 .unwrap_or_default();
+                            let relay_spectra: Vec<Vec<f32>> = relay_named.iter()
+                                .map(|(_, spec)| spec.clone()).collect();
 
                             // Group-level resonance: power-sum of the Relay tracks can show
                             // a buildup that no single track (nor this bus's own signal) has.
                             let relay_sum = power_sum_spectrum(&relay_spectra);
                             let relay_peaks = self.relay_peak_tracker.find_peaks(&relay_sum);
                             self.relay_peak_tracker.update(&relay_peaks);
-                            let relay_resonances = self.relay_peak_tracker.resonance_peaks();
+                            let relay_resonances = attribute_contributors(
+                                &self.relay_peak_tracker.resonance_peaks(), &relay_named,
+                            );
 
                             publish_resonance(self.instance_key, ResonanceLists { own: own_resonances, relay: relay_resonances });
 
-                            self.masking_analyzer.compute_masking(Some(&frame), &relay_spectra);
+                            self.masking_analyzer.compute_masking(Some(&frame), &relay_named);
+                            publish_masking(self.instance_key, self.masking_analyzer.top_peaks(3));
                             if let Ok(mut mm) = self.params.shared.masking_map.try_lock() {
                                 mm.copy_from_slice(&self.masking_analyzer.masking_map);
                             }
@@ -529,12 +618,11 @@ impl PluginLogic for Lucent {
                             let my_name = self.claimed_lucent_slot
                                 .map(|s| shared_analysis::shm::display_name(&self.cached_name, s))
                                 .unwrap_or_else(|| self.cached_name.clone());
-                            let relay_spectra: Vec<Vec<f32>> = relay_hub()
-                                .map(|hub| {
-                                    hub.read_active(&my_name, now_ms)
-                                        .into_iter().map(|(_, spec)| spec).collect()
-                                })
+                            let relay_named: Vec<(String, Vec<f32>)> = relay_hub()
+                                .map(|hub| hub.read_active(&my_name, now_ms))
                                 .unwrap_or_default();
+                            let relay_spectra: Vec<Vec<f32>> = relay_named.iter()
+                                .map(|(_, spec)| spec.clone()).collect();
 
                             // RELAY mode: no own signal, so resonance is purely the
                             // Relay tracks "untereinander und zusammen" — masking below
@@ -542,10 +630,13 @@ impl PluginLogic for Lucent {
                             let relay_sum = power_sum_spectrum(&relay_spectra);
                             let relay_peaks = self.relay_peak_tracker.find_peaks(&relay_sum);
                             self.relay_peak_tracker.update(&relay_peaks);
-                            let relay_resonances = self.relay_peak_tracker.resonance_peaks();
+                            let relay_resonances = attribute_contributors(
+                                &self.relay_peak_tracker.resonance_peaks(), &relay_named,
+                            );
                             publish_resonance(self.instance_key, ResonanceLists { own: Vec::new(), relay: relay_resonances });
 
-                            self.masking_analyzer.compute_masking(None, &relay_spectra);
+                            self.masking_analyzer.compute_masking(None, &relay_named);
+                            publish_masking(self.instance_key, self.masking_analyzer.top_peaks(3));
                             if let Ok(mut mm) = self.params.shared.masking_map.try_lock() {
                                 mm.copy_from_slice(&self.masking_analyzer.masking_map);
                             }
@@ -631,6 +722,7 @@ impl Drop for Lucent {
             }
         }
         remove_resonance(self.instance_key);
+        remove_masking(self.instance_key);
     }
 }
 
