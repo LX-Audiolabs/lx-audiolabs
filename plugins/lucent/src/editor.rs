@@ -2,7 +2,9 @@ use truce_iced::iced::widget::{button, canvas, column, container, row, text_inpu
 use truce_iced::iced::{Alignment, Border, Color, Element, Length, Padding, Subscription};
 use truce_iced::{IcedPlugin, Message, ParamCache};
 use truce_core::editor::PluginContext;
+use std::collections::HashMap;
 use std::sync::{Arc, atomic::Ordering};
+use std::time::Instant;
 
 use shared_analysis::{SharedState, SPECTRUM_BINS};
 use crate::{read_resonance, read_masking};
@@ -11,6 +13,7 @@ use shared_ui::{
     bold_font, header_brand, output_level_block, output_tools_strip,
     toggle_button, vault_setup_box,
     GoniometerCanvas, SpectrumCanvas, SpectrumCurve, SpectrumConfig,
+    Gesture, knob_gesture,
 };
 use crate::ui::LucentUiState;
 
@@ -30,6 +33,7 @@ pub enum LucentMsg {
     MaskingToggled,
     ResetPeak,
     ResetAll,
+    SensitivityGesture(Gesture),
 }
 
 pub struct LucentEditor {
@@ -41,6 +45,17 @@ pub struct LucentEditor {
     resonance_cache_relay: Vec<(usize, f32, Vec<String>)>,
     masking_cache: Vec<f32>,
     masking_top: Vec<(usize, f32, Vec<String>)>,
+    /// Display-side hold buffer: collects the strongest resonance/masking
+    /// readings seen over `DISPLAY_HOLD_MS`, so the RESONANCE/MASKING text
+    /// panels refresh a few times a second instead of every redraw (which
+    /// made the numbers unreadable — they were repainting at display
+    /// refresh rate, ~60Hz+).
+    resonance_acc_own: HashMap<usize, f32>,
+    resonance_acc_relay: HashMap<usize, (f32, Vec<String>)>,
+    masking_acc: HashMap<usize, (f32, Vec<String>)>,
+    resonance_text: String,
+    masking_text: String,
+    display_window_start: Instant,
     show_resonance: bool,
     show_masking: bool,
     snap_blink: u32,
@@ -77,6 +92,12 @@ impl IcedPlugin<crate::LucentParams> for LucentEditor {
             resonance_cache_relay: Vec::new(),
             masking_cache: Vec::new(),
             masking_top: Vec::new(),
+            resonance_acc_own: HashMap::new(),
+            resonance_acc_relay: HashMap::new(),
+            masking_acc: HashMap::new(),
+            resonance_text: "No resonances detected".to_string(),
+            masking_text: "No masking detected".to_string(),
+            display_window_start: Instant::now(),
             show_resonance: false,
             show_masking: false,
             snap_blink: 0,
@@ -135,6 +156,32 @@ impl IcedPlugin<crate::LucentParams> for LucentEditor {
                 }
                 self.masking_top = read_masking(self.instance_key);
                 let mode = params.get_plain(LucentParamsParamId::AnalyzeMode) as i64;
+
+                for &(bin, score) in &self.resonance_cache_own {
+                    self.resonance_acc_own.entry(bin)
+                        .and_modify(|s| if score > *s { *s = score })
+                        .or_insert(score);
+                }
+                for (bin, score, names) in &self.resonance_cache_relay {
+                    self.resonance_acc_relay.entry(*bin)
+                        .and_modify(|(s, n)| if *score > *s { *s = *score; *n = names.clone(); })
+                        .or_insert((*score, names.clone()));
+                }
+                for (bin, db, names) in &self.masking_top {
+                    self.masking_acc.entry(*bin)
+                        .and_modify(|(d, n)| if *db > *d { *d = *db; *n = names.clone(); })
+                        .or_insert((*db, names.clone()));
+                }
+                const DISPLAY_HOLD_MS: u128 = 500;
+                if self.display_window_start.elapsed().as_millis() >= DISPLAY_HOLD_MS {
+                    self.resonance_text = self.format_resonance_text();
+                    self.masking_text = self.format_masking_text(mode);
+                    self.resonance_acc_own.clear();
+                    self.resonance_acc_relay.clear();
+                    self.masking_acc.clear();
+                    self.display_window_start = Instant::now();
+                }
+
                 if mode != 0 {
                     let now_ms = shared_analysis::shm::now_ms();
                     let slot = self.shared_state.shm_slot.load(Ordering::Acquire);
@@ -234,6 +281,17 @@ impl IcedPlugin<crate::LucentParams> for LucentEditor {
                 self.shared_state.peak_hold.store(-100.0, Ordering::Relaxed);
                 self.shared_state.peak_hold_l.store(-100.0, Ordering::Relaxed);
                 self.shared_state.peak_hold_r.store(-100.0, Ordering::Relaxed);
+            }
+            LucentMsg::SensitivityGesture(g) => {
+                let id = LucentParamsParamId::Sensitivity;
+                match g {
+                    Gesture::Start => ctx.begin_edit(id),
+                    Gesture::Change(v) => {
+                        let norm = (v / 100.0).clamp(0.0, 1.0);
+                        ctx.set_param(id, norm as f64);
+                    }
+                    Gesture::End => ctx.end_edit(id),
+                }
             }
         }
 
@@ -443,9 +501,13 @@ impl IcedPlugin<crate::LucentParams> for LucentEditor {
                                 show_res,
                                 Message::Plugin(LucentMsg::ResonanceToggled),
                             ),
-                        ].spacing(4).align_y(Alignment::Center)
+                        // Start, not Center: Center re-anchors the button to
+                        // the text column's midpoint, which moves up/down as
+                        // resonance_text grows from 1 to 3 lines. Start pins
+                        // it level with the title, independent of line count.
+                        ].spacing(4).align_y(Alignment::Start)
                     )
-                    .width(Length::FillPortion(1)).height(Length::Fixed(80.0))
+                    .width(Length::FillPortion(1)).height(Length::Fixed(88.0))
                     .padding(6).style(|_theme| panel_bg()),
 
                     container(
@@ -474,9 +536,24 @@ impl IcedPlugin<crate::LucentParams> for LucentEditor {
                                     Message::Plugin(LucentMsg::MaskingToggled),
                                 )
                             },
-                        ].spacing(4).align_y(Alignment::Center)
+                        ].spacing(4).align_y(Alignment::Start)
                     )
-                    .width(Length::FillPortion(1)).height(Length::Fixed(80.0))
+                    .width(Length::FillPortion(1)).height(Length::Fixed(88.0))
+                    .padding(6).style(|_theme| panel_bg()),
+
+                    container(
+                        knob_gesture(
+                            "SENSITIVITY",
+                            self.params.sensitivity.raw_target() as f32,
+                            0.0, 100.0, 50.0,
+                            |g| Message::Plugin(LucentMsg::SensitivityGesture(g)),
+                        )
+                    )
+                    // `.center_x(Length)`/`.center_y(Length)` set width/height
+                    // AND center in one call — chaining a separate `.width()`
+                    // before them got clobbered by the Length::Fill here,
+                    // which is what blew this box up to fill the row.
+                    .center_x(Length::Fixed(70.0)).center_y(Length::Fixed(88.0))
                     .padding(6).style(|_theme| panel_bg()),
                 ]
                 .spacing(6)
@@ -627,11 +704,31 @@ impl LucentEditor {
     }
 
     fn resonance_summary(&self) -> String {
-        if self.resonance_cache_own.is_empty() && self.resonance_cache_relay.is_empty() {
+        self.resonance_text.clone()
+    }
+
+    fn masking_summary(&self, _mode: i64) -> String {
+        self.masking_text.clone()
+    }
+
+    /// Builds the RESONANCE panel text from the held accumulator (strongest
+    /// score seen per bin over the last display window), not the raw
+    /// per-tick snapshot — see `resonance_acc_own`/`resonance_acc_relay`.
+    fn format_resonance_text(&self) -> String {
+        if self.resonance_acc_own.is_empty() && self.resonance_acc_relay.is_empty() {
             return "No resonances detected".to_string();
         }
         let sr = self.shared_state.sample_rate.load(Ordering::Relaxed).max(1.0);
         let fft_size = (SPECTRUM_BINS * 2) as f32;
+
+        let mut own: Vec<(usize, f32)> = self.resonance_acc_own.iter()
+            .map(|(&bin, &score)| (bin, score)).collect();
+        own.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut relay: Vec<(usize, f32, Vec<String>)> = self.resonance_acc_relay.iter()
+            .map(|(&bin, (score, names))| (bin, *score, names.clone())).collect();
+        relay.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
         let fmt = |peaks: &[(usize, f32)]| -> String {
             peaks.iter().take(3)
                 .map(|(bin, score)| {
@@ -655,23 +752,30 @@ impl LucentEditor {
                 .join(", ")
         };
         let mut lines = Vec::new();
-        if !self.resonance_cache_own.is_empty() {
-            lines.push(format!("Own: {}", fmt(&self.resonance_cache_own)));
+        if !own.is_empty() {
+            lines.push(format!("Own: {}", fmt(&own)));
         }
-        if !self.resonance_cache_relay.is_empty() {
-            lines.push(format!("Group: {}", fmt_relay(&self.resonance_cache_relay)));
+        if !relay.is_empty() {
+            lines.push(format!("Group: {}", fmt_relay(&relay)));
         }
         lines.join("\n")
     }
 
-    fn masking_summary(&self, mode: i64) -> String {
+    /// Builds the MASKING panel text from the held accumulator (strongest
+    /// collision seen per bin over the last display window) — see
+    /// `masking_acc`.
+    fn format_masking_text(&self, mode: i64) -> String {
         if mode == 0 { return "Standalone — no masking".to_string(); }
-        if self.masking_top.is_empty() || self.ui_state.relays.is_empty() {
+        if self.masking_acc.is_empty() || self.ui_state.relays.is_empty() {
             return "No masking detected".to_string();
         }
         let sr = self.shared_state.sample_rate.load(Ordering::Relaxed).max(1.0);
         let fft_size = (SPECTRUM_BINS * 2) as f32;
-        self.masking_top.iter().take(3)
+        let mut peaks: Vec<(usize, f32, Vec<String>)> = self.masking_acc.iter()
+            .map(|(&bin, (db, names))| (bin, *db, names.clone())).collect();
+        peaks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        peaks.truncate(3);
+        peaks.iter()
             .map(|(bin, db, contributors)| {
                 let freq = *bin as f32 * sr / fft_size;
                 if contributors.is_empty() {

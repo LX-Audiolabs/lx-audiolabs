@@ -800,26 +800,29 @@ impl<Message> canvas::Program<Message> for SpectrumCanvas {
             );
         }
 
-        // Masking collision overlay (Lucent) — bottom-anchored red area
+        // Masking collision overlay (Lucent) — one red vertical bar per
+        // colliding bin, height + opacity scaling with collision severity
+        // (mirrors the resonance-marker style below instead of a filled
+        // area, which read as one clunky blob).
         if !self.masking.is_empty() {
             let mask_fft_size = (self.masking.len() * 2) as f32;
-            let mask_fill = Path::new(|b| {
-                b.move_to(Point::new(0.0, height));
-                let mut last_x = 0.0;
-                for (k, &db) in self.masking.iter().enumerate() {
-                    let freq = k as f32 * sample_rate / mask_fft_size;
-                    if !(20.0..=20000.0).contains(&freq) {
-                        continue;
-                    }
-                    let x = log_freq(freq) * width;
-                    let y = if db > min_db { db_to_y(db) } else { height };
-                    b.line_to(Point::new(x, y));
-                    last_x = x;
+            for (k, &db) in self.masking.iter().enumerate() {
+                if db <= min_db {
+                    continue;
                 }
-                b.line_to(Point::new(last_x, height));
-                b.close();
-            });
-            frame.fill(&mask_fill, Color::from_rgba(0.95, 0.22, 0.18, 0.30));
+                let freq = k as f32 * sample_rate / mask_fft_size;
+                if !(20.0..=20000.0).contains(&freq) {
+                    continue;
+                }
+                let x = log_freq(freq) * width;
+                let y = db_to_y(db);
+                let severity = ((db - min_db) / db_range).clamp(0.0, 1.0);
+                let color = Color::from_rgba(0.95, 0.22, 0.18, 0.2 + severity * 0.6);
+                frame.stroke(
+                    &Path::line(Point::new(x, height), Point::new(x, y)),
+                    Stroke { style: canvas::Style::Solid(color), width: 1.5, ..Default::default() },
+                );
+            }
         }
 
         // Resonance peaks (Lucent) — amber vertical markers + diamond
