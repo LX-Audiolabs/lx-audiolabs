@@ -41,7 +41,7 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist
-          cp target/bundles/Equilibrium.clap dist/
+          cp -r target/bundles/Equilibrium.clap dist/
           echo "Equilibrium v${{ steps.version.outputs.version }} — ${{ runner.os }}"
 
       - name: Package (Windows)

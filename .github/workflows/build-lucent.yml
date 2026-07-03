@@ -39,7 +39,7 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist
-          cp "target/bundles/Lucent.clap" "target/bundles/Lucent Relay.clap" dist/
+          cp -r "target/bundles/Lucent.clap" "target/bundles/Lucent Relay.clap" dist/
 
       - name: Package (Windows)
         if: runner.os == 'Windows'

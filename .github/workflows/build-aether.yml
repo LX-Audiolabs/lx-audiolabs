@@ -41,7 +41,7 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist
-          cp target/bundles/Aether.clap dist/
+          cp -r target/bundles/Aether.clap dist/
           echo "Aether v${{ steps.version.outputs.version }} — ${{ runner.os }}"
 
       - name: Package (Windows)
