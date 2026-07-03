@@ -773,42 +773,76 @@ impl MeridianEditor {
         }
     }
 
-    fn do_gesture(&mut self, param: fn(&MeridianParams) -> &FloatParam, g: &Gesture, _ctx: &PluginContext<MeridianParams>) {
+    fn do_gesture(&mut self, param: fn(&MeridianParams) -> &FloatParam, g: &Gesture, ctx: &PluginContext<MeridianParams>) {
         let p = param(&self.params);
         match g {
-            Gesture::Start => {}
-            Gesture::Change(v) => p.set_value(*v as f64),
-            Gesture::End => {}
+            Gesture::Start => ctx.begin_edit(p.info.id),
+            Gesture::Change(v) => {
+                p.set_value(*v as f64);
+                let norm = p.info.range.normalize(*v as f64);
+                ctx.set_param(p.info.id, norm);
+            }
+            Gesture::End => ctx.end_edit(p.info.id),
         }
     }
 
-    fn do_int(&mut self, param: fn(&MeridianParams) -> &IntParam, val: i32, _ctx: &PluginContext<MeridianParams>) {
-        param(&self.params).set_value(val as i64);
-    }
-
-    fn do_toggle(&mut self, param: fn(&MeridianParams) -> &BoolParam, _ctx: &PluginContext<MeridianParams>) {
+    fn do_int(&mut self, param: fn(&MeridianParams) -> &IntParam, val: i32, ctx: &PluginContext<MeridianParams>) {
         let p = param(&self.params);
-        p.set_value(!p.value());
+        p.set_value(val as i64);
+        let norm = p.info.range.normalize(val as f64);
+        ctx.begin_edit(p.info.id);
+        ctx.set_param(p.info.id, norm);
+        ctx.end_edit(p.info.id);
     }
 
-    fn do_reset_all(&mut self, _ctx: &PluginContext<MeridianParams>) {
-        let p = &self.params;
-        p.hpf_freq.set_value(2.0); p.lpf_freq.set_value(35000.0);
-        p.cut_slope.set_value(0i64); self.cut_slope_sel = 0;
-        p.bass_gain.set_value(0.0); p.bass_slope.set_value(1i64);
-        p.lo_mid_gain.set_value(0.0); p.lo_mid_slope.set_value(1i64);
-        p.mid_gain.set_value(0.0); p.mid_slope.set_value(1i64);
-        p.high_gain.set_value(0.0); p.high_slope.set_value(1i64);
-        p.excite_gain.set_value(0.0); p.excite_slope.set_value(1i64);
-        p.eq_freq_1.set_value(80.0); p.eq_freq_2.set_value(300.0); p.eq_freq_3.set_value(1000.0);
-        p.eq_freq_4.set_value(4000.0); p.eq_freq_5.set_value(12000.0);
-        p.comp_threshold.set_value(0.0); p.comp_mix.set_value(0.0); p.comp_attack.set_value(15.0);
-        p.comp_release.set_value(120.0); p.comp_character.set_value(2.0); p.comp_makeup.set_value(0.0);
-        p.inflate_effect.set_value(0.0); p.inflate_curve.set_value(0.0);
-        p.inflate_band_split.set_value(false); p.inflate_clip.set_value(false);
-        p.tilt_gain.set_value(0.0); p.warmth_drive.set_value(0.0); p.warmth_mix.set_value(0.0);
-        p.excite_amount.set_value(0.0); p.excite_blend.set_value(0.0); p.excite_freq.set_value(8000.0);
-        p.stereo_width.set_value(100.0); p.pan.set_value(0.0); p.output_gain.set_value(0.0);
+    fn do_toggle(&mut self, param: fn(&MeridianParams) -> &BoolParam, ctx: &PluginContext<MeridianParams>) {
+        let p = param(&self.params);
+        let new_val = !p.value();
+        p.set_value(new_val);
+        let norm = if new_val { 1.0 } else { 0.0 };
+        ctx.begin_edit(p.info.id);
+        ctx.set_param(p.info.id, norm);
+        ctx.end_edit(p.info.id);
+    }
+
+    fn do_reset_all(&mut self, ctx: &PluginContext<MeridianParams>) {
+        self.do_gesture(|p| &p.hpf_freq, &Gesture::Change(2.0), ctx);
+        self.do_gesture(|p| &p.lpf_freq, &Gesture::Change(35000.0), ctx);
+        self.do_int(|p| &p.cut_slope, 0, ctx); self.cut_slope_sel = 0;
+        self.do_gesture(|p| &p.bass_gain, &Gesture::Change(0.0), ctx);
+        self.do_int(|p| &p.bass_slope, 1, ctx);
+        self.do_gesture(|p| &p.lo_mid_gain, &Gesture::Change(0.0), ctx);
+        self.do_int(|p| &p.lo_mid_slope, 1, ctx);
+        self.do_gesture(|p| &p.mid_gain, &Gesture::Change(0.0), ctx);
+        self.do_int(|p| &p.mid_slope, 1, ctx);
+        self.do_gesture(|p| &p.high_gain, &Gesture::Change(0.0), ctx);
+        self.do_int(|p| &p.high_slope, 1, ctx);
+        self.do_gesture(|p| &p.excite_gain, &Gesture::Change(0.0), ctx);
+        self.do_int(|p| &p.excite_slope, 1, ctx);
+        self.do_gesture(|p| &p.eq_freq_1, &Gesture::Change(80.0), ctx);
+        self.do_gesture(|p| &p.eq_freq_2, &Gesture::Change(300.0), ctx);
+        self.do_gesture(|p| &p.eq_freq_3, &Gesture::Change(1000.0), ctx);
+        self.do_gesture(|p| &p.eq_freq_4, &Gesture::Change(4000.0), ctx);
+        self.do_gesture(|p| &p.eq_freq_5, &Gesture::Change(12000.0), ctx);
+        self.do_gesture(|p| &p.comp_threshold, &Gesture::Change(0.0), ctx);
+        self.do_gesture(|p| &p.comp_mix, &Gesture::Change(0.0), ctx);
+        self.do_gesture(|p| &p.comp_attack, &Gesture::Change(15.0), ctx);
+        self.do_gesture(|p| &p.comp_release, &Gesture::Change(120.0), ctx);
+        self.do_gesture(|p| &p.comp_character, &Gesture::Change(2.0), ctx);
+        self.do_gesture(|p| &p.comp_makeup, &Gesture::Change(0.0), ctx);
+        self.do_gesture(|p| &p.inflate_effect, &Gesture::Change(0.0), ctx);
+        self.do_gesture(|p| &p.inflate_curve, &Gesture::Change(0.0), ctx);
+        if self.params.inflate_band_split.value() { self.do_toggle(|p| &p.inflate_band_split, ctx); }
+        if self.params.inflate_clip.value() { self.do_toggle(|p| &p.inflate_clip, ctx); }
+        self.do_gesture(|p| &p.tilt_gain, &Gesture::Change(0.0), ctx);
+        self.do_gesture(|p| &p.warmth_drive, &Gesture::Change(0.0), ctx);
+        self.do_gesture(|p| &p.warmth_mix, &Gesture::Change(0.0), ctx);
+        self.do_gesture(|p| &p.excite_amount, &Gesture::Change(0.0), ctx);
+        self.do_gesture(|p| &p.excite_blend, &Gesture::Change(0.0), ctx);
+        self.do_gesture(|p| &p.excite_freq, &Gesture::Change(8000.0), ctx);
+        self.do_gesture(|p| &p.stereo_width, &Gesture::Change(100.0), ctx);
+        self.do_gesture(|p| &p.pan, &Gesture::Change(0.0), ctx);
+        self.do_gesture(|p| &p.output_gain, &Gesture::Change(0.0), ctx);
         self.shared_state.reset_analysis.store(true, Ordering::Release);
     }
 
@@ -949,44 +983,63 @@ fn compute_eq_curve(params: &MeridianParams, slope_sel: [i32; 5], cut_slope_sel:
 
 // ─── Preset helpers ──────────────────────────────────────────────────────────
 
-fn apply_profile(_ctx: &PluginContext<MeridianParams>, params: &MeridianParams, profile: &MeridianProfile) {
-    params.hpf_freq.set_value(profile.hpf_freq as f64);
-    params.lpf_freq.set_value(profile.lpf_freq as f64);
-    params.cut_slope.set_value(profile.cut_slope as i64);
-    params.bass_gain.set_value(profile.bass_gain as f64);
-    params.bass_slope.set_value(profile.bass_slope as i64);
-    params.lo_mid_gain.set_value(profile.lo_mid_gain as f64);
-    params.lo_mid_slope.set_value(profile.lo_mid_slope as i64);
-    params.mid_gain.set_value(profile.mid_gain as f64);
-    params.mid_slope.set_value(profile.mid_slope as i64);
-    params.high_gain.set_value(profile.high_gain as f64);
-    params.high_slope.set_value(profile.high_slope as i64);
-    params.excite_gain.set_value(profile.excite_gain as f64);
-    params.excite_slope.set_value(profile.excite_slope as i64);
-    params.eq_freq_1.set_value(profile.eq_freq_1 as f64);
-    params.eq_freq_2.set_value(profile.eq_freq_2 as f64);
-    params.eq_freq_3.set_value(profile.eq_freq_3 as f64);
-    params.eq_freq_4.set_value(profile.eq_freq_4 as f64);
-    params.eq_freq_5.set_value(profile.eq_freq_5 as f64);
-    params.tilt_gain.set_value(profile.tilt_gain as f64);
-    params.warmth_drive.set_value(profile.warmth_drive as f64);
-    params.warmth_mix.set_value(profile.warmth_mix as f64);
-    params.excite_amount.set_value(profile.excite_amount as f64);
-    params.excite_blend.set_value(profile.excite_blend as f64);
-    params.excite_freq.set_value(profile.excite_freq as f64);
-    params.comp_threshold.set_value(profile.comp_threshold as f64);
-    params.comp_mix.set_value(profile.comp_mix as f64);
-    params.comp_attack.set_value(profile.comp_attack as f64);
-    params.comp_release.set_value(profile.comp_release as f64);
-    params.comp_character.set_value(profile.comp_character as f64);
-    params.comp_makeup.set_value(profile.comp_makeup as f64);
-    params.inflate_effect.set_value(profile.inflate_effect as f64);
-    params.inflate_curve.set_value(profile.inflate_curve as f64);
-    params.inflate_band_split.set_value(profile.inflate_band_split);
-    params.inflate_clip.set_value(profile.inflate_clip);
-    params.stereo_width.set_value(profile.stereo_width as f64);
-    params.pan.set_value(profile.pan as f64);
-    params.output_gain.set_value(profile.output_gain as f64);
+fn apply_profile(ctx: &PluginContext<MeridianParams>, params: &MeridianParams, profile: &MeridianProfile) {
+    let set_f = |p: &FloatParam, v: f64| {
+        p.set_value(v);
+        ctx.begin_edit(p.info.id);
+        ctx.set_param(p.info.id, p.info.range.normalize(v));
+        ctx.end_edit(p.info.id);
+    };
+    let set_i = |p: &IntParam, v: i64| {
+        p.set_value(v);
+        ctx.begin_edit(p.info.id);
+        ctx.set_param(p.info.id, p.info.range.normalize(v as f64));
+        ctx.end_edit(p.info.id);
+    };
+    let set_b = |p: &BoolParam, v: bool| {
+        p.set_value(v);
+        ctx.begin_edit(p.info.id);
+        ctx.set_param(p.info.id, if v { 1.0 } else { 0.0 });
+        ctx.end_edit(p.info.id);
+    };
+
+    set_f(&params.hpf_freq, profile.hpf_freq as f64);
+    set_f(&params.lpf_freq, profile.lpf_freq as f64);
+    set_i(&params.cut_slope, profile.cut_slope as i64);
+    set_f(&params.bass_gain, profile.bass_gain as f64);
+    set_i(&params.bass_slope, profile.bass_slope as i64);
+    set_f(&params.lo_mid_gain, profile.lo_mid_gain as f64);
+    set_i(&params.lo_mid_slope, profile.lo_mid_slope as i64);
+    set_f(&params.mid_gain, profile.mid_gain as f64);
+    set_i(&params.mid_slope, profile.mid_slope as i64);
+    set_f(&params.high_gain, profile.high_gain as f64);
+    set_i(&params.high_slope, profile.high_slope as i64);
+    set_f(&params.excite_gain, profile.excite_gain as f64);
+    set_i(&params.excite_slope, profile.excite_slope as i64);
+    set_f(&params.eq_freq_1, profile.eq_freq_1 as f64);
+    set_f(&params.eq_freq_2, profile.eq_freq_2 as f64);
+    set_f(&params.eq_freq_3, profile.eq_freq_3 as f64);
+    set_f(&params.eq_freq_4, profile.eq_freq_4 as f64);
+    set_f(&params.eq_freq_5, profile.eq_freq_5 as f64);
+    set_f(&params.tilt_gain, profile.tilt_gain as f64);
+    set_f(&params.warmth_drive, profile.warmth_drive as f64);
+    set_f(&params.warmth_mix, profile.warmth_mix as f64);
+    set_f(&params.excite_amount, profile.excite_amount as f64);
+    set_f(&params.excite_blend, profile.excite_blend as f64);
+    set_f(&params.excite_freq, profile.excite_freq as f64);
+    set_f(&params.comp_threshold, profile.comp_threshold as f64);
+    set_f(&params.comp_mix, profile.comp_mix as f64);
+    set_f(&params.comp_attack, profile.comp_attack as f64);
+    set_f(&params.comp_release, profile.comp_release as f64);
+    set_f(&params.comp_character, profile.comp_character as f64);
+    set_f(&params.comp_makeup, profile.comp_makeup as f64);
+    set_f(&params.inflate_effect, profile.inflate_effect as f64);
+    set_f(&params.inflate_curve, profile.inflate_curve as f64);
+    set_b(&params.inflate_band_split, profile.inflate_band_split);
+    set_b(&params.inflate_clip, profile.inflate_clip);
+    set_f(&params.stereo_width, profile.stereo_width as f64);
+    set_f(&params.pan, profile.pan as f64);
+    set_f(&params.output_gain, profile.output_gain as f64);
 }
 
 fn export_meridian_markdown(p: &MeridianProfile) -> String {

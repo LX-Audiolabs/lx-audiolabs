@@ -15,15 +15,15 @@ members = [
 resolver = "3"
 
 [workspace.dependencies]
-truce           = { version = "1.0.4", default-features = false }
-truce-core      = "1.0.4"
-truce-params    = "1.0.4"
-truce-clap      = "1.0.4"
-truce-vst3      = "1.0.4"
-truce-loader    = "1.0.4"
-truce-iced      = "1.0.4"
-truce-standalone = { version = "1.0.4", features = ["gui"] }
-truce-test      = "1.0.4"
+truce           = { version = "1.0.5", default-features = false }
+truce-core      = "1.0.5"
+truce-params    = "1.0.5"
+truce-clap      = "1.0.5"
+truce-vst3      = "1.0.5"
+truce-loader    = "1.0.5"
+truce-iced      = "1.0.5"
+truce-standalone = { version = "1.0.5", features = ["gui"] }
+truce-test      = "1.0.5"
 clap-sys        = "0.5"
 
 [profile.release]
@@ -37,5 +37,4 @@ panic = "abort"
 inherits = "release"
 
 [patch.crates-io]
-truce-iced = { path = "truce-iced-local" }
 truce-clap = { path = "truce-clap-local" }

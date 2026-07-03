@@ -156,9 +156,9 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "baseview-truce"
-version = "0.1.1-truce.11"
+version = "0.1.1-truce.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a6e89abc2e47f1c46393531c0e9e446eb89ab5c6157e524e3a05e7baf3b5a14"
+checksum = "bff8aa761c17ba5e7d572efd8fb7b77f6cb282ac3b44fa5731c38f85e2f79576"
 dependencies = [
  "keyboard-types",
  "nix 0.22.3",
@@ -3038,9 +3038,9 @@ dependencies = [
 
 [[package]]
 name = "truce"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8c1b73abb990034d1d3f805adcced787123a890e913b009110c4e318cdfedad"
+checksum = "5c7b7d23026508fe2192f5acf84722180ca7381cd97bb784b1031b53ef855919"
 dependencies = [
  "truce-core",
  "truce-derive",
@@ -3052,9 +3052,9 @@ dependencies = [
 
 [[package]]
 name = "truce-build"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7456c9254dfc07e7159a893b41a0d2df9c0bc28d62f94fd618e2db3d8cb5ac3c"
+checksum = "64f7c469e7a11f025e0ecd7ff6382289b38f65a33eda401db69124a04fc5967f"
 dependencies = [
  "base64",
  "serde",
@@ -3064,7 +3064,7 @@ dependencies = [
 
 [[package]]
 name = "truce-clap"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "clap-sys",
  "crossbeam-queue",
@@ -3076,9 +3076,9 @@ dependencies = [
 
 [[package]]
 name = "truce-core"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad993c5ae2b0aa2dc14f6498177e6c25d610a04ef0a1935518a1b5d3f34ec463"
+checksum = "8a90668537be97428b2f0b557d1174ead614fb5beeb9e12375a127e2579a4740"
 dependencies = [
  "png",
  "truce-params",
@@ -3087,9 +3087,9 @@ dependencies = [
 
 [[package]]
 name = "truce-cpu"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8127c8b223dbfef62cae1b092ce3dd9d5cd9db73bf7d0424b4073b5430c5357"
+checksum = "192e42d99acea839fa28f2541ab1453e9668d89deb1c13670c8fcb01a72f8224"
 dependencies = [
  "fontdue",
  "tiny-skia 0.12.0",
@@ -3100,9 +3100,9 @@ dependencies = [
 
 [[package]]
 name = "truce-derive"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6f5a2eee178f5e710824521a167440894705e18497d89838c69dc634ecb3882"
+checksum = "932cdbfec035592092852ec4fc37345c8190ac6381b0709b777b4da7b84f54ed"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3115,9 +3115,9 @@ dependencies = [
 
 [[package]]
 name = "truce-driver"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "036a1dc317c1df8b4da3f5bb3f8fbb85c1476cbe70e097362613d3fe67d11fa9"
+checksum = "9971af156c98721f754a8dce0dc7825d68d66c2f2e92253000b9d0ed570edd58"
 dependencies = [
  "truce-core",
  "truce-params",
@@ -3125,15 +3125,15 @@ dependencies = [
 
 [[package]]
 name = "truce-font"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "087b479e029aea4604f93363b366bfc1c7d00118a9b83315e529513ae0767bd8"
+checksum = "5615d9f0c06dc09c8bc998496690d9a26bad384ba5d9a1d1a8248444faa84468"
 
 [[package]]
 name = "truce-gui"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3f71fb032c8883fe0e1abebeefbf45e01451389054fd671348020fb0aa2e4f3"
+checksum = "8da9f7f8d1b6b04f82bfe7b94f6e562d59fb4f7ffdf288f382187af9dc6c84a6"
 dependencies = [
  "baseview-truce",
  "log",
@@ -3155,9 +3155,9 @@ dependencies = [
 
 [[package]]
 name = "truce-gui-types"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cc86006c68b0894e0c600cd70420740b864526b4e67b26b3e85cfcddd1b6739"
+checksum = "a49752bdfc799c51f9036ec4c4600db546bea4344b3ee63c69c1bf19ac39bcf4"
 dependencies = [
  "objc2",
  "truce-core",
@@ -3165,17 +3165,20 @@ dependencies = [
 
 [[package]]
 name = "truce-gui-utils"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d200ebdeb4f38e8c0840c620333a15a430dc91e4d340000048ca61dea724e37"
+checksum = "01bd01c68f07919531eb84bfedb29e8502daabce20307e1c586a0bbbf292cb96"
 dependencies = [
  "objc",
  "raw-window-handle 0.5.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "truce-iced"
-version = "1.0.4"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "daf380f46a5d32c134575731aa23e2d7f4a3e2fc8e457a91ff7998d759ec33a1"
 dependencies = [
  "baseview-truce",
  "iced_core",
@@ -3199,9 +3202,9 @@ dependencies = [
 
 [[package]]
 name = "truce-loader"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e775ad9f9cea4d221d0fa13bd8e312dd30cde7020325cd8cc7b8763fac086a5"
+checksum = "59469b29c1340ed281eb8a7620be59716a90c8f892dcd40f4cc716dc7e5ce4eb"
 dependencies = [
  "crc32fast",
  "libloading 0.9.0",
@@ -3215,18 +3218,18 @@ dependencies = [
 
 [[package]]
 name = "truce-params"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c56be4f7c76a4622b45c3c383e7585c3f1a24ef44daa52f23069285a13fd65f"
+checksum = "dfa4dc425657dc0e19ee2e31b1d667f3574b736ef5038b9f785a119dd5e6f393"
 dependencies = [
  "bitflags 2.13.0",
 ]
 
 [[package]]
 name = "truce-plugin"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc022b65a0632de00e2fb3aa0f4a26a6eaed34fd87e21fbfc44d5cfebfff7c09"
+checksum = "cf4acaf8ead15576ef163be592b9ac85525486437027b3de2d4059a6eda47cae"
 dependencies = [
  "truce-core",
  "truce-gui-types",
@@ -3235,9 +3238,9 @@ dependencies = [
 
 [[package]]
 name = "truce-standalone"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e9f22fd2a006add20ddcd1c0c214a68c5375effe04330ca4fddcb2e2ddc989e"
+checksum = "b1cdebbf8f52101872e00ecce273b48f39b7547d0a1dd3a2bd73890a1d1cd29a"
 dependencies = [
  "baseview-truce",
  "cpal",
@@ -3259,9 +3262,9 @@ dependencies = [
 
 [[package]]
 name = "truce-test"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a1cb8f8e2fd27f1689984684202285608d95d3a2eb28b1802fa127395cf3dec"
+checksum = "74b6cc26aceb15f968b7546302f95b23084efe80aa0980d12e0c5fcf762899b1"
 dependencies = [
  "png",
  "toml",
@@ -3273,15 +3276,15 @@ dependencies = [
 
 [[package]]
 name = "truce-utils"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7028308ce6254c6fe349aa7d475a4d3f6adf4b36a8cae2c44c42dad354dbf5e0"
+checksum = "13f1c6e1c13b4b42ff9eff47d76edcf467ddfad25c0236abfafeb8874bd3da6a"
 
 [[package]]
 name = "truce-vst3"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2857768987df609462618636d4fcdb68c778a6ece083d06fb43ddf5a7fe13e77"
+checksum = "5842a198b70d13bfb9a9bc2b22d84a5d8b110f194e7b8b9d5e63b3c12ee70ba3"
 dependencies = [
  "cc",
  "crossbeam-queue",
