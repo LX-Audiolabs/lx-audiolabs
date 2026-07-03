@@ -227,7 +227,6 @@ struct PeakTracker {
     persistence: Vec<u32>,
     last_prominence: Vec<f32>,
     resonance_score: Vec<f32>,
-    prominence_threshold: f32,
 }
 
 impl PeakTracker {
@@ -236,22 +235,61 @@ impl PeakTracker {
             persistence: vec![0u32; SPECTRUM_BINS],
             last_prominence: vec![0.0; SPECTRUM_BINS],
             resonance_score: vec![0.0; SPECTRUM_BINS],
-            prominence_threshold: 3.5,
         }
     }
 
+    /// Local maximum + three gates, each rejecting a distinct false-positive
+    /// mode the raw 2-neighbor prominence check let through:
+    /// - floor: rejects peaks sitting in the noise floor (no real signal there)
+    /// - contrast: prominence against a wide local baseline (±8 bins) instead
+    ///   of just the immediate 2 neighbors, less sensitive to single-bin ripple
+    /// - flatness: rejects broadband/noisy content (cymbals, hats) that has
+    ///   lots of small local maxima but isn't a narrowband resonance — the
+    ///   main fix for the high-frequency false-positive bias, since bright
+    ///   material triggers many raw local maxima that a flat dB threshold
+    ///   alone can't tell apart from an actual tonal peak.
     fn find_peaks(&self, spectrum: &[f32]) -> Vec<(usize, f32)> {
+        const FLOOR_DB: f32 = -75.0;
+        const CONTRAST_MIN_DB: f32 = 5.0;
+        const FLATNESS_MAX: f32 = 0.7;
+        const BASELINE_WINDOW: usize = 8;
+        const FLATNESS_WINDOW: usize = 4;
+
+        let n = spectrum.len();
         let mut peaks = Vec::new();
-        for k in 1..spectrum.len().saturating_sub(1) {
+        for k in 1..n.saturating_sub(1) {
             let left = spectrum[k - 1];
             let center = spectrum[k];
             let right = spectrum[k + 1];
-            if center > left && center > right {
-                let prominence = center - ((left + right) / 2.0).max(-90.0);
-                if prominence > self.prominence_threshold {
-                    peaks.push((k, prominence));
-                }
+            if !(center > left && center > right) {
+                continue;
             }
+            if center < FLOOR_DB {
+                continue;
+            }
+
+            let lo = k.saturating_sub(BASELINE_WINDOW);
+            let hi = (k + BASELINE_WINDOW).min(n - 1);
+            let baseline = spectrum[lo..=hi].iter().sum::<f32>() / (hi - lo + 1) as f32;
+            let contrast = center - baseline;
+            if contrast < CONTRAST_MIN_DB {
+                continue;
+            }
+
+            let flo = k.saturating_sub(FLATNESS_WINDOW);
+            let fhi = (k + FLATNESS_WINDOW).min(n - 1);
+            let window = &spectrum[flo..=fhi];
+            let power_sum: f32 = window.iter().map(|&db| 10f32.powf(db / 10.0)).sum();
+            let log_sum: f32 = window.iter().map(|&db| 10f32.powf(db / 10.0).max(1e-12).ln()).sum();
+            let count = window.len() as f32;
+            let arith_mean = power_sum / count;
+            let geo_mean = (log_sum / count).exp();
+            let flatness = if arith_mean > 1e-12 { geo_mean / arith_mean } else { 1.0 };
+            if flatness > FLATNESS_MAX {
+                continue;
+            }
+
+            peaks.push((k, contrast));
         }
         peaks
     }
