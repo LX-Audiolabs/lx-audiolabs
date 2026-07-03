@@ -1,11 +1,3 @@
 {
-    "servers": {
-        "clap-vault": {
-            "type": "stdio",
-            "command": "mcpvault",
-            "args": [
-                "C:\\Users\\lxndr\\Documents\\LX-AudioLabs\\CLAP-vault"
-            ]
-        }
-    }
+	"servers": {}
 }

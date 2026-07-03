@@ -26,7 +26,16 @@
       "Bash(grep -ni \"aether\" \"/c/Users/lxndr/Documents/LX-AudioLabs/Reapertest/Testreaper/Testreaper.rpp\" | head -10)",
       "Bash(grep -n '<CLAP\\\\|<VST\\\\|MASTER_FX\\\\|MONITORING\\\\|MONFX\\\\|<FXCHAIN' \"/c/Users/lxndr/Documents/LX-AudioLabs/Reapertest/Testreaper/Testreaper.rpp\")",
       "Bash(cargo test *)",
-      "Bash(tasklist //FI \"IMAGENAME eq git.exe\")"
+      "Bash(tasklist //FI \"IMAGENAME eq git.exe\")",
+      "WebFetch(domain:forum.hise.audio)",
+      "WebFetch(domain:polarity.me)",
+      "WebFetch(domain:gearspace.com)",
+      "Bash(ls \"C:\\\\Users\\\\lxndr\\\\Documents\\\\LX-AudioLabs\\\\CLAPins\\\\\" 2>&1)",
+      "Bash(ls \"/c/Users/lxndr/Documents/LX-AudioLabs/CLAPins/\")",
+      "Read(//c/Users/lxndr/Documents/LX-AudioLabs/CLAPins//**)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\lxndr\\Documents\\LX-AudioLabs\\CLAPins"
     ]
   },
   "enabledMcpjsonServers": [
