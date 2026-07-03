@@ -36,11 +36,11 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist/aether dist/aurum dist/lucent-bundle dist/equilibrium dist/meridian
-          cp target/bundles/Aether.clap dist/aether/
-          cp target/bundles/Aurum.clap dist/aurum/
-          cp "target/bundles/Lucent.clap" "target/bundles/Lucent Relay.clap" dist/lucent-bundle/
-          cp target/bundles/Equilibrium.clap dist/equilibrium/
-          cp target/bundles/Meridian.clap dist/meridian/
+          cp -r target/bundles/Aether.clap dist/aether/
+          cp -r target/bundles/Aurum.clap dist/aurum/
+          cp -r "target/bundles/Lucent.clap" "target/bundles/Lucent Relay.clap" dist/lucent-bundle/
+          cp -r target/bundles/Equilibrium.clap dist/equilibrium/
+          cp -r target/bundles/Meridian.clap dist/meridian/
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
