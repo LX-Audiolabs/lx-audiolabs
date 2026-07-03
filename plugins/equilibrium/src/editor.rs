@@ -640,7 +640,7 @@ impl EquilibriumEditor {
                     (&p.low_gain, 0.0f64), (&p.bass_gain, 0.0), (&p.mid_gain, 0.0), (&p.high_mid_gain, 0.0), (&p.high_gain, 0.0),
                     (&p.low_width, 100.0), (&p.bass_width, 100.0), (&p.mid_width, 100.0), (&p.high_mid_width, 100.0), (&p.high_width, 100.0),
                     (&p.low_pan, 0.0), (&p.bass_pan, 0.0), (&p.mid_pan, 0.0), (&p.high_mid_pan, 0.0), (&p.high_pan, 0.0),
-                    (&p.output_gain, 0.0), (&p.mono_floor, 0.0),
+                    (&p.output_gain, 0.0), (&p.mono_floor, 0.0), (&p.pre_master_target_db, -3.0),
                 ] {
                     param.set_value(val);
                     ctx.begin_edit(param.info.id);
@@ -655,17 +655,20 @@ impl EquilibriumEditor {
                         ctx.end_edit(bp.info.id);
                     }
                 }
-                let (target_levels, target_tolerances) = if let Some(idx) = self.selected_preset_index.filter(|&i| i < self.presets.len()) {
-                    let prof = &self.presets[idx].2;
+                let (target_levels, target_tolerances) = if let Some(prof) = self.presets.first().map(|p| &p.2) {
                     (prof.bands, prof.tolerances)
                 } else {
                     ([0.0f32; 5], shared_analysis::DEFAULT_TOLERANCES)
                 };
                 self.target_levels = target_levels;
                 self.target_tolerances = target_tolerances;
+                self.selected_preset_index = if self.presets.is_empty() { None } else { Some(0) };
                 for b in 0..5 {
                     self.shared_state.target_levels[b].store(target_levels[b], Ordering::Release);
                     self.shared_state.target_tolerances[b].store(target_tolerances[b], Ordering::Release);
+                }
+                if let Some(idx) = self.selected_preset_index {
+                    self.shared_state.selected_preset_index.store(idx, Ordering::Release);
                 }
                 self.shared_state.auto_loud_gain_offset.store(0.0, Ordering::Release);
                 self.shared_state.reset_analysis.store(true, Ordering::Release);
