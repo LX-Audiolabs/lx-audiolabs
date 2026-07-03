@@ -190,7 +190,14 @@ fn sensitivity_thresholds(sensitivity: f32) -> SensitivityThresholds {
 // ─── Masking analyzer ────────────────────────────────────────────────────────
 
 struct MaskingAnalyzer {
+    /// Persistence-gated collision level per bin — what everything outside
+    /// this struct reads (FFT overlay bars, `top_peaks`).
     masking_map: Vec<f32>,
+    /// This frame's ERB-smoothed collision level, before the persistence
+    /// gate. Kept separate so a single loud-but-brief collision doesn't
+    /// immediately count as "masking" (see `persistence`).
+    raw: Vec<f32>,
+    persistence: Vec<u32>,
     scratch: Vec<f32>,
     /// Names of the two tracks whose pairwise collision produced `scratch[j]`
     /// / `masking_map[j]` (empty when no collision above floor at that bin).
@@ -202,6 +209,8 @@ impl MaskingAnalyzer {
     fn new(_sample_rate: f32) -> Self {
         Self {
             masking_map: vec![-90.0; SPECTRUM_BINS],
+            raw: vec![-90.0; SPECTRUM_BINS],
+            persistence: vec![0u32; SPECTRUM_BINS],
             scratch: vec![-90.0; SPECTRUM_BINS],
             scratch_contributors: vec![Vec::new(); SPECTRUM_BINS],
             masking_contributors: vec![Vec::new(); SPECTRUM_BINS],
@@ -210,7 +219,17 @@ impl MaskingAnalyzer {
 
     /// `relay_named` pairs each Relay spectrum with its track name so a
     /// masking collision can be attributed to the two tracks that caused it.
-    fn compute_masking(&mut self, own_spectrum: Option<&[f32]>, relay_named: &[(String, Vec<f32>)], floor_db: f32) {
+    /// `persistence_min` is the Sensitivity knob's shared persistence gate
+    /// (same field resonance uses) — a collision only counts once it holds
+    /// for that many frames, not on a single-frame blip.
+    fn compute_masking(
+        &mut self,
+        own_spectrum: Option<&[f32]>,
+        relay_named: &[(String, Vec<f32>)],
+        floor_db: f32,
+        sample_rate: f32,
+        persistence_min: u32,
+    ) {
         let n = self.masking_map.len();
 
         for j in 0..n {
@@ -252,16 +271,37 @@ impl MaskingAnalyzer {
             };
         }
 
+        // Smooth over the ERB (critical-band) width around each bin instead
+        // of a fixed ±2 bins: FFT bins are linear in Hz but the ear's
+        // critical bandwidth grows with frequency (~35Hz at 100Hz, ~1100Hz
+        // at 10kHz per Glasberg & Moore), so a fixed bin window is roughly
+        // right at low frequencies but far too narrow at high ones — it was
+        // comparing frequencies as if they were in separate perceptual
+        // bands when the ear would blend them together.
+        let bin_hz = sample_rate / (n as f32 * 2.0);
         for j in 0..n {
-            let lo = j.saturating_sub(2);
-            let hi = (j + 2).min(n - 1);
+            let freq = j as f32 * bin_hz;
+            let erb_hz = 24.7 * (4.37 * freq / 1000.0 + 1.0);
+            let half_window = ((erb_hz / 2.0 / bin_hz).round() as usize).clamp(2, 40);
+            let lo = j.saturating_sub(half_window);
+            let hi = (j + half_window).min(n - 1);
             let mut m = -90.0f32;
             let mut m_idx = j;
             for k in lo..=hi {
                 if self.scratch[k] > m { m = self.scratch[k]; m_idx = k; }
             }
-            self.masking_map[j] = m;
+            self.raw[j] = m;
             self.masking_contributors[j] = self.scratch_contributors[m_idx].clone();
+        }
+
+        const PERSIST_CAP: u32 = 40;
+        for j in 0..n {
+            if self.raw[j] > floor_db {
+                self.persistence[j] = (self.persistence[j] + 1).min(PERSIST_CAP);
+            } else {
+                self.persistence[j] = self.persistence[j].saturating_sub(1);
+            }
+            self.masking_map[j] = if self.persistence[j] > persistence_min { self.raw[j] } else { -90.0 };
         }
     }
 
@@ -714,7 +754,7 @@ impl PluginLogic for Lucent {
 
                             publish_resonance(self.instance_key, ResonanceLists { own: own_resonances, relay: relay_resonances });
 
-                            self.masking_analyzer.compute_masking(Some(&frame), &relay_named, sensitivity.masking_floor_db);
+                            self.masking_analyzer.compute_masking(Some(&frame), &relay_named, sensitivity.masking_floor_db, sample_rate, sensitivity.persistence_min);
                             publish_masking(self.instance_key, self.masking_analyzer.top_peaks(3, sensitivity.masking_floor_db));
                             if let Ok(mut mm) = self.params.shared.masking_map.try_lock() {
                                 mm.copy_from_slice(&self.masking_analyzer.masking_map);
@@ -760,7 +800,7 @@ impl PluginLogic for Lucent {
                             );
                             publish_resonance(self.instance_key, ResonanceLists { own: Vec::new(), relay: relay_resonances });
 
-                            self.masking_analyzer.compute_masking(None, &relay_named, sensitivity.masking_floor_db);
+                            self.masking_analyzer.compute_masking(None, &relay_named, sensitivity.masking_floor_db, sample_rate, sensitivity.persistence_min);
                             publish_masking(self.instance_key, self.masking_analyzer.top_peaks(3, sensitivity.masking_floor_db));
                             if let Ok(mut mm) = self.params.shared.masking_map.try_lock() {
                                 mm.copy_from_slice(&self.masking_analyzer.masking_map);
