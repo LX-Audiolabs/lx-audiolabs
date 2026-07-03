@@ -7,7 +7,7 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -29,11 +29,14 @@ jobs:
       - name: Install cargo-truce
         run: cargo install --git https://github.com/truce-audio/truce cargo-truce
 
-      - name: Build Lucent + Relay
-        run: cargo truce build --clap -p lucent -p lucent-relay
+      - name: Build Lucent
+        run: cargo truce build --clap -p lucent
 
-      - name: Package (Linux)
-        if: runner.os == 'Linux'
+      - name: Build Lucent Relay
+        run: cargo truce build --clap -p lucent-relay
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
         run: |
           mkdir -p dist
           cp "target/bundles/Lucent.clap" "target/bundles/Lucent Relay.clap" dist/
@@ -47,6 +50,6 @@ jobs:
 
       - uses: actions/upload-artifact@v6
         with:
-          name: Lucent-Bundle-${{ runner.os == 'Linux' && 'linux' || 'win' }}
+          name: Lucent-Bundle-${{ runner.os == 'Linux' && 'linux' || (runner.os == 'macOS' && 'mac' || 'win') }}
           path: dist/
           if-no-files-found: error
