@@ -120,11 +120,72 @@ fn power_sum_spectrum(spectra: &[Vec<f32>]) -> Vec<f32> {
     out
 }
 
+/// Drops peaks that are almost certainly a musical overtone of a louder,
+/// lower peak rather than an independent resonance — normal harmonic
+/// spectral structure, not a problem. FFT bins are linear in Hz, so the
+/// nth harmonic of a peak at bin `k0` falls near bin `n * k0` exactly; no
+/// pitch/fundamental tracking needed (which would be unreliable on a full
+/// mix bus anyway). Only suppresses when the candidate harmonic isn't
+/// louder than the fundamental by more than a few dB — a peak riding well
+/// above where a harmonic should sit is kept, since that's more likely a
+/// real resonance than natural overtone rolloff.
+fn suppress_harmonics(spectrum: &[f32], peaks: Vec<(usize, f32)>) -> Vec<(usize, f32)> {
+    const MAX_HARMONIC: usize = 8;
+    const BIN_TOLERANCE: usize = 2;
+    const LOUDER_MARGIN_DB: f32 = 3.0;
+
+    peaks.iter().copied().filter(|&(k, _)| {
+        !peaks.iter().any(|&(k0, _)| {
+            k0 < k
+                && spectrum[k] <= spectrum[k0] + LOUDER_MARGIN_DB
+                && (2..=MAX_HARMONIC).any(|n| (k0 * n).abs_diff(k) <= BIN_TOLERANCE)
+        })
+    }).collect()
+}
+
 mod editor;
 mod ui;
 
 const WINDOW_W: u32 = 990;
 const WINDOW_H: u32 = 550;
+
+// ─── Sensitivity ────────────────────────────────────────────────
+
+/// Derived from the `Sensitivity` knob (0.0 = strict/conservative, 1.0 =
+/// sensitive). All six numbers below were the hand-tuned constants this
+/// analyzer shipped with; they're now the sensitivity=0.5 midpoint of each
+/// range so the knob's center detent reproduces the previous (already-tuned)
+/// behavior exactly, and moving it scales — all at once — how loud, how
+/// tonal, and how long a peak must be before it counts as a resonance or
+/// masking collision. One knob, not two: Lucent only displays, it never
+/// suggests or applies a cut, so there's no separate "how strong an action"
+/// axis to control.
+struct SensitivityThresholds {
+    contrast_min_db: f32,
+    flatness_max: f32,
+    floor_db: f32,
+    score_min: f32,
+    persistence_min: u32,
+    masking_floor_db: f32,
+    /// Minimum Q (center freq / -3dB bandwidth) for a peak to count as
+    /// narrowband. Rejects broad humps (formants, EQ buckets, room-mode
+    /// clusters) that pass contrast+flatness but aren't a sharp resonance.
+    min_q: f32,
+}
+
+fn sensitivity_thresholds(sensitivity: f32) -> SensitivityThresholds {
+    let d = sensitivity.clamp(0.0, 1.0);
+    let lerp = |a: f32, b: f32| a + (b - a) * d;
+    SensitivityThresholds {
+        contrast_min_db: lerp(8.0, 3.0),
+        flatness_max: lerp(0.5, 0.85),
+        floor_db: lerp(-65.0, -85.0),
+        score_min: lerp(4.0, 1.0),
+        persistence_min: lerp(20.0, 4.0) as u32,
+        masking_floor_db: lerp(-55.0, -85.0),
+        min_q: lerp(6.0, 2.0),
+    }
+}
 
 // ─── Masking analyzer ────────────────────────────────────────────────────────
 
@@ -149,8 +210,7 @@ impl MaskingAnalyzer {
 
     /// `relay_named` pairs each Relay spectrum with its track name so a
     /// masking collision can be attributed to the two tracks that caused it.
-    fn compute_masking(&mut self, own_spectrum: Option<&[f32]>, relay_named: &[(String, Vec<f32>)]) {
-        const FLOOR: f32 = -70.0;
+    fn compute_masking(&mut self, own_spectrum: Option<&[f32]>, relay_named: &[(String, Vec<f32>)], floor_db: f32) {
         let n = self.masking_map.len();
 
         for j in 0..n {
@@ -159,14 +219,14 @@ impl MaskingAnalyzer {
 
             if let Some(own_spec) = own_spectrum {
                 let own = own_spec.get(j).copied().unwrap_or(-90.0);
-                if own > FLOOR {
+                if own > floor_db {
                     active[count] = (own, "Own");
                     count += 1;
                 }
             }
             for (name, relay) in relay_named {
                 if let Some(&v) = relay.get(j) {
-                    if v > FLOOR && count < active.len() {
+                    if v > floor_db && count < active.len() {
                         active[count] = (v, name.as_str());
                         count += 1;
                     }
@@ -209,10 +269,9 @@ impl MaskingAnalyzer {
     /// track names), sorted by severity. Mirrors the selection logic that
     /// used to live in `editor.rs::masking_summary`, moved here so the
     /// contributor names travel with the peak instead of being dropped.
-    fn top_peaks(&self, n: usize) -> Vec<(usize, f32, Vec<String>)> {
-        const FLOOR: f32 = -70.0;
+    fn top_peaks(&self, n: usize, floor_db: f32) -> Vec<(usize, f32, Vec<String>)> {
         let mut peaks: Vec<(usize, f32, Vec<String>)> = self.masking_map.iter().enumerate()
-            .filter(|&(_, &db)| db > FLOOR)
+            .filter(|&(_, &db)| db > floor_db)
             .map(|(i, &db)| (i, db, self.masking_contributors[i].clone()))
             .collect();
         peaks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -238,7 +297,7 @@ impl PeakTracker {
         }
     }
 
-    /// Local maximum + three gates, each rejecting a distinct false-positive
+    /// Local maximum + four gates, each rejecting a distinct false-positive
     /// mode the raw 2-neighbor prominence check let through:
     /// - floor: rejects peaks sitting in the noise floor (no real signal there)
     /// - contrast: prominence against a wide local baseline (±8 bins) instead
@@ -248,14 +307,16 @@ impl PeakTracker {
     ///   main fix for the high-frequency false-positive bias, since bright
     ///   material triggers many raw local maxima that a flat dB threshold
     ///   alone can't tell apart from an actual tonal peak.
-    fn find_peaks(&self, spectrum: &[f32]) -> Vec<(usize, f32)> {
-        const FLOOR_DB: f32 = -75.0;
-        const CONTRAST_MIN_DB: f32 = 5.0;
-        const FLATNESS_MAX: f32 = 0.7;
+    /// - Q (bandwidth): rejects broad humps (formants, EQ buckets, room-mode
+    ///   clusters) — contrast+flatness alone can't tell a wide bump from a
+    ///   sharp resonance, only the -3dB bandwidth can.
+    fn find_peaks(&self, spectrum: &[f32], t: &SensitivityThresholds, sample_rate: f32) -> Vec<(usize, f32)> {
         const BASELINE_WINDOW: usize = 8;
         const FLATNESS_WINDOW: usize = 4;
+        const MAX_BW_SEARCH: usize = 24;
 
         let n = spectrum.len();
+        let bin_hz = sample_rate / (n as f32 * 2.0);
         let mut peaks = Vec::new();
         for k in 1..n.saturating_sub(1) {
             let left = spectrum[k - 1];
@@ -264,7 +325,7 @@ impl PeakTracker {
             if !(center > left && center > right) {
                 continue;
             }
-            if center < FLOOR_DB {
+            if center < t.floor_db {
                 continue;
             }
 
@@ -272,7 +333,7 @@ impl PeakTracker {
             let hi = (k + BASELINE_WINDOW).min(n - 1);
             let baseline = spectrum[lo..=hi].iter().sum::<f32>() / (hi - lo + 1) as f32;
             let contrast = center - baseline;
-            if contrast < CONTRAST_MIN_DB {
+            if contrast < t.contrast_min_db {
                 continue;
             }
 
@@ -285,7 +346,23 @@ impl PeakTracker {
             let arith_mean = power_sum / count;
             let geo_mean = (log_sum / count).exp();
             let flatness = if arith_mean > 1e-12 { geo_mean / arith_mean } else { 1.0 };
-            if flatness > FLATNESS_MAX {
+            if flatness > t.flatness_max {
+                continue;
+            }
+
+            let bw_lo_bound = k.saturating_sub(MAX_BW_SEARCH);
+            let mut lo_edge = k;
+            while lo_edge > bw_lo_bound && spectrum[lo_edge - 1] > center - 3.0 {
+                lo_edge -= 1;
+            }
+            let bw_hi_bound = (k + MAX_BW_SEARCH).min(n - 1);
+            let mut hi_edge = k;
+            while hi_edge < bw_hi_bound && spectrum[hi_edge + 1] > center - 3.0 {
+                hi_edge += 1;
+            }
+            let bandwidth_hz = (hi_edge - lo_edge).max(1) as f32 * bin_hz;
+            let q = (k as f32 * bin_hz) / bandwidth_hz;
+            if q < t.min_q {
                 continue;
             }
 
@@ -311,10 +388,10 @@ impl PeakTracker {
         }
     }
 
-    fn resonance_peaks(&self) -> Vec<(usize, f32)> {
+    fn resonance_peaks(&self, t: &SensitivityThresholds) -> Vec<(usize, f32)> {
         let mut resonant = Vec::new();
         for k in 1..SPECTRUM_BINS.saturating_sub(1) {
-            if self.resonance_score[k] > 2.0 && self.persistence[k] > 2 {
+            if self.resonance_score[k] > t.score_min && self.persistence[k] > t.persistence_min {
                 resonant.push((k, self.resonance_score[k]));
             }
         }
@@ -330,6 +407,11 @@ impl PeakTracker {
 pub struct LucentParams {
     #[param(name = "Analyze Mode", default = 0, range = "discrete(0, 2)")]
     pub analyze_mode: IntParam,
+    /// How deep the resonance/masking detectors dig: 0% = shallow (only
+    /// strong, sustained findings), 100% = deep (surfaces weaker, shorter
+    /// ones too). 50% reproduces the previously hand-tuned thresholds.
+    #[param(name = "Sensitivity", default = 50.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)")]
+    pub sensitivity: FloatParam,
     #[skip]
     pub name: RwLock<String>,
     #[skip]
@@ -578,12 +660,14 @@ impl PluginLogic for Lucent {
                     let n_bins = SPECTRUM_BINS;
                     let mut frame = [0.0f32; SPECTRUM_BINS];
                     shared_analysis::compute_spectrum_bins(&self.fft_output, &mut frame, fft_size, sample_rate);
+                    let sensitivity = sensitivity_thresholds(self.params.sensitivity.raw_target() as f32 / 100.0);
 
                     match mode {
                         0 => {
-                            let peaks = self.peak_tracker.find_peaks(&frame);
+                            let peaks = self.peak_tracker.find_peaks(&frame, &sensitivity, sample_rate);
+                            let peaks = suppress_harmonics(&frame, peaks);
                             self.peak_tracker.update(&peaks);
-                            let own_resonances = self.peak_tracker.resonance_peaks();
+                            let own_resonances = self.peak_tracker.resonance_peaks(&sensitivity);
                             publish_resonance(self.instance_key, ResonanceLists { own: own_resonances, relay: Vec::new() });
                             publish_masking(self.instance_key, Vec::new());
                             if let Ok(mut mm) = self.params.shared.masking_map.try_lock() {
@@ -604,9 +688,10 @@ impl PluginLogic for Lucent {
                             }
                         }
                         1 => {
-                            let peaks = self.peak_tracker.find_peaks(&frame);
+                            let peaks = self.peak_tracker.find_peaks(&frame, &sensitivity, sample_rate);
+                            let peaks = suppress_harmonics(&frame, peaks);
                             self.peak_tracker.update(&peaks);
-                            let own_resonances = self.peak_tracker.resonance_peaks();
+                            let own_resonances = self.peak_tracker.resonance_peaks(&sensitivity);
 
                             let my_name = self.claimed_lucent_slot
                                 .map(|s| shared_analysis::shm::display_name(&self.cached_name, s))
@@ -620,16 +705,17 @@ impl PluginLogic for Lucent {
                             // Group-level resonance: power-sum of the Relay tracks can show
                             // a buildup that no single track (nor this bus's own signal) has.
                             let relay_sum = power_sum_spectrum(&relay_spectra);
-                            let relay_peaks = self.relay_peak_tracker.find_peaks(&relay_sum);
+                            let relay_peaks = self.relay_peak_tracker.find_peaks(&relay_sum, &sensitivity, sample_rate);
+                            let relay_peaks = suppress_harmonics(&relay_sum, relay_peaks);
                             self.relay_peak_tracker.update(&relay_peaks);
                             let relay_resonances = attribute_contributors(
-                                &self.relay_peak_tracker.resonance_peaks(), &relay_named,
+                                &self.relay_peak_tracker.resonance_peaks(&sensitivity), &relay_named,
                             );
 
                             publish_resonance(self.instance_key, ResonanceLists { own: own_resonances, relay: relay_resonances });
 
-                            self.masking_analyzer.compute_masking(Some(&frame), &relay_named);
-                            publish_masking(self.instance_key, self.masking_analyzer.top_peaks(3));
+                            self.masking_analyzer.compute_masking(Some(&frame), &relay_named, sensitivity.masking_floor_db);
+                            publish_masking(self.instance_key, self.masking_analyzer.top_peaks(3, sensitivity.masking_floor_db));
                             if let Ok(mut mm) = self.params.shared.masking_map.try_lock() {
                                 mm.copy_from_slice(&self.masking_analyzer.masking_map);
                             }
@@ -666,15 +752,16 @@ impl PluginLogic for Lucent {
                             // Relay tracks "untereinander und zusammen" — masking below
                             // covers "untereinander" (pairwise), this covers "zusammen".
                             let relay_sum = power_sum_spectrum(&relay_spectra);
-                            let relay_peaks = self.relay_peak_tracker.find_peaks(&relay_sum);
+                            let relay_peaks = self.relay_peak_tracker.find_peaks(&relay_sum, &sensitivity, sample_rate);
+                            let relay_peaks = suppress_harmonics(&relay_sum, relay_peaks);
                             self.relay_peak_tracker.update(&relay_peaks);
                             let relay_resonances = attribute_contributors(
-                                &self.relay_peak_tracker.resonance_peaks(), &relay_named,
+                                &self.relay_peak_tracker.resonance_peaks(&sensitivity), &relay_named,
                             );
                             publish_resonance(self.instance_key, ResonanceLists { own: Vec::new(), relay: relay_resonances });
 
-                            self.masking_analyzer.compute_masking(None, &relay_named);
-                            publish_masking(self.instance_key, self.masking_analyzer.top_peaks(3));
+                            self.masking_analyzer.compute_masking(None, &relay_named, sensitivity.masking_floor_db);
+                            publish_masking(self.instance_key, self.masking_analyzer.top_peaks(3, sensitivity.masking_floor_db));
                             if let Ok(mut mm) = self.params.shared.masking_map.try_lock() {
                                 mm.copy_from_slice(&self.masking_analyzer.masking_map);
                             }
