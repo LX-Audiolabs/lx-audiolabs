@@ -7,7 +7,7 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -37,12 +37,12 @@ jobs:
         shell: bash
         run: echo "version=$(grep '^version' plugins/equilibrium/Cargo.toml | head -1 | sed 's/.*\"\(.*\)\"/\1/')" >> $GITHUB_OUTPUT
 
-      - name: Package (Linux)
-        if: runner.os == 'Linux'
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
         run: |
           mkdir -p dist
           cp target/bundles/Equilibrium.clap dist/
-          echo "Equilibrium v${{ steps.version.outputs.version }} — Linux"
+          echo "Equilibrium v${{ steps.version.outputs.version }} — ${{ runner.os }}"
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -54,6 +54,6 @@ jobs:
 
       - uses: actions/upload-artifact@v6
         with:
-          name: Equilibrium-v${{ steps.version.outputs.version }}-${{ runner.os == 'Linux' && 'linux' || 'win' }}
+          name: Equilibrium-v${{ steps.version.outputs.version }}-${{ runner.os == 'Linux' && 'linux' || (runner.os == 'macOS' && 'mac' || 'win') }}
           path: dist/
           if-no-files-found: error

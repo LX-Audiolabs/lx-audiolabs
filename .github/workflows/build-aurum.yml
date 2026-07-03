@@ -7,7 +7,7 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -32,8 +32,8 @@ jobs:
       - name: Build Aurum
         run: cargo truce build --clap -p aurum
 
-      - name: Package (Linux)
-        if: runner.os == 'Linux'
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
         run: |
           mkdir -p dist
           cp target/bundles/Aurum.clap dist/
@@ -47,6 +47,6 @@ jobs:
 
       - uses: actions/upload-artifact@v6
         with:
-          name: Aurum-${{ runner.os == 'Linux' && 'linux' || 'win' }}
+          name: Aurum-${{ runner.os == 'Linux' && 'linux' || (runner.os == 'macOS' && 'mac' || 'win') }}
           path: dist/
           if-no-files-found: error

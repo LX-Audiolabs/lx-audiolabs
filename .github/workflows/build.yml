@@ -7,7 +7,7 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -32,8 +32,8 @@ jobs:
       - name: Build all plugins
         run: cargo truce build --clap
 
-      - name: Package (Linux)
-        if: runner.os == 'Linux'
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
         run: |
           mkdir -p dist/aether dist/aurum dist/lucent-bundle dist/equilibrium dist/meridian
           cp target/bundles/Aether.clap dist/aether/
@@ -55,30 +55,30 @@ jobs:
 
       - uses: actions/upload-artifact@v6
         with:
-          name: aether-${{ runner.os == 'Linux' && 'linux' || 'win' }}
+          name: aether-${{ runner.os == 'Linux' && 'linux' || (runner.os == 'macOS' && 'mac' || 'win') }}
           path: dist/aether/
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v6
         with:
-          name: aurum-${{ runner.os == 'Linux' && 'linux' || 'win' }}
+          name: aurum-${{ runner.os == 'Linux' && 'linux' || (runner.os == 'macOS' && 'mac' || 'win') }}
           path: dist/aurum/
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v6
         with:
-          name: lucent-bundle-${{ runner.os == 'Linux' && 'linux' || 'win' }}
+          name: lucent-bundle-${{ runner.os == 'Linux' && 'linux' || (runner.os == 'macOS' && 'mac' || 'win') }}
           path: dist/lucent-bundle/
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v6
         with:
-          name: equilibrium-${{ runner.os == 'Linux' && 'linux' || 'win' }}
+          name: equilibrium-${{ runner.os == 'Linux' && 'linux' || (runner.os == 'macOS' && 'mac' || 'win') }}
           path: dist/equilibrium/
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v6
         with:
-          name: meridian-${{ runner.os == 'Linux' && 'linux' || 'win' }}
+          name: meridian-${{ runner.os == 'Linux' && 'linux' || (runner.os == 'macOS' && 'mac' || 'win') }}
           path: dist/meridian/
           if-no-files-found: error
