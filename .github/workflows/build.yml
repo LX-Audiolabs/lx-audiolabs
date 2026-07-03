@@ -29,6 +29,11 @@ jobs:
       - name: Install cargo-truce
         run: cargo install --git https://github.com/truce-audio/truce cargo-truce
 
+      - name: Read Lucent version
+        id: lucent-version
+        shell: bash
+        run: echo "version=$(grep '^version' plugins/lucent/Cargo.toml | head -1 | sed 's/.*\"\(.*\)\"/\1/')" >> $GITHUB_OUTPUT
+
       - name: Build all plugins
         run: cargo truce build --clap -p equilibrium -p meridian -p aether -p lucent -p lucent-relay -p aurum
 
@@ -67,7 +72,7 @@ jobs:
 
       - uses: actions/upload-artifact@v6
         with:
-          name: lucent-bundle-${{ runner.os == 'Linux' && 'linux' || (runner.os == 'macOS' && 'mac' || 'win') }}
+          name: lucent-bundle-v${{ steps.lucent-version.outputs.version }}-${{ runner.os == 'Linux' && 'linux' || (runner.os == 'macOS' && 'mac' || 'win') }}
           path: dist/lucent-bundle/
           if-no-files-found: error
 
