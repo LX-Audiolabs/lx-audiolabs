@@ -55,12 +55,22 @@ fn tube_warm(x: f32) -> f32 {
 /// Not a Sonnox algorithm clone — the "probability density shifting" process is
 /// patented/undocumented. `curve` -50..+50: negative = subtle/tight, 0 = balanced,
 /// positive = fat/loud. Drive-varying tanh, always finite for finite input.
+/// Fix 2026-07-03: normalize by `drive` (like `tube_warm`), not `tanh(drive)` —
+/// the old `/tanh(drive)` normalization forced unity gain at x=1 (full scale) but
+/// blew up the small-signal gain (slope at x=0) to `drive/tanh(drive)`, i.e. up to
+/// 6.0x at CURVE=+50 and 2.3x already at CURVE=0 ("balanced"). Quiet/mid-level
+/// program material got boosted and colored far more than intended — harsh even at
+/// neutral. Community reverse-engineering of the real Oxford Inflator (small-signal
+/// gain coefficient a1 = 1 + (curve+50)/100, i.e. 1.0..2.0 linear with curve) puts
+/// the target gain range at 1.0..2.0. `/drive` normalization gives unity slope at
+/// x=0 for the tanh term; multiplying by `gain` (1..2) reproduces that range while
+/// keeping curvature/drive (1..6) untouched from the 2026-07-02(b) fix.
 #[inline]
 fn inflate_shape(x: f32, curve: f32) -> f32 {
     let t = (curve + 50.0) / 100.0; // -50..+50 -> 0..1
     let drive = 1.0 + t * t * 5.0; // quadratic: 0=1 (clean), 0.5=2.25 (gentle), 1=6 (fat/aggressive)
-    let norm = drive.tanh().max(1e-6);
-    (x * drive).tanh() / norm
+    let gain = 1.0 + t; // 1..2, small-signal gain matching Oxford's a1 range
+    (x * drive).tanh() * gain / drive
 }
 
 // ─── Params ──────────────────────────────────────────────────────────────────
