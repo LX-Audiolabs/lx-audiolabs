@@ -10,9 +10,9 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index
@@ -30,7 +30,7 @@ jobs:
         run: cargo install --git https://github.com/truce-audio/truce cargo-truce
 
       - name: Build all plugins
-        run: cargo truce build --clap
+        run: cargo truce build --clap -p equilibrium -p meridian -p aether -p lucent -p lucent-relay -p aurum
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
