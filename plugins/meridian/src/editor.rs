@@ -124,7 +124,7 @@ impl Default for MeridianProfile {
             eq_freq_1: 80.0, eq_freq_2: 300.0, eq_freq_3: 1000.0, eq_freq_4: 4000.0, eq_freq_5: 12000.0,
             tilt_gain: 0.0, warmth_drive: 0.0, warmth_mix: 0.0,
             excite_amount: 0.0, excite_blend: 0.0, excite_freq: 8000.0,
-            comp_threshold: 0.0, comp_mix: 40.0, comp_attack: 15.0, comp_release: 120.0,
+            comp_threshold: 0.0, comp_mix: 0.0, comp_attack: 15.0, comp_release: 120.0,
             comp_character: 2.0, comp_makeup: 0.0,
             inflate_effect: 0.0, inflate_curve: 0.0, inflate_band_split: false, inflate_clip: false,
             stereo_width: 100.0, pan: 0.0, output_gain: 0.0,
@@ -802,7 +802,7 @@ impl MeridianEditor {
         p.excite_gain.set_value(0.0); p.excite_slope.set_value(1i64);
         p.eq_freq_1.set_value(80.0); p.eq_freq_2.set_value(300.0); p.eq_freq_3.set_value(1000.0);
         p.eq_freq_4.set_value(4000.0); p.eq_freq_5.set_value(12000.0);
-        p.comp_threshold.set_value(0.0); p.comp_mix.set_value(40.0); p.comp_attack.set_value(15.0);
+        p.comp_threshold.set_value(0.0); p.comp_mix.set_value(0.0); p.comp_attack.set_value(15.0);
         p.comp_release.set_value(120.0); p.comp_character.set_value(2.0); p.comp_makeup.set_value(0.0);
         p.inflate_effect.set_value(0.0); p.inflate_curve.set_value(0.0);
         p.inflate_band_split.set_value(false); p.inflate_clip.set_value(false);
