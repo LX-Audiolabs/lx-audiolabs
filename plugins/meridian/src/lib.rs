@@ -86,9 +86,9 @@ pub struct MeridianParams {
     pub cut_slope: IntParam,
 
     // Bass EQ shelf
-    #[param(name = "Bass Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "Lo Shelf Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
     pub bass_gain: FloatParam,
-    #[param(name = "Bass Slope", default = 1, range = "discrete(0, 2)")]
+    #[param(name = "Lo Shelf Slope", default = 1, range = "discrete(0, 2)")]
     pub bass_slope: IntParam,
 
     // Lo-Mid EQ
@@ -104,27 +104,27 @@ pub struct MeridianParams {
     pub mid_slope: IntParam,
 
     // High EQ
-    #[param(name = "High Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "Hi-Mid Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
     pub high_gain: FloatParam,
-    #[param(name = "High Slope", default = 1, range = "discrete(0, 2)")]
+    #[param(name = "Hi-Mid Slope", default = 1, range = "discrete(0, 2)")]
     pub high_slope: IntParam,
 
     // Excite (high shelf)
-    #[param(name = "Excite Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "Hi Shelf Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
     pub excite_gain: FloatParam,
-    #[param(name = "Excite Slope", default = 1, range = "discrete(0, 2)")]
+    #[param(name = "Hi Shelf Slope", default = 1, range = "discrete(0, 2)")]
     pub excite_slope: IntParam,
 
     // EQ band frequencies
-    #[param(name = "EQ Freq 1", default = 80.0, range = "log(40.0, 200.0)", unit = "Hz")]
+    #[param(name = "Lo Shelf Freq", default = 80.0, range = "log(40.0, 200.0)", unit = "Hz")]
     pub eq_freq_1: FloatParam,
-    #[param(name = "EQ Freq 2", default = 300.0, range = "log(150.0, 800.0)", unit = "Hz")]
+    #[param(name = "Lo-Mid Freq", default = 300.0, range = "log(150.0, 800.0)", unit = "Hz")]
     pub eq_freq_2: FloatParam,
-    #[param(name = "EQ Freq 3", default = 1000.0, range = "log(500.0, 3000.0)", unit = "Hz")]
+    #[param(name = "Mid Freq", default = 1000.0, range = "log(500.0, 3000.0)", unit = "Hz")]
     pub eq_freq_3: FloatParam,
-    #[param(name = "EQ Freq 4", default = 4000.0, range = "log(2000.0, 10000.0)", unit = "Hz")]
+    #[param(name = "Hi-Mid Freq", default = 4000.0, range = "log(2000.0, 10000.0)", unit = "Hz")]
     pub eq_freq_4: FloatParam,
-    #[param(name = "EQ Freq 5", default = 12000.0, range = "log(6000.0, 20000.0)", unit = "Hz")]
+    #[param(name = "Hi Shelf Freq", default = 12000.0, range = "log(6000.0, 20000.0)", unit = "Hz")]
     pub eq_freq_5: FloatParam,
 
     // Tilt EQ

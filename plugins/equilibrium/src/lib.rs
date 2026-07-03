@@ -42,39 +42,39 @@ const MINUS_INF_DB: f32 = -90.0;
 #[derive(Params)]
 pub struct EquilibriumParams {
     // 5 Band Gains
-    #[param(name = "Low Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "Sub Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
     pub low_gain: FloatParam,
     #[param(name = "Bass Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
     pub bass_gain: FloatParam,
     #[param(name = "Mid Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
     pub mid_gain: FloatParam,
-    #[param(name = "High-Mid Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "Pres Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
     pub high_mid_gain: FloatParam,
-    #[param(name = "High Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "Air Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
     pub high_gain: FloatParam,
 
     // 5 Band Widths
-    #[param(name = "Low Width", default = 100.0, range = "linear(0.0, 150.0)", unit = "%", smooth = "linear(20)")]
+    #[param(name = "Sub Width", default = 100.0, range = "linear(0.0, 150.0)", unit = "%", smooth = "linear(20)")]
     pub low_width: FloatParam,
     #[param(name = "Bass Width", default = 100.0, range = "linear(0.0, 150.0)", unit = "%", smooth = "linear(20)")]
     pub bass_width: FloatParam,
     #[param(name = "Mid Width", default = 100.0, range = "linear(0.0, 150.0)", unit = "%", smooth = "linear(20)")]
     pub mid_width: FloatParam,
-    #[param(name = "High-Mid Width", default = 100.0, range = "linear(0.0, 150.0)", unit = "%", smooth = "linear(20)")]
+    #[param(name = "Pres Width", default = 100.0, range = "linear(0.0, 150.0)", unit = "%", smooth = "linear(20)")]
     pub high_mid_width: FloatParam,
-    #[param(name = "High Width", default = 100.0, range = "linear(0.0, 150.0)", unit = "%", smooth = "linear(20)")]
+    #[param(name = "Air Width", default = 100.0, range = "linear(0.0, 150.0)", unit = "%", smooth = "linear(20)")]
     pub high_width: FloatParam,
 
     // 5 Band Pans (-1.0 L to +1.0 R)
-    #[param(name = "Low Pan", default = 0.0, range = "linear(-1.0, 1.0)", smooth = "linear(20)")]
+    #[param(name = "Sub Pan", default = 0.0, range = "linear(-1.0, 1.0)", smooth = "linear(20)")]
     pub low_pan: FloatParam,
     #[param(name = "Bass Pan", default = 0.0, range = "linear(-1.0, 1.0)", smooth = "linear(20)")]
     pub bass_pan: FloatParam,
     #[param(name = "Mid Pan", default = 0.0, range = "linear(-1.0, 1.0)", smooth = "linear(20)")]
     pub mid_pan: FloatParam,
-    #[param(name = "High-Mid Pan", default = 0.0, range = "linear(-1.0, 1.0)", smooth = "linear(20)")]
+    #[param(name = "Pres Pan", default = 0.0, range = "linear(-1.0, 1.0)", smooth = "linear(20)")]
     pub high_mid_pan: FloatParam,
-    #[param(name = "High Pan", default = 0.0, range = "linear(-1.0, 1.0)", smooth = "linear(20)")]
+    #[param(name = "Air Pan", default = 0.0, range = "linear(-1.0, 1.0)", smooth = "linear(20)")]
     pub high_pan: FloatParam,
 
     // Mono Floor frequency (0 = off, 1–300 Hz)
@@ -86,15 +86,15 @@ pub struct EquilibriumParams {
     pub output_gain: FloatParam,
 
     // Solos
-    #[param(name = "Solo Low", default = 0)]
+    #[param(name = "Solo Sub", default = 0)]
     pub solo_low: BoolParam,
     #[param(name = "Solo Bass", default = 0)]
     pub solo_bass: BoolParam,
     #[param(name = "Solo Mid", default = 0)]
     pub solo_mid: BoolParam,
-    #[param(name = "Solo High-Mid", default = 0)]
+    #[param(name = "Solo Pres", default = 0)]
     pub solo_high_mid: BoolParam,
-    #[param(name = "Solo High", default = 0)]
+    #[param(name = "Solo Air", default = 0)]
     pub solo_high: BoolParam,
 
     // Modes

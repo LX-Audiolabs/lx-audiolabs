@@ -639,7 +639,12 @@ impl EquilibriumEditor {
                     (&p.low_width, 100.0), (&p.bass_width, 100.0), (&p.mid_width, 100.0), (&p.high_mid_width, 100.0), (&p.high_width, 100.0),
                     (&p.low_pan, 0.0), (&p.bass_pan, 0.0), (&p.mid_pan, 0.0), (&p.high_mid_pan, 0.0), (&p.high_pan, 0.0),
                     (&p.output_gain, 0.0), (&p.mono_floor, 0.0),
-                ] { param.set_value(val); }
+                ] {
+                    param.set_value(val);
+                    ctx.begin_edit(param.info.id);
+                    ctx.set_param(param.info.id, param.info.range.normalize(val));
+                    ctx.end_edit(param.info.id);
+                }
                 self.shared_state.auto_loud_gain_offset.store(0.0, Ordering::Release);
                 self.shared_state.reset_analysis.store(true, Ordering::Release);
             }
@@ -655,19 +660,25 @@ impl EquilibriumEditor {
                     }
                     // Bands are the Target Profile (analysis reference line), not a
                     // gain correction — only stereo settings apply directly to params.
-                    self.params.low_width.set_value(prof.widths[0] as f64);
-                    self.params.bass_width.set_value(prof.widths[1] as f64);
-                    self.params.mid_width.set_value(prof.widths[2] as f64);
-                    self.params.high_mid_width.set_value(prof.widths[3] as f64);
-                    self.params.high_width.set_value(prof.widths[4] as f64);
+                    let set_f = |param: &FloatParam, val: f64| {
+                        param.set_value(val);
+                        ctx.begin_edit(param.info.id);
+                        ctx.set_param(param.info.id, param.info.range.normalize(val));
+                        ctx.end_edit(param.info.id);
+                    };
+                    set_f(&self.params.low_width, prof.widths[0] as f64);
+                    set_f(&self.params.bass_width, prof.widths[1] as f64);
+                    set_f(&self.params.mid_width, prof.widths[2] as f64);
+                    set_f(&self.params.high_mid_width, prof.widths[3] as f64);
+                    set_f(&self.params.high_width, prof.widths[4] as f64);
 
-                    self.params.low_pan.set_value(prof.pans[0] as f64);
-                    self.params.bass_pan.set_value(prof.pans[1] as f64);
-                    self.params.mid_pan.set_value(prof.pans[2] as f64);
-                    self.params.high_mid_pan.set_value(prof.pans[3] as f64);
-                    self.params.high_pan.set_value(prof.pans[4] as f64);
+                    set_f(&self.params.low_pan, prof.pans[0] as f64);
+                    set_f(&self.params.bass_pan, prof.pans[1] as f64);
+                    set_f(&self.params.mid_pan, prof.pans[2] as f64);
+                    set_f(&self.params.high_mid_pan, prof.pans[3] as f64);
+                    set_f(&self.params.high_pan, prof.pans[4] as f64);
 
-                    self.params.mono_floor.set_value(prof.mono_floor_hz as f64);
+                    set_f(&self.params.mono_floor, prof.mono_floor_hz as f64);
                 }
             }
             EquilibriumMsg::PresetNameChanged(name) => self.preset_name_input = name.clone(),
@@ -691,7 +702,7 @@ impl EquilibriumEditor {
             }
             EquilibriumMsg::PreMasterToggled => {
                 let nv = !self.params.pre_master_active.value();
-                self.params.pre_master_active.set_value(nv);
+                self.do_toggle(|p| &p.pre_master_active, ctx);
                 if nv {
                     self.shared_state.auto_loud_measuring.store(false, Ordering::Release);
                     self.shared_state.auto_loud_gain_offset.store(0.0, Ordering::Release);
@@ -765,18 +776,27 @@ impl EquilibriumEditor {
         }
     }
 
-    fn do_gesture(&self, f: impl Fn(&EquilibriumParams) -> &FloatParam, g: &Gesture, _ctx: &PluginContext<EquilibriumParams>) {
+    fn do_gesture(&self, f: impl Fn(&EquilibriumParams) -> &FloatParam, g: &Gesture, ctx: &PluginContext<EquilibriumParams>) {
         let p = f(&self.params);
         match g {
-            Gesture::Start => {}
-            Gesture::Change(v) => p.set_value(*v as f64),
-            Gesture::End => {}
+            Gesture::Start => ctx.begin_edit(p.info.id),
+            Gesture::Change(v) => {
+                p.set_value(*v as f64);
+                let norm = p.info.range.normalize(*v as f64);
+                ctx.set_param(p.info.id, norm);
+            }
+            Gesture::End => ctx.end_edit(p.info.id),
         }
     }
 
-    fn do_toggle(&self, f: impl Fn(&EquilibriumParams) -> &BoolParam, _ctx: &PluginContext<EquilibriumParams>) {
+    fn do_toggle(&self, f: impl Fn(&EquilibriumParams) -> &BoolParam, ctx: &PluginContext<EquilibriumParams>) {
         let p = f(&self.params);
-        p.set_value(!p.value());
+        let new_val = !p.value();
+        p.set_value(new_val);
+        let norm = if new_val { 1.0 } else { 0.0 };
+        ctx.begin_edit(p.info.id);
+        ctx.set_param(p.info.id, norm);
+        ctx.end_edit(p.info.id);
     }
 
     fn do_save_preset(&mut self) {
