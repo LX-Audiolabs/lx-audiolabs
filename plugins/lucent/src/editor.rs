@@ -5,7 +5,7 @@ use truce_core::editor::PluginContext;
 use std::sync::{Arc, atomic::Ordering};
 
 use shared_analysis::{SharedState, SPECTRUM_BINS};
-use crate::read_resonance;
+use crate::{read_resonance, read_masking};
 use crate::LucentParamsParamId;
 use shared_ui::{
     bold_font, header_brand, output_level_block, output_tools_strip,
@@ -38,8 +38,9 @@ pub struct LucentEditor {
     ui_state: LucentUiState,
     instance_key: usize,
     resonance_cache_own: Vec<(usize, f32)>,
-    resonance_cache_relay: Vec<(usize, f32)>,
+    resonance_cache_relay: Vec<(usize, f32, Vec<String>)>,
     masking_cache: Vec<f32>,
+    masking_top: Vec<(usize, f32, Vec<String>)>,
     show_resonance: bool,
     show_masking: bool,
     snap_blink: u32,
@@ -75,6 +76,7 @@ impl IcedPlugin<crate::LucentParams> for LucentEditor {
             resonance_cache_own: Vec::new(),
             resonance_cache_relay: Vec::new(),
             masking_cache: Vec::new(),
+            masking_top: Vec::new(),
             show_resonance: false,
             show_masking: false,
             snap_blink: 0,
@@ -131,6 +133,7 @@ impl IcedPlugin<crate::LucentParams> for LucentEditor {
                 if let Ok(mm) = self.shared_state.masking_map.lock() {
                     self.masking_cache = mm.to_vec();
                 }
+                self.masking_top = read_masking(self.instance_key);
                 let mode = params.get_plain(LucentParamsParamId::AnalyzeMode) as i64;
                 if mode != 0 {
                     let now_ms = shared_analysis::shm::now_ms();
@@ -168,8 +171,7 @@ impl IcedPlugin<crate::LucentParams> for LucentEditor {
                             let mono = self.shared_state.snap_mono_snap.lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
                             let delta = self.shared_state.snap_delta_snap.lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
                             let sr = self.shared_state.sample_rate.load(Ordering::Relaxed);
-                            let band_levels = [-90.0f32; 5];
-                            let md = snap_markdown(&stereo, &mono, &delta, band_levels, self.phase_correlation, self.peak_l, self.peak_r, sr);
+                            let md = snap_markdown(&stereo, &mono, &delta, &self.ui_state.relays, self.phase_correlation, self.peak_l, self.peak_r, sr);
                             let fname = snap_filename(vp);
                             let _ = std::fs::write(std::path::Path::new(vp).join(&fname), &md);
                         }
@@ -560,7 +562,7 @@ impl LucentEditor {
         };
         let resonance_peaks = if self.show_resonance {
             let mut v = self.resonance_cache_own.clone();
-            v.extend(self.resonance_cache_relay.iter().copied());
+            v.extend(self.resonance_cache_relay.iter().map(|(bin, score, _)| (*bin, *score)));
             v
         } else {
             Vec::new()
@@ -639,34 +641,44 @@ impl LucentEditor {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
+        let fmt_relay = |peaks: &[(usize, f32, Vec<String>)]| -> String {
+            peaks.iter().take(3)
+                .map(|(bin, score, contributors)| {
+                    let freq = *bin as f32 * sr / fft_size;
+                    if contributors.is_empty() {
+                        format!("{:.0} Hz {:.1}", freq, score)
+                    } else {
+                        format!("{:.0} Hz {:.1} ({})", freq, score, contributors.join(", "))
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         let mut lines = Vec::new();
         if !self.resonance_cache_own.is_empty() {
             lines.push(format!("Own: {}", fmt(&self.resonance_cache_own)));
         }
         if !self.resonance_cache_relay.is_empty() {
-            lines.push(format!("Group: {}", fmt(&self.resonance_cache_relay)));
+            lines.push(format!("Group: {}", fmt_relay(&self.resonance_cache_relay)));
         }
         lines.join("\n")
     }
 
     fn masking_summary(&self, mode: i64) -> String {
         if mode == 0 { return "Standalone — no masking".to_string(); }
-        if self.masking_cache.is_empty() || self.ui_state.relays.is_empty() {
+        if self.masking_top.is_empty() || self.ui_state.relays.is_empty() {
             return "No masking detected".to_string();
         }
         let sr = self.shared_state.sample_rate.load(Ordering::Relaxed).max(1.0);
         let fft_size = (SPECTRUM_BINS * 2) as f32;
-        let mut peaks: Vec<(usize, f32)> = self.masking_cache.iter()
-            .enumerate()
-            .filter(|(_, db)| **db > -70.0)
-            .map(|(i, &db)| (i, db))
-            .collect();
-        peaks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        if peaks.is_empty() { return "No masking detected".to_string(); }
-        peaks.iter().take(3)
-            .map(|(bin, db)| {
+        self.masking_top.iter().take(3)
+            .map(|(bin, db, contributors)| {
                 let freq = *bin as f32 * sr / fft_size;
-                format!("{:.0} Hz  {:.1} dB", freq, db)
+                if contributors.is_empty() {
+                    format!("{:.0} Hz  {:.1} dB", freq, db)
+                } else {
+                    format!("{:.0} Hz  {:.1} dB ({})", freq, db, contributors.join("-"))
+                }
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -698,7 +710,7 @@ fn snap_filename(vault_path: &str) -> String {
 }
 
 fn snap_markdown(stereo: &[f32], mono: &[f32], delta: &[f32],
-    _band_levels: [f32; 5], corr: f32, pl: f32, pr: f32, sr: f32) -> String
+    relays: &[crate::ui::RelayData], corr: f32, pl: f32, pr: f32, sr: f32) -> String
 {
     let fft_sz = 2048.0;
     let freqs: &[f32] = &[20.0, 40.0, 80.0, 160.0, 315.0, 630.0, 1250.0, 2500.0, 5000.0, 10000.0, 16000.0, 20000.0];
@@ -708,12 +720,22 @@ fn snap_markdown(stereo: &[f32], mono: &[f32], delta: &[f32],
             format!("| {} | {:.1} |", if f >= 1000.0 { format!("{:.0}k", f/1000.0) } else { format!("{:.0}", f) }, s[bin])
         }).collect::<Vec<_>>().join("\n")
     };
+    let relay_section = if relays.is_empty() {
+        String::new()
+    } else {
+        let tracks = relays.iter()
+            .map(|r| format!("### {}\n| Hz | dB |\n|----|-----|\n{}\n", r.name, tbl(&r.spectrum)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("\n## Relay Tracks\n\n{tracks}")
+    };
     format!(
         "---\nplugin: lucent\ntype: snapshot\n---\n\n# Lucent Snapshot\n\n\
         ## Signal\n| | L | R |\n|--|--|--|\n| Peak | {pl:.1} dB | {pr:.1} dB |\n| Korrelation | {co:.2} | |\n\n\
         ## Spektrum — Stereo\n| Hz | dB |\n|----|-----|\n{st}\n\n\
         ## Spektrum — Mono\n| Hz | dB |\n|----|-----|\n{mn}\n\n\
-        ## Delta\n| Hz | dB |\n|----|-----|\n{dt}\n",
+        ## Delta\n| Hz | dB |\n|----|-----|\n{dt}\n\
+        {relay_section}",
         pl=pl, pr=pr, co=corr, st=tbl(stereo), mn=tbl(mono), dt=tbl(delta),
     )
 }

@@ -57,6 +57,12 @@ pub struct RelayUi {
     lucent_list: Vec<String>,
     selected_target: String,
     connected: bool,
+    /// Wall-clock ms of the last Tick where `connected` was true. Used to show
+    /// "ms since last seen" when disconnected — shm-hub only exposes a live/
+    /// dead bool (`consumer_exists`), not the underlying heartbeat timestamp,
+    /// so this is tracked client-side instead of adding a new shm-hub API.
+    last_connected_ms: Option<u64>,
+    now_ms: u64,
 }
 
 impl IcedPlugin<LucentRelayParams> for RelayUi {
@@ -72,6 +78,8 @@ impl IcedPlugin<LucentRelayParams> for RelayUi {
             lucent_list: Vec::new(),
             selected_target: target,
             connected: false,
+            last_connected_ms: None,
+            now_ms: 0,
         }
     }
 
@@ -98,6 +106,7 @@ impl IcedPlugin<LucentRelayParams> for RelayUi {
         match msg {
             RelayMsg::Tick => {
                 let now = shared_analysis::shm::now_ms();
+                self.now_ms = now;
                 self.lucent_list = relay_hub()
                     .map(|hub| hub.read_consumers(now))
                     .unwrap_or_default();
@@ -111,6 +120,9 @@ impl IcedPlugin<LucentRelayParams> for RelayUi {
                         }
                     })
                     .unwrap_or(false);
+                if self.connected {
+                    self.last_connected_ms = Some(now);
+                }
                 // Keep selected target if still valid, else clear.
                 let t = self.handle.target();
                 if !t.is_empty() && self.lucent_list.iter().any(|l| *l == t) {
@@ -217,9 +229,20 @@ impl IcedPlugin<LucentRelayParams> for RelayUi {
 
         // ── CONNECTION STATUS ──────────────────────────────────────────────
         let (conn_color, conn_text) = if self.connected {
-            (Color::from_rgb(0.2, 0.9, 0.3), "● Connected")
+            (Color::from_rgb(0.2, 0.9, 0.3), "● Connected".to_string())
         } else {
-            (Color::from_rgb(0.9, 0.2, 0.2), "● No Lucent")
+            match self.last_connected_ms {
+                Some(last) => {
+                    let elapsed = self.now_ms.saturating_sub(last);
+                    let ago = if elapsed < 1000 {
+                        format!("{elapsed} ms ago")
+                    } else {
+                        format!("{:.1} s ago", elapsed as f32 / 1000.0)
+                    };
+                    (Color::from_rgb(0.9, 0.2, 0.2), format!("● No Lucent (last seen {ago})"))
+                }
+                None => (Color::from_rgb(0.9, 0.2, 0.2), "● No Lucent".to_string()),
+            }
         };
 
         let conn_indicator = row![
