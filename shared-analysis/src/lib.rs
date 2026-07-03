@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicU32, AtomicUsize};
 use std::sync::{Arc, Mutex};
 use atomic_float::AtomicF32;
 
@@ -122,6 +122,12 @@ pub struct SharedState {
     /// tick — keeps Lucent/Relay discoverable even when transport is stopped
     /// (process() doesn't run, so an audio-only heartbeat would go stale).
     pub shm_slot: Arc<AtomicI32>,
+    /// Generation returned alongside `shm_slot` by `RelayHub::claim_slot()`.
+    /// Must travel with the slot index everywhere it's used to touch/write —
+    /// it's how the hub tells an evicted (stale-reclaimed) owner it no
+    /// longer holds the slot, so the GUI-tick heartbeat refresh doesn't keep
+    /// a dead claim alive and fighting the new owner.
+    pub shm_generation: Arc<AtomicU32>,
 }
 
 impl Default for SharedState {
@@ -205,6 +211,7 @@ impl Default for SharedState {
             snap_delta_snap: Arc::new(Mutex::new(vec![-90.0; SPECTRUM_BINS])),
             masking_map: Arc::new(Mutex::new(vec![-90.0; SPECTRUM_BINS])),
             shm_slot: Arc::new(AtomicI32::new(-1)),
+            shm_generation: Arc::new(AtomicU32::new(0)),
         }
     }
 }

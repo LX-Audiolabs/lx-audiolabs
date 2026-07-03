@@ -69,10 +69,13 @@ pub const STALE_MS: u64 = 500;
 /// `_v2`: added the `claimed` flag for atomic auto-slot assignment.
 /// `_v3`: publisher slots gained a `target` name; added the consumer-name registry.
 /// `_v4`: publisher slots gained `band_energy` [f32; 5] for dynamic-EQ triggering.
-const SHM_OS_ID: &str = "lxaudiolabs_lucent_relay_v4";
+/// `_v5`: publisher slots gained a `generation` counter — a stale-reclaimed
+/// slot's original (evicted) owner can now detect it lost the slot and stop
+/// writing, instead of racing the new owner forever (see `write`/`touch`).
+const SHM_OS_ID: &str = "lxaudiolabs_lucent_relay_v5";
 /// "LXRD" — marks a fully-initialized segment.
 const MAGIC: u32 = 0x4C58_5244;
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 /// Number of EQ bands for band-energy reporting.
 pub const EQ_BANDS: usize = 5;
 
@@ -84,6 +87,12 @@ struct PublisherSlot {
     /// Auto-slot ownership: 0 = free, 1 = claimed. CAS-guarded; a slot whose
     /// owner died (stale heartbeat) can be reclaimed.
     claimed: AtomicU32,
+    /// Bumped on every successful claim (fresh or stale-reclaim). The holder
+    /// caches the value it got back from `claim_slot`; `write`/`touch` check
+    /// it still matches before touching the payload, so an evicted owner
+    /// (reclaimed out from under it after a stale heartbeat) finds out and
+    /// stops writing instead of corrupting whoever took the slot.
+    generation: AtomicU32,
     /// Wall-clock millis of the last write (liveness).
     heartbeat_ms: AtomicU64,
     /// Payload (seqlock-protected, accessed via raw pointers):
@@ -250,6 +259,33 @@ fn try_claim(claimed: &AtomicU32, heartbeat: &AtomicU64, now_ms: u64) -> bool {
     }
 }
 
+/// Same CAS claim as `try_claim`, plus a generation bump — used only by the
+/// publisher registry (`PublisherSlot` has a `generation` counter, consumer
+/// slots don't need one since the multi-writer collision this guards against
+/// is specific to publishers racing to reclaim a stale relay slot). Returns
+/// the new generation on a won claim, `None` if the slot is live and held.
+fn try_claim_gen(claimed: &AtomicU32, heartbeat: &AtomicU64, generation: &AtomicU32, now_ms: u64) -> Option<u32> {
+    let mut c = claimed.load(Ordering::Acquire);
+    if c == 1 {
+        let hb = heartbeat.load(Ordering::Acquire);
+        let stale = hb == 0 || now_ms.wrapping_sub(hb) > STALE_MS;
+        if stale {
+            let _ = claimed.compare_exchange(1, 0, Ordering::AcqRel, Ordering::Relaxed);
+            c = claimed.load(Ordering::Acquire);
+        }
+    }
+    if c == 0
+        && claimed
+            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+    {
+        heartbeat.store(now_ms, Ordering::Release);
+        Some(generation.fetch_add(1, Ordering::AcqRel).wrapping_add(1))
+    } else {
+        None
+    }
+}
+
 impl RelayHub {
     fn open_or_create() -> Option<RelayHub> {
         let size = core::mem::size_of::<HubShared>();
@@ -294,21 +330,24 @@ impl RelayHub {
     ///
     /// # Returns
     ///
-    /// - `Some(slot_index)` if a slot was claimed (index 0..MAX_SLOTS)
+    /// - `Some((slot_index, generation))` if a slot was claimed (index
+    ///   0..MAX_SLOTS). Store both — `generation` must be passed to every
+    ///   `write`/`touch` call so the hub can tell if this claim is still
+    ///   valid (see `write`).
     /// - `None` if all slots are occupied by live instances
     ///
     /// # Example
     ///
     /// ```ignore
-    /// if let Some(slot) = hub.claim_slot(shm_hub::now_ms()) {
-    ///     // Store slot and use it to publish data
+    /// if let Some((slot, generation)) = hub.claim_slot(shm_hub::now_ms()) {
+    ///     // Store slot + generation, use both to publish data
     /// }
     /// ```
-    pub fn claim_slot(&self, now_ms: u64) -> Option<u8> {
+    pub fn claim_slot(&self, now_ms: u64) -> Option<(u8, u32)> {
         for idx in 0..MAX_SLOTS {
             let s = unsafe { &(*self.shared).slots[idx] };
-            if try_claim(&s.claimed, &s.heartbeat_ms, now_ms) {
-                return Some(idx as u8);
+            if let Some(gen) = try_claim_gen(&s.claimed, &s.heartbeat_ms, &s.generation, now_ms) {
+                return Some((idx as u8, gen));
             }
         }
         None
@@ -348,6 +387,11 @@ impl RelayHub {
     /// # Arguments
     ///
     /// * `slot` - The publisher slot index (from [`claim_slot()`])
+    /// * `generation` - The generation returned alongside `slot` by
+    ///   [`claim_slot()`]. Checked against the slot's current generation
+    ///   before writing — if another instance reclaimed this slot (this
+    ///   one's heartbeat went stale), the generations no longer match and
+    ///   the write is skipped instead of corrupting the new owner's data.
     /// * `label` - A short name for this publisher (max `MAX_NAME_LEN` bytes)
     /// * `target` - Name of the consumer to send to:
     ///   - Empty string: broadcast to every consumer
@@ -356,20 +400,26 @@ impl RelayHub {
     /// * `band_energy` - Per-band energy levels (up to `EQ_BANDS` f32 values, dB)
     /// * `now_ms` - Current wall-clock time in milliseconds (updates heartbeat)
     ///
-    /// # Behavior on invalid slot
+    /// # Returns
     ///
-    /// If `slot >= MAX_SLOTS`, this call is silently ignored (no-op).
+    /// `true` if the write happened. `false` if `slot >= MAX_SLOTS` or this
+    /// instance no longer owns the slot (`generation` mismatch) — the caller
+    /// should treat `false` as "I was evicted" and clear its cached slot so
+    /// it reclaims a fresh one on the next call to [`claim_slot()`].
     ///
     /// # Array truncation
     ///
     /// If `bins` or `band_energy` are shorter than expected, the rest is zero-filled
     /// (spectrum bins are filled with -90.0 dB, band energy with -90.0 dB).
-    pub fn write(&self, slot: u8, label: &str, target: &str, bins: &[f32], band_energy: &[f32], now_ms: u64) {
+    pub fn write(&self, slot: u8, generation: u32, label: &str, target: &str, bins: &[f32], band_energy: &[f32], now_ms: u64) -> bool {
         let idx = slot as usize;
         if idx >= MAX_SLOTS {
-            return;
+            return false;
         }
         let s = unsafe { &(*self.shared).slots[idx] };
+        if s.generation.load(Ordering::Acquire) != generation {
+            return false;
+        }
 
         let seq0 = s.seq.load(Ordering::Relaxed);
         s.seq.store(seq0.wrapping_add(1), Ordering::Release);
@@ -398,6 +448,7 @@ impl RelayHub {
         fence(Ordering::Release);
         s.seq.store(seq0.wrapping_add(2), Ordering::Release);
         s.heartbeat_ms.store(now_ms, Ordering::Release);
+        true
     }
 
     /// Update metadata and heartbeat WITHOUT writing spectrum data.
@@ -410,19 +461,30 @@ impl RelayHub {
     /// # Arguments
     ///
     /// * `slot` - The publisher slot index
+    /// * `generation` - The generation from [`claim_slot()`] — same
+    ///   ownership check as [`write()`]. Critical here specifically:
+    ///   without it, an evicted owner's `touch()` would keep refreshing the
+    ///   slot's heartbeat, so it would never look stale and the two owners
+    ///   would fight over the payload forever instead of the evicted one
+    ///   backing off.
     /// * `label` - A short name for this publisher
     /// * `target` - Target consumer name (empty = broadcast)
     /// * `now_ms` - Current wall-clock time (refreshes heartbeat)
     ///
-    /// # Behavior on invalid slot
+    /// # Returns
     ///
-    /// If `slot >= MAX_SLOTS`, this call is silently ignored (no-op).
-    pub fn touch(&self, slot: u8, label: &str, target: &str, now_ms: u64) {
+    /// `true` if the touch happened, `false` if `slot >= MAX_SLOTS` or this
+    /// instance was evicted (`generation` mismatch) — same caller contract
+    /// as [`write()`].
+    pub fn touch(&self, slot: u8, generation: u32, label: &str, target: &str, now_ms: u64) -> bool {
         let idx = slot as usize;
         if idx >= MAX_SLOTS {
-            return;
+            return false;
         }
         let s = unsafe { &(*self.shared).slots[idx] };
+        if s.generation.load(Ordering::Acquire) != generation {
+            return false;
+        }
 
         let seq0 = s.seq.load(Ordering::Relaxed);
         s.seq.store(seq0.wrapping_add(1), Ordering::Release);
@@ -437,6 +499,7 @@ impl RelayHub {
         fence(Ordering::Release);
         s.seq.store(seq0.wrapping_add(2), Ordering::Release);
         s.heartbeat_ms.store(now_ms, Ordering::Release);
+        true
     }
 
     /// Read spectrum data from all publishers targeting this consumer.
