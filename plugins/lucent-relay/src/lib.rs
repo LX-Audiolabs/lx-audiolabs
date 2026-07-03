@@ -62,6 +62,9 @@ pub struct LucentRelay {
     fft_output:    Vec<Complex<f32>>,
     fft_bins:      Vec<f32>,
     claimed_slot:  Option<u8>,
+    /// Generation returned alongside `claimed_slot` by `claim_slot()`. Must
+    /// be passed to every `write`/`touch` — see `shared_analysis::SharedState::shm_generation`.
+    claimed_generation: u32,
     cached_name:   String,
     fallback_label: String,
     cached_target:  String,
@@ -94,6 +97,7 @@ impl LucentRelay {
             fft_output,
             fft_bins:       vec![-90.0; SPECTRUM_BINS],
             claimed_slot:   None,
+            claimed_generation: 0,
             cached_name:    String::new(),
             fallback_label: String::from("Relay"),
             cached_target:  String::new(),
@@ -105,9 +109,10 @@ impl LucentRelay {
     fn claim_slot(&mut self) {
         if self.claimed_slot.is_none() {
             if let Some(hub) = relay_hub() {
-                self.claimed_slot = hub.claim_slot(shared_analysis::shm::now_ms());
-                if let Some(s) = self.claimed_slot {
-                    self.fallback_label = format!("Relay {}", s + 1);
+                if let Some((slot, generation)) = hub.claim_slot(shared_analysis::shm::now_ms()) {
+                    self.claimed_slot = Some(slot);
+                    self.claimed_generation = generation;
+                    self.fallback_label = format!("Relay {}", slot + 1);
                 }
             }
         }
@@ -115,6 +120,7 @@ impl LucentRelay {
             self.claimed_slot.map(|s| s as i32).unwrap_or(-1),
             std::sync::atomic::Ordering::Release,
         );
+        self.shm_state.shm_generation.store(self.claimed_generation, std::sync::atomic::Ordering::Release);
     }
 
     fn spawn_liveness_thread(&mut self) {
@@ -129,6 +135,7 @@ impl LucentRelay {
                 std::thread::sleep(std::time::Duration::from_millis(100));
                 let slot = ss.shm_slot.load(Ordering::Acquire);
                 if slot < 0 { continue; }
+                let generation = ss.shm_generation.load(Ordering::Acquire);
                 if let Some(hub) = relay_hub() {
                     let now = shared_analysis::shm::now_ms();
                     let lucents = hub.read_consumers(now);
@@ -143,7 +150,11 @@ impl LucentRelay {
                     if let Some(target) = resolved {
                         let raw = handle.name();
                         let label = if raw.is_empty() { format!("Relay {}", slot + 1) } else { raw };
-                        hub.touch(slot as u8, &label, &target, now);
+                        // Ignore an evicted `false`: this background thread
+                        // can't clear `claimed_slot` (no `&mut self` here) —
+                        // the audio-thread `publish_fft` check below is what
+                        // detects eviction and reclaims a fresh slot.
+                        hub.touch(slot as u8, generation, &label, &target, now);
                     }
                 }
             }
@@ -164,7 +175,14 @@ impl LucentRelay {
             None
         };
         if let Some(target) = resolved {
-            hub.write(slot, label, target, &self.fft_bins, &[-90.0f32; 5], now_ms);
+            let ok = hub.write(slot, self.claimed_generation, label, target, &self.fft_bins, &[-90.0f32; 5], now_ms);
+            if !ok {
+                // Evicted — a stale-heartbeat reclaim gave our slot to
+                // someone else while we thought we still owned it. Drop the
+                // claim so the next block claims a fresh slot instead of
+                // continuing to fight the new owner over this one.
+                self.claimed_slot = None;
+            }
         }
     }
 }

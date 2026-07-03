@@ -487,6 +487,11 @@ pub struct Lucent {
     cached_name: String,
     liveness: Option<Arc<std::sync::atomic::AtomicBool>>,
     instance_key: usize,
+    /// Envelope follower driving the goniometer's visual auto-gain — same
+    /// pattern as Equilibrium/Meridian, so all three plugins' vectorscopes
+    /// fill the same visual range regardless of the signal's actual level
+    /// instead of Lucent's showing a tiny raw-amplitude dot cluster.
+    scope_vis_envelope: f32,
 }
 
 impl Lucent {
@@ -521,6 +526,7 @@ impl Lucent {
             cached_name: String::new(),
             liveness: None,
             instance_key,
+            scope_vis_envelope: 1e-4,
         }
     }
 }
@@ -675,14 +681,6 @@ impl PluginLogic for Lucent {
             sum_lr += in_l * in_r;
             sum_l2 += in_l * in_l;
             sum_r2 += in_r * in_r;
-
-            let scope_pos = self.params.shared.scope_write_pos.load(Ordering::Relaxed);
-            if let Ok(mut scope) = self.params.shared.scope_samples.try_lock() {
-                if scope_pos < scope.len() {
-                    scope[scope_pos] = [in_l, in_r];
-                }
-            }
-            self.params.shared.scope_write_pos.store((scope_pos + 1) % scope_len, Ordering::Relaxed);
 
             self.fft_input[self.fft_write_pos] = mono_in;
             self.fft_write_pos += 1;
@@ -839,6 +837,41 @@ impl PluginLogic for Lucent {
                 1.0
             };
             self.params.shared.phase_correlation.store(corr.clamp(-1.0, 1.0), Ordering::Release);
+        }
+
+        // Goniometer scope buffer — visual auto-gain envelope, same pattern
+        // as Equilibrium/Meridian (5ms attack / 300ms release envelope
+        // scaling samples to ~90% of the display), so Lucent's vectorscope
+        // fills the same visual range as theirs instead of showing a tiny
+        // raw-amplitude dot cluster at typical (well below full-scale) mix levels.
+        {
+            let start_pos = self.params.shared.scope_write_pos.load(Ordering::Acquire);
+            if let Ok(mut scope) = self.params.shared.scope_samples.try_lock() {
+                let buf_len = scope_len;
+                let in0 = buffer.input(0);
+                let in1 = buffer.input(1);
+                let block_peak = (0..n)
+                    .map(|i| in0[i].abs().max(in1[i].abs()))
+                    .fold(0.0f32, f32::max)
+                    .max(1e-9);
+                let att = 1.0 - (-(n as f32) / (0.005 * sample_rate)).exp();
+                let rel = 1.0 - (-(n as f32) / (0.300 * sample_rate)).exp();
+                if block_peak > self.scope_vis_envelope {
+                    self.scope_vis_envelope += att * (block_peak - self.scope_vis_envelope);
+                } else {
+                    self.scope_vis_envelope += rel * (block_peak - self.scope_vis_envelope);
+                }
+                let vis_gain = if self.scope_vis_envelope > 1e-5 {
+                    (0.9 / self.scope_vis_envelope).min(20.0)
+                } else {
+                    0.0
+                };
+                for i in 0..n {
+                    let pos = (start_pos + i) % buf_len;
+                    scope[pos] = [in0[i] * vis_gain, in1[i] * vis_gain];
+                }
+                self.params.shared.scope_write_pos.store((start_pos + n) % buf_len, Ordering::Release);
+            }
         }
 
         ProcessStatus::Normal
