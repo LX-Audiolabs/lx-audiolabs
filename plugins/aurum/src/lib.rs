@@ -42,139 +42,139 @@ mod at_tol {
 #[derive(Params)]
 pub struct AurumParams {
     // Monitor
-    #[param(name = "Side", default = 0)]
+    #[param(name = "Side", default = 0, group = "Monitor")]
     pub side_active: BoolParam,
-    #[param(name = "Mono", default = 0)]
+    #[param(name = "Mono", default = 0, group = "Monitor")]
     pub mono_active: BoolParam,
-    #[param(name = "Delta", default = 0)]
+    #[param(name = "Delta", default = 0, group = "Monitor")]
     pub delta_active: BoolParam,
-    #[param(name = "Bypass", default = 0)]
+    #[param(name = "Bypass", default = 0, group = "Monitor")]
     pub bypass_active: BoolParam,
 
     // Analogue Tolerance
     #[param(name = "AT", default = 0)]
     pub at_active: BoolParam,
-    #[param(name = "AT Amount", default = 50.0, range = "linear(0.0, 100.0)", unit = "%")]
+    #[param(name = "AT Amount", default = 50.0, range = "linear(0.0, 100.0)", unit = "%", group = "Output")]
     pub at_amount: FloatParam,
 
     // Output
-    #[param(name = "Output Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "Output Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "Output")]
     pub output_gain: FloatParam,
-    #[param(name = "Stereo Width", default = 1.0, range = "linear(0.0, 2.0)", smooth = "linear(20)")]
+    #[param(name = "Stereo Width", default = 1.0, range = "linear(0.0, 2.0)", smooth = "linear(20)", group = "Output")]
     pub stereo_width: FloatParam,
-    #[param(name = "Mono Floor", default = 0.0, range = "linear(0.0, 300.0)", unit = "Hz")]
+    #[param(name = "Mono Floor", default = 0.0, range = "linear(0.0, 300.0)", unit = "Hz", group = "Output")]
     pub mono_floor: FloatParam,
 
     // Clipper
-    #[param(name = "Clip Ceiling", default = -1.0, range = "linear(-6.0, -0.1)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "Clip Ceiling", default = -1.0, range = "linear(-6.0, -0.1)", unit = "dB", smooth = "linear(20)", group = "Limiter")]
     pub clip_ceiling: FloatParam,
-    #[param(name = "Clip Softness", default = 50.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)")]
+    #[param(name = "Clip Softness", default = 50.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)", group = "Limiter")]
     pub clip_softness: FloatParam,
     #[param(name = "Clip M/S Mode", default = 0)]
     pub clip_ms_mode: BoolParam,
 
     // M/S EQ Mid
-    #[param(name = "Mid Lo Shelf", default = 0.0, range = "linear(-6.0, 6.0)", unit = "dB")]
+    #[param(name = "Mid Lo Shelf", default = 0.0, range = "linear(-6.0, 6.0)", unit = "dB", group = "M/S EQ/Mid")]
     pub eq_m_lo_shelf: FloatParam,
-    #[param(name = "Mid Lo-Mid", default = 0.0, range = "linear(-6.0, 6.0)", unit = "dB")]
+    #[param(name = "Mid Lo-Mid", default = 0.0, range = "linear(-6.0, 6.0)", unit = "dB", group = "M/S EQ/Mid")]
     pub eq_m_lo_mid: FloatParam,
-    #[param(name = "Mid Hi-Mid", default = 0.0, range = "linear(-6.0, 6.0)", unit = "dB")]
+    #[param(name = "Mid Hi-Mid", default = 0.0, range = "linear(-6.0, 6.0)", unit = "dB", group = "M/S EQ/Mid")]
     pub eq_m_hi_mid: FloatParam,
-    #[param(name = "Mid Hi Shelf", default = 0.0, range = "linear(-6.0, 6.0)", unit = "dB")]
+    #[param(name = "Mid Hi Shelf", default = 0.0, range = "linear(-6.0, 6.0)", unit = "dB", group = "M/S EQ/Mid")]
     pub eq_m_hi_shelf: FloatParam,
 
     // M/S EQ Side
-    #[param(name = "Side Lo Shelf", default = 0.0, range = "linear(-6.0, 6.0)", unit = "dB")]
+    #[param(name = "Side Lo Shelf", default = 0.0, range = "linear(-6.0, 6.0)", unit = "dB", group = "M/S EQ/Side")]
     pub eq_s_lo_shelf: FloatParam,
-    #[param(name = "Side Lo-Mid", default = 0.0, range = "linear(-6.0, 6.0)", unit = "dB")]
+    #[param(name = "Side Lo-Mid", default = 0.0, range = "linear(-6.0, 6.0)", unit = "dB", group = "M/S EQ/Side")]
     pub eq_s_lo_mid: FloatParam,
-    #[param(name = "Side Hi-Mid", default = 0.0, range = "linear(-6.0, 6.0)", unit = "dB")]
+    #[param(name = "Side Hi-Mid", default = 0.0, range = "linear(-6.0, 6.0)", unit = "dB", group = "M/S EQ/Side")]
     pub eq_s_hi_mid: FloatParam,
-    #[param(name = "Side Hi Shelf", default = 0.0, range = "linear(-6.0, 6.0)", unit = "dB")]
+    #[param(name = "Side Hi Shelf", default = 0.0, range = "linear(-6.0, 6.0)", unit = "dB", group = "M/S EQ/Side")]
     pub eq_s_hi_shelf: FloatParam,
 
     // 2-Band Compressor
-    #[param(name = "Comp Split", default = 200.0, range = "linear(80.0, 500.0)", unit = "Hz")]
+    #[param(name = "Comp Split", default = 200.0, range = "linear(80.0, 500.0)", unit = "Hz", group = "Compressor")]
     pub comp_split: FloatParam,
     #[param(name = "Comp Link", default = 0)]
     pub comp_link: BoolParam,
-    #[param(name = "Thresh Low", default = -12.0, range = "linear(-30.0, 0.0)", unit = "dB")]
+    #[param(name = "Thresh Low", default = -12.0, range = "linear(-30.0, 0.0)", unit = "dB", group = "Compressor")]
     pub comp_thresh_lo: FloatParam,
-    #[param(name = "Thresh High", default = -12.0, range = "linear(-30.0, 0.0)", unit = "dB")]
+    #[param(name = "Thresh High", default = -12.0, range = "linear(-30.0, 0.0)", unit = "dB", group = "Compressor")]
     pub comp_thresh_hi: FloatParam,
-    #[param(name = "Comp Ratio", default = 1.5, range = "linear(1.2, 3.0)")]
+    #[param(name = "Comp Ratio", default = 1.5, range = "linear(1.2, 3.0)", group = "Compressor")]
     pub comp_ratio: FloatParam,
-    #[param(name = "Comp Attack", default = 30.0, range = "linear(10.0, 100.0)", unit = "ms")]
+    #[param(name = "Comp Attack", default = 30.0, range = "linear(10.0, 100.0)", unit = "ms", group = "Compressor")]
     pub comp_attack: FloatParam,
-    #[param(name = "Comp Release", default = 150.0, range = "linear(50.0, 500.0)", unit = "ms")]
+    #[param(name = "Comp Release", default = 150.0, range = "linear(50.0, 500.0)", unit = "ms", group = "Compressor")]
     pub comp_release: FloatParam,
-    #[param(name = "Comp Mix", default = 50.0, range = "linear(0.0, 100.0)", unit = "%")]
+    #[param(name = "Comp Mix", default = 50.0, range = "linear(0.0, 100.0)", unit = "%", group = "Compressor")]
     pub comp_mix: FloatParam,
 
     // Sweetening EQ
-    #[param(name = "HPF Freq", default = 24.0, range = "linear(10.0, 60.0)", unit = "Hz")]
+    #[param(name = "HPF Freq", default = 24.0, range = "linear(10.0, 60.0)", unit = "Hz", group = "Sweetening")]
     pub sweet_hpf: FloatParam,
-    #[param(name = "LPF Freq", default = 35000.0, range = "linear(18000.0, 40000.0)", unit = "Hz")]
+    #[param(name = "LPF Freq", default = 35000.0, range = "linear(18000.0, 40000.0)", unit = "Hz", group = "Sweetening")]
     pub sweet_lpf: FloatParam,
-    #[param(name = "Sweet Lo Shelf", default = 0.0, range = "linear(-4.0, 4.0)", unit = "dB")]
+    #[param(name = "Sweet Lo Shelf", default = 0.0, range = "linear(-4.0, 4.0)", unit = "dB", group = "Sweetening")]
     pub sweet_lo_shelf: FloatParam,
-    #[param(name = "Sweet Hi Shelf", default = 0.0, range = "linear(-4.0, 4.0)", unit = "dB")]
+    #[param(name = "Sweet Hi Shelf", default = 0.0, range = "linear(-4.0, 4.0)", unit = "dB", group = "Sweetening")]
     pub sweet_hi_shelf: FloatParam,
 
     // M/S Multiband Limiter
-    #[param(name = "MB Crossover", default = 250.0, range = "linear(20.0, 500.0)", unit = "Hz")]
+    #[param(name = "MB Crossover", default = 250.0, range = "linear(20.0, 500.0)", unit = "Hz", group = "Multiband")]
     pub mb_crossover:    FloatParam,
-    #[param(name = "MB Thresh Mid-Lo", default = -3.0, range = "linear(-18.0, 0.0)", unit = "dB")]
+    #[param(name = "MB Thresh Mid-Lo", default = -3.0, range = "linear(-18.0, 0.0)", unit = "dB", group = "Multiband")]
     pub mb_thresh_mid_lo: FloatParam,
-    #[param(name = "MB Thresh Mid-Hi", default = -3.0, range = "linear(-18.0, 0.0)", unit = "dB")]
+    #[param(name = "MB Thresh Mid-Hi", default = -3.0, range = "linear(-18.0, 0.0)", unit = "dB", group = "Multiband")]
     pub mb_thresh_mid_hi: FloatParam,
-    #[param(name = "MB Thresh Side",   default = -6.0, range = "linear(-18.0, 0.0)", unit = "dB")]
+    #[param(name = "MB Thresh Side",   default = -6.0, range = "linear(-18.0, 0.0)", unit = "dB", group = "Multiband")]
     pub mb_thresh_side:   FloatParam,
-    #[param(name = "MB Gain Mid-Lo", default = 0.0, range = "linear(-6.0, 6.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "MB Gain Mid-Lo", default = 0.0, range = "linear(-6.0, 6.0)", unit = "dB", smooth = "linear(20)", group = "Multiband")]
     pub mb_gain_mid_lo:  FloatParam,
-    #[param(name = "MB Gain Mid-Hi", default = 0.0, range = "linear(-6.0, 6.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "MB Gain Mid-Hi", default = 0.0, range = "linear(-6.0, 6.0)", unit = "dB", smooth = "linear(20)", group = "Multiband")]
     pub mb_gain_mid_hi:  FloatParam,
-    #[param(name = "MB Gain Side",   default = 0.0, range = "linear(-6.0, 6.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "MB Gain Side",   default = 0.0, range = "linear(-6.0, 6.0)", unit = "dB", smooth = "linear(20)", group = "Multiband")]
     pub mb_gain_side:    FloatParam,
-    #[param(name = "MB Attack Mid-Lo", default = 5.0,  range = "linear(0.1, 50.0)", unit = "ms")]
+    #[param(name = "MB Attack Mid-Lo", default = 5.0,  range = "linear(0.1, 50.0)", unit = "ms", group = "Multiband")]
     pub mb_attack_mid_lo: FloatParam,
-    #[param(name = "MB Attack Mid-Hi", default = 2.0,  range = "linear(0.1, 50.0)", unit = "ms")]
+    #[param(name = "MB Attack Mid-Hi", default = 2.0,  range = "linear(0.1, 50.0)", unit = "ms", group = "Multiband")]
     pub mb_attack_mid_hi: FloatParam,
-    #[param(name = "MB Attack Side",   default = 5.0,  range = "linear(0.1, 50.0)", unit = "ms")]
+    #[param(name = "MB Attack Side",   default = 5.0,  range = "linear(0.1, 50.0)", unit = "ms", group = "Multiband")]
     pub mb_attack_side:   FloatParam,
-    #[param(name = "MB Release Mid-Lo", default = 100.0, range = "linear(10.0, 500.0)", unit = "ms")]
+    #[param(name = "MB Release Mid-Lo", default = 100.0, range = "linear(10.0, 500.0)", unit = "ms", group = "Multiband")]
     pub mb_release_mid_lo: FloatParam,
-    #[param(name = "MB Release Mid-Hi", default =  80.0, range = "linear(10.0, 500.0)", unit = "ms")]
+    #[param(name = "MB Release Mid-Hi", default =  80.0, range = "linear(10.0, 500.0)", unit = "ms", group = "Multiband")]
     pub mb_release_mid_hi: FloatParam,
-    #[param(name = "MB Release Side",   default = 150.0, range = "linear(10.0, 500.0)", unit = "ms")]
+    #[param(name = "MB Release Side",   default = 150.0, range = "linear(10.0, 500.0)", unit = "ms", group = "Multiband")]
     pub mb_release_side:   FloatParam,
     #[param(name = "MB Fader Link", default = 0)]
     pub mb_fader_link:   BoolParam,
-    #[param(name = "MB Global Gain",  default = 0.0, range = "linear(-6.0, 6.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "MB Global Gain",  default = 0.0, range = "linear(-6.0, 6.0)", unit = "dB", smooth = "linear(20)", group = "Multiband")]
     pub mb_global_gain:  FloatParam,
-    #[param(name = "MB Global Thresh", default = 0.0, range = "linear(-18.0, 0.0)", unit = "dB")]
+    #[param(name = "MB Global Thresh", default = 0.0, range = "linear(-18.0, 0.0)", unit = "dB", group = "Multiband")]
     pub mb_global_thresh: FloatParam,
     #[param(name = "MB Mode Modern", default = 1)] // true=Modern, false=Classic
     pub mb_mode:         BoolParam,
 
     // True Peak Limiter
-    #[param(name = "Lim Ceiling", default = -1.0, range = "linear(-6.0, -0.1)", unit = "dB")]
+    #[param(name = "Lim Ceiling", default = -1.0, range = "linear(-6.0, -0.1)", unit = "dB", group = "Limiter")]
     pub lim_ceiling: FloatParam,
-    #[param(name = "Lim Release", default = 100.0, range = "linear(10.0, 500.0)", unit = "ms")]
+    #[param(name = "Lim Release", default = 100.0, range = "linear(10.0, 500.0)", unit = "ms", group = "Limiter")]
     pub lim_release: FloatParam,
 
     // Saturator
     #[param(name = "Sat M/S Mode", default = 0)]
     pub sat_ms_mode: BoolParam,
-    #[param(name = "Drive Stereo", default = 0.0, range = "linear(0.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "Drive Stereo", default = 0.0, range = "linear(0.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "Saturator")]
     pub sat_drive_stereo: FloatParam,
-    #[param(name = "Drive Mid", default = 0.0, range = "linear(0.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "Drive Mid", default = 0.0, range = "linear(0.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "Saturator")]
     pub sat_drive_mid: FloatParam,
-    #[param(name = "Drive Side", default = 0.0, range = "linear(0.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "Drive Side", default = 0.0, range = "linear(0.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "Saturator")]
     pub sat_drive_side: FloatParam,
-    #[param(name = "Sat Mix", default = 20.0, range = "linear(0.0, 60.0)", unit = "%", smooth = "linear(20)")]
+    #[param(name = "Sat Mix", default = 20.0, range = "linear(0.0, 60.0)", unit = "%", smooth = "linear(20)", group = "Saturator")]
     pub sat_mix: FloatParam,
-    #[param(name = "Sat Harmonics", default = 2, range = "discrete(0, 2)")] // 0=Even, 1=Odd, 2=Mixed
+    #[param(name = "Sat Harmonics", default = 2, range = "discrete(0, 2)", group = "Saturator")] // 0=Even, 1=Odd, 2=Mixed
     pub sat_harmonics: IntParam,
 
     #[skip]
