@@ -86,31 +86,31 @@ pub struct MeridianParams {
     pub cut_slope: IntParam,
 
     // Bass EQ shelf
-    #[param(name = "Lo Shelf Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "Lo Shelf Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "EQ")]
     pub bass_gain: FloatParam,
     #[param(name = "Lo Shelf Slope", default = 1, range = "discrete(0, 2)")]
     pub bass_slope: IntParam,
 
     // Lo-Mid EQ
-    #[param(name = "Lo-Mid Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "Lo-Mid Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "EQ")]
     pub lo_mid_gain: FloatParam,
     #[param(name = "Lo-Mid Slope", default = 1, range = "discrete(0, 2)")]
     pub lo_mid_slope: IntParam,
 
     // Mid EQ
-    #[param(name = "Mid Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "Mid Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "EQ")]
     pub mid_gain: FloatParam,
     #[param(name = "Mid Slope", default = 1, range = "discrete(0, 2)")]
     pub mid_slope: IntParam,
 
     // High EQ
-    #[param(name = "Hi-Mid Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "Hi-Mid Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "EQ")]
     pub high_gain: FloatParam,
     #[param(name = "Hi-Mid Slope", default = 1, range = "discrete(0, 2)")]
     pub high_slope: IntParam,
 
     // Excite (high shelf)
-    #[param(name = "Hi Shelf Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "Hi Shelf Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "EQ")]
     pub excite_gain: FloatParam,
     #[param(name = "Hi Shelf Slope", default = 1, range = "discrete(0, 2)")]
     pub excite_slope: IntParam,
@@ -146,17 +146,17 @@ pub struct MeridianParams {
     pub excite_freq: FloatParam,
 
     // Compressor
-    #[param(name = "Comp Threshold", default = 0.0, range = "linear(-30.0, 0.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "Comp Threshold", default = 0.0, range = "linear(-30.0, 0.0)", unit = "dB", smooth = "linear(20)", group = "Compressor")]
     pub comp_threshold: FloatParam,
-    #[param(name = "Comp Mix", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)")]
+    #[param(name = "Comp Mix", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)", group = "Compressor")]
     pub comp_mix: FloatParam,
-    #[param(name = "Comp Attack", default = 15.0, range = "linear(5.0, 50.0)", unit = "ms", smooth = "linear(20)")]
+    #[param(name = "Comp Attack", default = 15.0, range = "linear(5.0, 50.0)", unit = "ms", smooth = "linear(20)", group = "Compressor")]
     pub comp_attack: FloatParam,
-    #[param(name = "Comp Release", default = 120.0, range = "linear(50.0, 300.0)", unit = "ms", smooth = "linear(20)")]
+    #[param(name = "Comp Release", default = 120.0, range = "linear(50.0, 300.0)", unit = "ms", smooth = "linear(20)", group = "Compressor")]
     pub comp_release: FloatParam,
-    #[param(name = "Comp Ratio", default = 2.0, range = "linear(1.5, 4.0)", smooth = "linear(20)")]
+    #[param(name = "Comp Ratio", default = 2.0, range = "linear(1.5, 4.0)", smooth = "linear(20)", group = "Compressor")]
     pub comp_character: FloatParam,
-    #[param(name = "Comp Makeup", default = 0.0, range = "linear(0.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "Comp Makeup", default = 0.0, range = "linear(0.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "Compressor")]
     pub comp_makeup: FloatParam,
 
     // Inflate (Oxford-Inflator-inspired loudness/density waveshaper)
