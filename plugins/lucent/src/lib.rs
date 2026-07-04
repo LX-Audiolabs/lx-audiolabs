@@ -1,6 +1,6 @@
 use truce::prelude::*;
 use truce_core::{custom_state::State as StateSerialize, state::StateLoadError, editor::Editor};
-use truce_iced::IcedEditor;
+use truce_vizia::ViziaEditor;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::sync::atomic::Ordering;
@@ -900,9 +900,16 @@ impl PluginLogic for Lucent {
     }
 
     fn editor(&self) -> Box<dyn Editor> {
-        IcedEditor::<LucentParams, editor::LucentEditor>::new(
+        // Vizia pilot (CLAP-vault features/2026-07-04-truce-2.0-upgrade-plan.md).
+        // `shared` is captured directly into the setup closure rather than
+        // read through `ParamLens` - the goniometer/spectrum/meter data
+        // lives in `LucentParams::shared` (atomics + mutexes written by
+        // `process()`), not in the param store `ParamLens` binds to.
+        let shared = self.params.shared.clone();
+        ViziaEditor::<LucentParams>::new(
             self.params.clone(),
             (WINDOW_W, WINDOW_H),
+            move |cx, lens| editor::build(cx, lens, shared.clone()),
         )
         .into_editor()
     }
