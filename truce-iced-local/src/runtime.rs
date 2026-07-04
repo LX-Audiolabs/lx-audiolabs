@@ -48,6 +48,15 @@ pub(crate) fn editor_backends() -> wgpu::Backends {
     }
 }
 
+/// Minimum wall-clock gap between two *streaming* frames (meters,
+/// animation, timed redraws). ~33 fps. Input-driven frames (clicks,
+/// resize, param edits, subscription messages) bypass this so the UI
+/// stays responsive. Caps the host GUI-thread load a busy audio thread
+/// would otherwise impose by dirtying meters every frame. (iOS bypasses
+/// the cap entirely - see the `cfg!(target_os = "ios")` in `tick` - but
+/// the const is still referenced there, so it must exist on all targets.)
+const MIN_FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(28);
+
 // IcedPlugin trait - what plugin authors implement
 
 /// Trait for plugin-specific iced UI logic.
@@ -244,6 +253,11 @@ pub(crate) struct IcedRuntime<P: Params, M: IcedPlugin<P>> {
     /// (`RedrawRequest::At`, e.g. a `text_input` caret blink). `tick()`
     /// renders once this instant passes.
     pub(crate) redraw_at: Option<std::time::Instant>,
+    /// Frame-rate cap: instant of the last presented frame. Streaming
+    /// redraws (meters/animation) are gated to `MIN_FRAME_INTERVAL` off
+    /// this so a busy audio thread can't drive the host GUI thread at the
+    /// full frame-timer rate. Input-driven frames bypass the cap.
+    pub(crate) last_present: std::time::Instant,
 }
 
 /// The iced subscription runtime, parameterised by the editor's message
@@ -326,6 +340,7 @@ impl<P: Params + 'static, M: IcedPlugin<P>> IcedRuntime<P, M> {
             force_render: true,
             animate: false,
             redraw_at: None,
+            last_present: std::time::Instant::now(),
         }
     }
 
@@ -573,19 +588,30 @@ impl<P: Params + 'static, M: IcedPlugin<P>> IcedRuntime<P, M> {
         // message pump to free), and its per-frame `RedrawRequested`
         // re-issues `request_input_method` to keep the soft keyboard up,
         // so every frame must run.
-        let should_render = cfg!(target_os = "ios")
-            || self.force_render
+        //
+        // Two tiers: input/structural changes render immediately so the UI
+        // stays responsive; streaming changes (meters, animation, timed and
+        // plugin-driven redraws) are frame-rate capped via `MIN_FRAME_INTERVAL`.
+        // Without the split a busy audio thread dirties meters every frame
+        // (`data_changed`), which under `AutoNoVsync` drove the host GUI
+        // thread at the full frame-timer rate and could freeze the host.
+        let now = std::time::Instant::now();
+        let input_render = self.force_render
             || scale_changed
             || !self.pending_events.is_empty()
-            || data_changed
+            || !queued_sub_msgs.is_empty();
+        let stream_render = data_changed
             || self.animate
             || timer_due
-            || render.program.plugin.needs_redraw()
-            || !queued_sub_msgs.is_empty();
+            || render.program.plugin.needs_redraw();
+        let cap_ok = now.duration_since(self.last_present) >= MIN_FRAME_INTERVAL;
+        let should_render =
+            cfg!(target_os = "ios") || input_render || (stream_render && cap_ok);
         if !should_render {
             return;
         }
         self.force_render = false;
+        self.last_present = now;
 
         let cursor = crate::iced::mouse::Cursor::Available(self.cursor_position);
         let logical_size = render.viewport.logical_size();
