@@ -54,3 +54,25 @@ truce-clap = { path = "truce-clap-local" }
 truce-params = { git = "https://github.com/truce-audio/truce", tag = "v2.0.0" }
 truce-core = { git = "https://github.com/truce-audio/truce", tag = "v2.0.0" }
 truce-iced = { path = "truce-iced-local" }
+
+# ponytail: tried patching baseview to truce-audio's `baseview-truce-vizia`
+# fork here (same mechanism as the truce-params/truce-core fix above -
+# truce-vizia's own nested-workspace patch to this fork doesn't propagate
+# to us as an external git dependency). Made it WORSE: Lucent's editor
+# hang went from "plugin window stuck, Reaper alive" to "whole Reaper
+# frozen, force-kill required". Rolled back. The vault handoff already
+# flagged this as an unverified risk ("ob gepatchter Baseview-Fork das
+# Embedding-Problem behebt, noch nicht verifiziert auf unserer Hardware")
+# - now verified: it doesn't, at least not with this fork/branch as-is.
+#
+# Own narrow fork instead: `baseview-local` is a byte-for-byte vendor of
+# vizia/baseview.git @ 70e4e05 (the exact rev vizia's own workspace pins,
+# see crates/truce-vizia's git dep chain) with exactly one guard added in
+# src/win/window.rs - `SetProcessDpiAwarenessContext` is process-wide and
+# can only be set once; it's only called for baseview's own top-level
+# (`!parented`) window now, never for a window embedded into a host
+# process that already set its own DPI awareness at its own startup.
+# Root-caused via source review (features/2026-07-04-truce-2.0-upgrade-plan.md
+# HANDOFF section has the full trail); not yet DAW-verified.
+[patch."https://github.com/vizia/baseview.git"]
+baseview = { path = "baseview-local" }
