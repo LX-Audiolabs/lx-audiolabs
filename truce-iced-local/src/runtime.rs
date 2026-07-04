@@ -30,13 +30,31 @@ pub(crate) fn panic_message(e: &(dyn std::any::Any + Send)) -> String {
         .unwrap_or_else(|| "unknown panic".to_string())
 }
 
-/// wgpu backends for the editor surface. DX12 on Windows; Metal on macOS;
-/// `PRIMARY` (Vulkan) on Linux.
+/// wgpu backends for the editor surface. DX12 + GL on Windows (GL as
+/// fallback - see below); Metal on macOS; `PRIMARY` (Vulkan) on Linux.
 #[cfg(not(target_os = "ios"))]
 pub(crate) fn editor_backends() -> wgpu::Backends {
     #[cfg(target_os = "windows")]
     {
-        wgpu::Backends::DX12
+        // DX12-only left some systems with no adapter at all: DX12 needs
+        // a WDDM2.0-class driver (Feature Level 11_0), which some older
+        // iGPUs, VMs, and RDP sessions don't expose, even though Bitwig
+        // itself (OpenGL) runs fine there. GL is kept as a last-resort
+        // fallback only - `request_adapter`'s `HighPerformance`
+        // preference picks DX12 first whenever it's available, so this
+        // bit only engages when DX12 isn't viable at all.
+        //
+        // Measured 2026-07-04 on a 2GB-dedicated-VRAM mini-PC: forcing
+        // GL-only (native WGL, not ANGLE) was WORSE than DX12, not
+        // better - froze with just 2 plugin instances open (DX12
+        // tolerates 2, fails at 3) while dedicated GPU usage sat at only
+        // ~50%, i.e. not a VRAM-exhaustion pattern at all. Points to a
+        // GL-driver-level stall (AMD's GL driver has known issues with
+        // concurrent contexts from multiple processes) rather than
+        // anything our code controls. GL is not a fix for the VRAM
+        // ceiling on this hardware class - kept only as an availability
+        // fallback for systems where DX12 fails outright.
+        wgpu::Backends::DX12 | wgpu::Backends::GL
     }
     #[cfg(target_os = "macos")]
     {
@@ -47,6 +65,11 @@ pub(crate) fn editor_backends() -> wgpu::Backends {
         wgpu::Backends::PRIMARY
     }
 }
+
+/// Minimum wall-clock gap between two *streaming* frames (meters,
+/// animation, timed redraws, plugin `needs_redraw()`). ~33 fps. Input-
+/// driven frames bypass this - see `IcedRuntime::last_stream_render`.
+const MIN_STREAM_FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(28);
 
 // IcedPlugin trait - what plugin authors implement
 
@@ -248,6 +271,14 @@ pub(crate) struct IcedRuntime<P: Params, M: IcedPlugin<P>> {
     /// repaint-heavy editors can't park the host's GUI thread in the
     /// swapchain acquire - see [`truce_gui::PaintPacer`].
     pub(crate) pacer: truce_gui::PaintPacer,
+    /// Frame-rate cap for *streaming* redraws (meters/animation/timers,
+    /// `data_changed`, `needs_redraw()`). Input-driven frames (clicks,
+    /// resize, param edits, subscription messages) bypass this so the UI
+    /// stays responsive. Without it, `data_changed` is true almost every
+    /// frame during playback (meters move), so streaming redraws ran at
+    /// the full host frame-timer rate - unnecessary GPU compute/bandwidth
+    /// load per open instance, worse the more plugins are open at once.
+    pub(crate) last_stream_render: std::time::Instant,
     /// Owns the wgpu surface + every blocking swapchain call (see
     /// `crate::pump`); [`Self::adopt_pump`] builds the pipeline from
     /// its init product. Desktop only - iOS keeps the surface inline
@@ -357,6 +388,7 @@ impl<P: Params + 'static, M: IcedPlugin<P>> IcedRuntime<P, M> {
             animate: false,
             redraw_at: None,
             pacer: truce_gui::PaintPacer::default(),
+            last_stream_render: std::time::Instant::now(),
             #[cfg(not(target_os = "ios"))]
             pump: None,
             #[cfg(not(target_os = "ios"))]
@@ -800,19 +832,32 @@ impl<P: Params + 'static, M: IcedPlugin<P>> IcedRuntime<P, M> {
         // message pump to free), and its per-frame `RedrawRequested`
         // re-issues `request_input_method` to keep the soft keyboard up,
         // so every frame must run.
-        let should_render = cfg!(target_os = "ios")
-            || self.force_render
+        //
+        // Two tiers: input/structural changes render immediately (must stay
+        // responsive to clicks/resize/param edits/subscription messages);
+        // streaming changes (meters, animation, timers, plugin
+        // `needs_redraw()`) are frame-rate capped via
+        // `MIN_STREAM_FRAME_INTERVAL` so a busy audio thread dirtying
+        // meters every frame (`data_changed`) can't drive full-rate
+        // redraws for the whole playback duration - unnecessary GPU
+        // compute/bandwidth load that compounds with every extra open
+        // instance.
+        let input_render = self.force_render
             || scale_changed
             || !self.pending_events.is_empty()
-            || data_changed
-            || self.animate
-            || timer_due
-            || render.program.plugin.needs_redraw()
             || !queued_sub_msgs.is_empty();
+        let stream_render = data_changed || self.animate || timer_due || render.program.plugin.needs_redraw();
+        let stream_cap_ok =
+            std::time::Instant::now().duration_since(self.last_stream_render) >= MIN_STREAM_FRAME_INTERVAL;
+        let should_render =
+            cfg!(target_os = "ios") || input_render || (stream_render && stream_cap_ok);
         if !should_render {
             return;
         }
         self.force_render = false;
+        if stream_render && stream_cap_ok {
+            self.last_stream_render = std::time::Instant::now();
+        }
 
         let cursor = crate::iced::mouse::Cursor::Available(self.cursor_position);
         let logical_size = render.viewport.logical_size();
