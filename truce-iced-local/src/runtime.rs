@@ -419,9 +419,15 @@ impl<P: Params + 'static, M: IcedPlugin<P>> IcedRuntime<P, M> {
                         match pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                             label: Some("truce-iced"),
                             required_features: wgpu::Features::empty(),
-                            required_limits: adapter.limits(),
+                            // Tight limits (iced_wgpu's own headless renderer uses
+                            // this same pattern) instead of the adapter's max -
+                            // requesting max limits can make some drivers
+                            // pre-reserve VRAM sized to them. Each editor owns an
+                            // independent device (no sharing across plugin
+                            // instances), so this is paid N times over.
+                            required_limits: wgpu::Limits { max_bind_groups: 2, ..wgpu::Limits::default() },
                             experimental_features: wgpu::ExperimentalFeatures::default(),
-                            memory_hints: wgpu::MemoryHints::default(),
+                            memory_hints: wgpu::MemoryHints::MemoryUsage,
                             trace: wgpu::Trace::Off,
                         })) {
                             Ok(dq) => dq,
@@ -466,7 +472,10 @@ impl<P: Params + 'static, M: IcedPlugin<P>> IcedRuntime<P, M> {
                         present_mode: wgpu::PresentMode::AutoNoVsync,
                         #[cfg(not(target_os = "windows"))]
                         present_mode: wgpu::PresentMode::AutoVsync,
-                        desired_maximum_frame_latency: 2,
+                        // 1 frame in flight instead of 2 - one fewer swapchain
+                        // buffer per open editor, paid N times over with no
+                        // device sharing across instances.
+                        desired_maximum_frame_latency: 1,
                         alpha_mode,
                         view_formats: vec![],
                     };
@@ -569,9 +578,11 @@ impl<P: Params + 'static, M: IcedPlugin<P>> IcedRuntime<P, M> {
             match pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("truce-iced"),
                 required_features: wgpu::Features::empty(),
-                required_limits: adapter.limits(),
+                // Tight limits (matches iced_wgpu's own headless renderer,
+                // and the desktop path above) instead of the adapter's max.
+                required_limits: wgpu::Limits { max_bind_groups: 2, ..wgpu::Limits::default() },
                 experimental_features: wgpu::ExperimentalFeatures::default(),
-                memory_hints: wgpu::MemoryHints::default(),
+                memory_hints: wgpu::MemoryHints::MemoryUsage,
                 trace: wgpu::Trace::Off,
             })) {
                 Ok(dq) => dq,
@@ -611,7 +622,7 @@ impl<P: Params + 'static, M: IcedPlugin<P>> IcedRuntime<P, M> {
             width: w.max(1),
             height: h.max(1),
             present_mode: wgpu::PresentMode::AutoVsync,
-            desired_maximum_frame_latency: 2,
+            desired_maximum_frame_latency: 1,
             alpha_mode,
             view_formats: vec![],
         };
