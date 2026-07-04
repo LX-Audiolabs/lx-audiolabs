@@ -11,17 +11,14 @@
 
 Before ANY planning, analysis or code changes you MUST read via MCP:
 
-1. START-HERE.md
-2. 00-CONTRACT.md
-3. 01-WORKFLOW.md
-4. 02-FORBIDDEN.md
-5. 03-SELF-CHECK.md
-6. 04-STANDARDS.md
-7. 05-COMPLETION.md
-8. CURRENT-STATE.md
-9. status/INDEX-SESSIONS.md
-10. status/INDEX-OPEN-BUGS.md
-11. status/todo-next-session.md
+1. CLAUDE.md (Bootstrap)
+2. GOVERNANCE.md (alle Agent-Regeln)
+3. START-HERE.md
+4. VAULT-SCHEMA.md
+5. CURRENT-STATE.md
+6. status/INDEX-SESSIONS.md
+7. status/INDEX-OPEN-BUGS.md
+8. status/todo-next-session.md
 
 If the task targets a specific plugin, also read:
 
