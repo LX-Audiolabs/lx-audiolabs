@@ -38,5 +38,19 @@ inherits = "release"
 
 [patch.crates-io]
 truce-clap = { path = "truce-clap-local" }
-truce-params = { path = "truce-params-local" }
+# truce-vizia (git dep, Lucent/Lucent-Relay) pulls its own truce-params +
+# truce-core via `path = "../..."` relative to ITS git checkout - Cargo
+# never unifies that with a local-path patch (different SourceId even at
+# matching version), so ParamLens<P: Params> sees two different `Params`
+# traits and every plugin using truce-vizia fails to compile. Pointing
+# these two at the identical git tag truce-vizia uses makes Cargo resolve
+# the same checkout, unifying the types.
+#
+# ponytail: this drops the `truce-params-local` ParamUnit::Percent fix
+# ({:.1}% of a real 0-100 value, vs upstream's {:.0}%` * 100) - every
+# `unit = "%"` param (Equilibrium/Meridian/Aether/Aurum/Lucent) now shows
+# the wrong percentage until the fix is re-applied via an upstream PR/
+# fork branch that truce-vizia's git tag can also point at.
+truce-params = { git = "https://github.com/truce-audio/truce", tag = "v2.0.0" }
+truce-core = { git = "https://github.com/truce-audio/truce", tag = "v2.0.0" }
 truce-iced = { path = "truce-iced-local" }

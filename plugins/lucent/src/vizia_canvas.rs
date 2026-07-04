@@ -20,7 +20,7 @@ use vizia::vg;
 /// iced `Color::from_rgb`/`from_rgba` used 0.0-1.0 floats throughout the
 /// ported code below; skia_safe's `Color` is 0-255 argb. Keeps every
 /// color literal below an unchanged copy-paste from `shared-ui/canvas.rs`.
-fn col(r: f32, g: f32, b: f32, a: f32) -> vg::Color {
+pub(crate) fn col(r: f32, g: f32, b: f32, a: f32) -> vg::Color {
     vg::Color::from_argb(
         (a.clamp(0.0, 1.0) * 255.0) as u8,
         (r.clamp(0.0, 1.0) * 255.0) as u8,
@@ -29,7 +29,7 @@ fn col(r: f32, g: f32, b: f32, a: f32) -> vg::Color {
     )
 }
 
-fn rgb(r: f32, g: f32, b: f32) -> vg::Color {
+pub(crate) fn rgb(r: f32, g: f32, b: f32) -> vg::Color {
     col(r, g, b, 1.0)
 }
 
@@ -73,8 +73,10 @@ pub struct StereoMeterView {
 }
 
 impl StereoMeterView {
-    pub fn new(cx: &mut Context, data: impl Res<(f32, f32, f32, f32, f32)>) -> Handle<'_, Self> {
-        let (peak_l, peak_r, hold_l, hold_r, balance) = data.get_val(cx);
+    // ponytail: plain f32s, not `impl Res<(f32,...,f32)>` - `Res` tuple impls
+    // stop at 4 elements, and the one caller already rebuilds this View
+    // inside a `Binding`, so there's no reactivity to gain from a 5th tuple slot.
+    pub fn new(cx: &mut Context, peak_l: f32, peak_r: f32, hold_l: f32, hold_r: f32, balance: f32) -> Handle<'_, Self> {
         Self { peak_l, peak_r, hold_l, hold_r, balance }.build(cx, |_| {})
     }
 }
@@ -171,8 +173,8 @@ impl GoniometerView {
     ) -> Handle<'_, Self> {
         Self {
             samples,
-            write_pos: write_pos.get_val(cx),
-            correlation: correlation.get_val(cx),
+            write_pos: write_pos.get_value(cx),
+            correlation: correlation.get_value(cx),
         }
         .build(cx, |_| {})
     }
@@ -348,22 +350,28 @@ impl View for SpectrumView {
             }
             let first_x = smoothed[0].0 * width;
 
-            let mut fill_path = vg::Path::new();
-            fill_path.move_to((first_x, height));
+            let mut fill_builder = vg::PathBuilder::new();
+            fill_builder.move_to((first_x, height));
             for &(sx, db) in &smoothed {
-                fill_path.line_to((sx * width, db_to_y(db)));
+                fill_builder.line_to((sx * width, db_to_y(db)));
             }
             let last_x = smoothed.last().unwrap().0 * width;
-            fill_path.line_to((last_x, height));
-            fill_path.close();
-            let [cr, cg, cb, _] = curve.color.to_rgba_f32();
+            fill_builder.line_to((last_x, height));
+            fill_builder.close();
+            let fill_path = fill_builder.detach();
+            let (cr, cg, cb) = (
+                curve.color.r() as f32 / 255.0,
+                curve.color.g() as f32 / 255.0,
+                curve.color.b() as f32 / 255.0,
+            );
             canvas.draw_path(&fill_path, &fill_paint(col(cr, cg, cb, curve.fill_alpha)));
 
-            let mut line_path = vg::Path::new();
-            line_path.move_to((first_x, db_to_y(smoothed[0].1)));
+            let mut line_builder = vg::PathBuilder::new();
+            line_builder.move_to((first_x, db_to_y(smoothed[0].1)));
             for &(sx, db) in &smoothed[1..] {
-                line_path.line_to((sx * width, db_to_y(db)));
+                line_builder.line_to((sx * width, db_to_y(db)));
             }
+            let line_path = line_builder.detach();
             canvas.draw_path(&line_path, &stroke_paint(col(cr, cg, cb, curve.line_alpha), curve.line_width));
         }
 
@@ -395,13 +403,13 @@ impl View for SpectrumView {
             let marker_color = col(1.0, 0.6, 0.1, alpha);
             line(canvas, x, 0.0, x, height, marker_color, 1.5);
             let (s, my) = (3.0, 5.0);
-            let mut diamond = vg::Path::new();
+            let mut diamond = vg::PathBuilder::new();
             diamond.move_to((x, my - s));
             diamond.line_to((x + s, my));
             diamond.line_to((x, my + s));
             diamond.line_to((x - s, my));
             diamond.close();
-            canvas.draw_path(&diamond, &fill_paint(marker_color));
+            canvas.draw_path(&diamond.detach(), &fill_paint(marker_color));
         }
     }
 }

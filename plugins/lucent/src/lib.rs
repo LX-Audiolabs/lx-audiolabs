@@ -145,6 +145,8 @@ fn suppress_harmonics(spectrum: &[f32], peaks: Vec<(usize, f32)>) -> Vec<(usize,
 
 mod editor;
 mod ui;
+mod vizia_canvas;
+mod vizia_widgets;
 
 const WINDOW_W: u32 = 990;
 const WINDOW_H: u32 = 550;
@@ -906,10 +908,11 @@ impl PluginLogic for Lucent {
         // lives in `LucentParams::shared` (atomics + mutexes written by
         // `process()`), not in the param store `ParamLens` binds to.
         let shared = self.params.shared.clone();
+        let params = self.params.clone();
         ViziaEditor::<LucentParams>::new(
             self.params.clone(),
             (WINDOW_W, WINDOW_H),
-            move |cx, lens| editor::build(cx, lens, shared.clone()),
+            move |cx, lens| editor::build(cx, lens, shared.clone(), params.clone()),
         )
         .into_editor()
     }

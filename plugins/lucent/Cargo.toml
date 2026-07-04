@@ -30,6 +30,10 @@ truce-clap   = { workspace = true, optional = true }
 truce-vst3   = { workspace = true, optional = true }
 truce-loader = { workspace = true }
 truce-vizia  = { git = "https://github.com/truce-audio/truce", tag = "v2.0.0" }
+# Same git rev truce-vizia itself pins - must be identical so `Context`/
+# `Canvas`/etc are the same type, not just the same version number from a
+# different source (crates.io vs this git rev would be distinct types).
+vizia        = { git = "https://github.com/vizia/vizia.git", rev = "24c47433098fcc8e29668a22fcb71771807d86d6", default-features = false, features = ["baseview"] }
 clap-sys     = { workspace = true, optional = true }
 
 shared-dsp      = { path = "../../shared-dsp" }
