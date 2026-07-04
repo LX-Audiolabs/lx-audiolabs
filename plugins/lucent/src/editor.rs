@@ -101,9 +101,14 @@ fn tick(
     let mode = lens.get_plain(LucentParamsParamId::AnalyzeMode) as i64;
     let mut acc = accum.borrow_mut();
 
-    let spectrum = shared.spectrum_avg.lock().map(|s| s.to_vec()).unwrap_or_default();
+    // Non-blocking, matching `process()`'s own `try_lock()` pattern on these
+    // same mutexes (see lib.rs) - the GUI timer must never block waiting on
+    // the realtime audio thread. On contention, keep last tick's value
+    // (`acc.ui.own_spectrum` / `t.masking_cache` below) rather than flashing
+    // to empty; a skipped tick at 33ms is invisible, a blocked GUI thread is not.
+    let spectrum = shared.spectrum_avg.try_lock().ok().map(|s| s.to_vec());
     let lists = read_resonance(instance_key);
-    let masking_cache = shared.masking_map.lock().map(|m| m.to_vec()).unwrap_or_default();
+    let masking_cache = shared.masking_map.try_lock().ok().map(|m| m.to_vec());
     let masking_top = read_masking(instance_key);
 
     for &(bin, score) in &lists.own {
@@ -139,7 +144,9 @@ fn tick(
         None
     };
 
-    acc.ui.own_spectrum = spectrum;
+    if let Some(spectrum) = spectrum {
+        acc.ui.own_spectrum = spectrum;
+    }
     if mode != 0 {
         let now_ms = shared_analysis::shm::now_ms();
         let slot = shared.shm_slot.load(Ordering::Acquire);
@@ -167,7 +174,9 @@ fn tick(
         t.relays = acc.ui.relays.clone();
         t.resonance_cache_own = lists.own;
         t.resonance_cache_relay = lists.relay;
-        t.masking_cache = masking_cache;
+        if let Some(masking_cache) = masking_cache {
+            t.masking_cache = masking_cache;
+        }
         if let Some((rt, mt)) = new_texts {
             t.resonance_text = rt;
             t.masking_text = mt;
@@ -185,9 +194,9 @@ fn tick(
         } else if t.snap_blink == 1 {
             if let Some(ref vp) = acc.vault_path {
                 if !vp.is_empty() {
-                    let stereo = shared.snap_stereo_snap.lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
-                    let mono = shared.snap_mono_snap.lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
-                    let delta = shared.snap_delta_snap.lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
+                    let stereo = shared.snap_stereo_snap.try_lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
+                    let mono = shared.snap_mono_snap.try_lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
+                    let delta = shared.snap_delta_snap.try_lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
                     let sr = shared.sample_rate.load(Ordering::Relaxed);
                     let md = snap_markdown(&stereo, &mono, &delta, &acc.ui.relays, phase_correlation, peak_l, peak_r, sr);
                     let fname = snap_filename(vp);
