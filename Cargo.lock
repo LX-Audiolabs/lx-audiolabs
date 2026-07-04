@@ -3177,8 +3177,6 @@ dependencies = [
 [[package]]
 name = "truce-iced"
 version = "1.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "daf380f46a5d32c134575731aa23e2d7f4a3e2fc8e457a91ff7998d759ec33a1"
 dependencies = [
  "baseview-truce",
  "iced_core",

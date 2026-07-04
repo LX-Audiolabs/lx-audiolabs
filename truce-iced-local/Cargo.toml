@@ -13,7 +13,7 @@
 edition = "2024"
 rust-version = "1.92"
 name = "truce-iced"
-version = "1.0.4"
+version = "1.0.5"
 build = false
 autolib = false
 autobins = false
@@ -70,20 +70,20 @@ version = "0.4"
 version = "0.5"
 
 [dependencies.truce-core]
-version = "1.0.4"
+version = "1.0.5"
 
 [dependencies.truce-gui]
-version = "1.0.4"
+version = "1.0.5"
 default-features = false
 
 [dependencies.truce-params]
-version = "1.0.4"
+version = "1.0.5"
 
 [dependencies.ttf-parser]
 version = "0.25"
 
 [target.'cfg(not(target_os = "ios"))'.dependencies.baseview]
-version = "0.1.1-truce.11"
+version = "0.1.1-truce.12"
 package = "baseview-truce"
 
 [target.'cfg(not(target_os = "ios"))'.dependencies.keyboard-types]

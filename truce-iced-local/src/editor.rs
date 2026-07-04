@@ -9,16 +9,13 @@
 use std::sync::Arc;
 
 use crate::iced::{Event, Size};
-use iced_wgpu::wgpu;
-use truce_core::editor::{Editor, PluginContext};
+use truce_core::editor::{Editor, PluginContext, ResizeCorrector};
 use truce_gui::EditorScale;
 use truce_gui::layout::GridLayout;
 use truce_params::Params;
 
 use crate::param_cache::ParamCache;
-use crate::runtime::{
-    AutoPlugin, IcedPlugin, IcedProgram, IcedRuntime, editor_backends, panic_message,
-};
+use crate::runtime::{AutoPlugin, IcedPlugin, IcedProgram, IcedRuntime, panic_message};
 
 // IcedEditor - main entry point, implements truce_core::Editor
 
@@ -27,6 +24,10 @@ use crate::runtime::{
 /// Type parameters:
 /// - `P` - the plugin's `Params` type
 /// - `M` - the plugin's `IcedPlugin` implementation
+// Several independent one-shot flags (scale mode + host-scale-seen, plus
+// the resize/size flags below). They're genuinely distinct booleans, not
+// a state enum in disguise, so grouping them would obscure more than help.
+#[allow(clippy::struct_excessive_bools)]
 pub struct IcedEditor<P, M>
 where
     P: Params + 'static,
@@ -40,6 +41,15 @@ where
     /// `tick()` reads it and reconfigures the surface/viewport when it
     /// diverges from `last_applied_scale`.
     scale: EditorScale,
+    /// Standalone hosts set this (via `set_uses_system_scale`) so the
+    /// editor honors the desktop `Xft.dpi` scale on Linux; plugins leave
+    /// it false and drive scale from the host instead. See
+    /// [`truce_gui::platform::editor_window_scale`]. No effect off Linux.
+    use_system_scale: bool,
+    /// Whether the host announced a content scale via `set_scale_factor`.
+    /// On Linux this gates whether an embedded editor trusts `scale`
+    /// (host-announced) or defaults to 1.0.
+    host_scale_set: bool,
     font: Option<&'static [u8]>,
     /// Constructor closure for the plugin model. Each constructor
     /// stores a closure that produces an `M` of the correct concrete
@@ -149,6 +159,8 @@ impl<P: Params + 'static> IcedEditor<P, AutoPlugin> {
             params,
             size,
             scale: EditorScale::new(truce_gui::backing_scale()),
+            use_system_scale: false,
+            host_scale_set: false,
             font: None,
             make_plugin,
             meter_ids,
@@ -171,6 +183,8 @@ impl<P: Params + 'static, M: IcedPlugin<P> + 'static> IcedEditor<P, M> {
             params,
             size,
             scale: EditorScale::new(truce_gui::backing_scale()),
+            use_system_scale: false,
+            host_scale_set: false,
             font: None,
             make_plugin: Arc::new(|p| M::new(p)),
             meter_ids: Vec::new(),
@@ -280,6 +294,19 @@ struct IcedBaseviewHandler<P: Params + 'static, M: IcedPlugin<P>> {
     /// borrowing `runtime`.
     scale: EditorScale,
     last_cursor: Option<baseview::MouseCursor>,
+    /// Constraint copy from the parent `IcedEditor`, applied to
+    /// host-driven `Resized` events that bypassed the format's
+    /// negotiation hooks (Linux hosts resizing the embed window
+    /// directly), plus the corrective push-back guard.
+    min_size: (u32, u32),
+    max_size: (u32, u32),
+    aspect_ratio: Option<(u32, u32)>,
+    resize_corrector: ResizeCorrector,
+    /// Corrective size to push back to the host, queued by the
+    /// `Resized` handler and issued from `on_frame` - never from
+    /// inside the host's own resize dispatch.
+    #[cfg(not(target_os = "linux"))]
+    pending_correct: Option<(u32, u32)>,
 }
 
 // The explicit `Idle | None => Default` arm documents iced's known
@@ -301,6 +328,21 @@ fn iced_interaction_to_cursor(
         Interaction::ResizingHorizontally => baseview::MouseCursor::EwResize,
         Interaction::ResizingVertically => baseview::MouseCursor::NsResize,
         _ => baseview::MouseCursor::Default,
+    }
+}
+
+// All buttons forward to iced, not just Left - widgets rely on
+// right-click (reset to default) and middle-click. `None` skips buttons
+// iced has no variant for.
+fn convert_mouse_button(button: baseview::MouseButton) -> Option<crate::iced::mouse::Button> {
+    use crate::iced::mouse::Button;
+    match button {
+        baseview::MouseButton::Left => Some(Button::Left),
+        baseview::MouseButton::Right => Some(Button::Right),
+        baseview::MouseButton::Middle => Some(Button::Middle),
+        baseview::MouseButton::Back => Some(Button::Back),
+        baseview::MouseButton::Forward => Some(Button::Forward),
+        baseview::MouseButton::Other(_) => None,
     }
 }
 
@@ -344,6 +386,14 @@ impl<P: Params + 'static, M: IcedPlugin<P>> baseview::WindowHandler for IcedBase
                 log::warn!("iced device-loss recovery: rebuilt ok={ok}");
                 return;
             }
+            // Issue a queued corrective resize (see `pending_correct`)
+            // now that we're outside the host's resize dispatch.
+            #[cfg(not(target_os = "linux"))]
+            if let Some((rw, rh)) = self.pending_correct.take()
+                && let Some(ref program) = self.runtime.program
+            {
+                let _ = program.context.request_resize(rw, rh);
+            }
             // Pick up host-driven `set_size` requests since the last
             // frame. Without this the wgpu surface would be at the new
             // size but the platform window stays at the original
@@ -364,21 +414,17 @@ impl<P: Params + 'static, M: IcedPlugin<P>> baseview::WindowHandler for IcedBase
                     // even if the idle gate sees no other change.
                     self.runtime.force_render = true;
                     let scale = self.scale.get();
+                    let pw = truce_gui::to_physical_px(new_w, scale);
+                    let ph = truce_gui::to_physical_px(new_h, scale);
                     if let Some(ref mut render) = self.runtime.render {
-                        let pw = truce_gui::to_physical_px(new_w, scale);
-                        let ph = truce_gui::to_physical_px(new_h, scale);
                         #[allow(clippy::cast_possible_truncation)]
                         let scale_f32 = scale as f32;
                         render.viewport = iced_graphics::Viewport::with_physical_size(
                             Size::new(pw, ph),
                             scale_f32,
                         );
-                        render.surface_config.width = pw;
-                        render.surface_config.height = ph;
-                        render
-                            .surface
-                            .configure(&render.device, &render.surface_config);
                     }
+                    self.runtime.reconfigure_surface_px(pw, ph);
                 }
             }
             self.runtime.tick();
@@ -430,10 +476,10 @@ impl<P: Params + 'static, M: IcedPlugin<P>> baseview::WindowHandler for IcedBase
                                 .pending_events
                                 .push(Event::Mouse(crate::iced::mouse::Event::CursorLeft));
                         }
-                        baseview::MouseEvent::ButtonPressed {
-                            button,
-                            ..
-                        } => {
+                        baseview::MouseEvent::ButtonPressed { button, .. } => {
+                            let Some(button) = convert_mouse_button(button) else {
+                                return baseview::EventStatus::Ignored;
+                            };
                             // WS_CHILD plugin windows don't receive WM_KEYDOWN
                             // until focused; baseview doesn't SetFocus on click,
                             // so we do it here. Without this, text-edit widgets
@@ -444,28 +490,16 @@ impl<P: Params + 'static, M: IcedPlugin<P>> baseview::WindowHandler for IcedBase
                                     window.focus();
                                 }
                             }
-                            let iced_button = match button {
-                                baseview::MouseButton::Left   => crate::iced::mouse::Button::Left,
-                                baseview::MouseButton::Right  => crate::iced::mouse::Button::Right,
-                                baseview::MouseButton::Middle => crate::iced::mouse::Button::Middle,
-                                _ => return baseview::EventStatus::Ignored,
-                            };
                             runtime.pending_events.push(Event::Mouse(
-                                crate::iced::mouse::Event::ButtonPressed(iced_button),
+                                crate::iced::mouse::Event::ButtonPressed(button),
                             ));
                         }
-                        baseview::MouseEvent::ButtonReleased {
-                            button,
-                            ..
-                        } => {
-                            let iced_button = match button {
-                                baseview::MouseButton::Left   => crate::iced::mouse::Button::Left,
-                                baseview::MouseButton::Right  => crate::iced::mouse::Button::Right,
-                                baseview::MouseButton::Middle => crate::iced::mouse::Button::Middle,
-                                _ => return baseview::EventStatus::Ignored,
+                        baseview::MouseEvent::ButtonReleased { button, .. } => {
+                            let Some(button) = convert_mouse_button(button) else {
+                                return baseview::EventStatus::Ignored;
                             };
                             runtime.pending_events.push(Event::Mouse(
-                                crate::iced::mouse::Event::ButtonReleased(iced_button),
+                                crate::iced::mouse::Event::ButtonReleased(button),
                             ));
                         }
                         baseview::MouseEvent::WheelScrolled { delta, .. } => {
@@ -495,20 +529,71 @@ impl<P: Params + 'static, M: IcedPlugin<P>> baseview::WindowHandler for IcedBase
                     // the reconfigure inline below.
                     runtime.scale.set(info.scale());
                     runtime.last_applied_scale = info.scale();
-                    if let Some(ref mut render) = runtime.render {
+                    // A host that resized the embed window directly never
+                    // ran the format's constraint preflight - fit here,
+                    // push the corrected size back to the host, and queue
+                    // the fitted size through the pending cell so
+                    // `on_frame` counter-resizes the child window.
+                    {
+                        let logical = info.logical_size();
+                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                        let (lw, lh) =
+                            (logical.width.round() as u32, logical.height.round() as u32);
+                        let ((fw, fh), correct) = self.resize_corrector.fit(
+                            lw,
+                            lh,
+                            self.min_size,
+                            self.max_size,
+                            self.aspect_ratio,
+                        );
+                        if let Some((rw, rh)) = correct {
+                            // On Linux, hosts that bypass size negotiation
+                            // (Bitwig) ignore this request and react by
+                            // *growing* the embed window - a resize loop.
+                            // Counter-resize our own child to the fitted size
+                            // but never ask the host to resize its frame.
+                            // mac/windows honor it (and negotiate via
+                            // `checkSizeConstraint`) anyway.
+                            // Deferred to `on_frame`: issued inline, this
+                            // re-enters the host's own resize dispatch
+                            // (VST3 forbids `resizeView` inside `onSize`;
+                            // Ableton hangs on it).
+                            // Never push back on Linux OR Windows - see
+                            // the egui editor: Bitwig grows the window in
+                            // response (loop) and REAPER re-asserts a
+                            // maximized FX window forever. Content clamps
+                            // and letterboxes instead; macOS keeps the
+                            // push-back.
+                            #[cfg(target_os = "macos")]
+                            {
+                                self.pending_correct = Some((rw, rh));
+                            }
+                            #[cfg(not(target_os = "macos"))]
+                            let _ = (rw, rh);
+                            self.pending_size.store(
+                                (u64::from(fw) << 32) | u64::from(fh),
+                                std::sync::atomic::Ordering::Release,
+                            );
+                        }
+                    }
+                    {
                         let pw = info.physical_size().width;
                         let ph = info.physical_size().height;
-                        render.surface_config.width = pw.max(1);
-                        render.surface_config.height = ph.max(1);
-                        render
-                            .surface
-                            .configure(&render.device, &render.surface_config);
-                        #[allow(clippy::cast_possible_truncation)] // display DPI; bounded
-                        let scale_f32 = info.scale() as f32;
-                        render.viewport = iced_graphics::Viewport::with_physical_size(
-                            Size::new(pw, ph),
-                            scale_f32,
-                        );
+                        if let Some(ref mut render) = runtime.render {
+                            #[allow(clippy::cast_possible_truncation)] // display DPI; bounded
+                            let scale_f32 = info.scale() as f32;
+                            render.viewport = iced_graphics::Viewport::with_physical_size(
+                                Size::new(pw, ph),
+                                scale_f32,
+                            );
+                        }
+                        // Routed through the pump's client: on Windows the
+                        // reconfigure is queued latest-wins to the pump
+                        // thread, so this inline call can no longer flood
+                        // the driver with buffer destroy/create work
+                        // mid-drag (previously hung the AMD driver in
+                        // `NtGdiDdDDIDestroyAllocation2`).
+                        runtime.reconfigure_surface_px(pw, ph);
                     }
                     // The reconfigured surface must be repainted, but
                     // this path deliberately leaves `tick()`'s scale diff
@@ -554,6 +639,21 @@ impl<P: Params + 'static, M: IcedPlugin<P>> Editor for IcedEditor<P, M> {
         self.pending_size
             .store(0, std::sync::atomic::Ordering::Relaxed);
 
+        // Pick the baseview scale policy. On Linux an embedded plugin
+        // follows the host's scale (default 1.0) rather than the desktop
+        // Xft.dpi, which a non-DPI-aware host (Bitwig) doesn't share; the
+        // standalone and every macOS/Windows path keep SystemScaleFactor.
+        let scale_policy = if let Some(s) = truce_gui::platform::editor_window_scale(
+            self.use_system_scale,
+            self.host_scale_set,
+            self.scale.get(),
+        ) {
+            self.scale.set(s);
+            baseview::WindowScalePolicy::ScaleFactor(s)
+        } else {
+            baseview::WindowScalePolicy::SystemScaleFactor
+        };
+
         // Everything the handler needs is moved into the builder
         // closure, which baseview runs on the handler's own thread. The
         // plugin model + `IcedRuntime` are built there so the handler
@@ -570,13 +670,16 @@ impl<P: Params + 'static, M: IcedPlugin<P>> Editor for IcedEditor<P, M> {
         let scale = self.scale.clone();
         let meter_ids = self.meter_ids.clone();
         let pending_size = Arc::clone(&self.pending_size);
+        let min_size = self.min_size;
+        let max_size = self.max_size;
+        let aspect_ratio = self.aspect_ratio;
         let typed_ctx = context.with_params(self.params.clone());
 
         let parent_wrapper = crate::platform::ParentWindow(parent);
         let options = baseview::WindowOpenOptions {
             title: String::from("truce-iced"),
             size: baseview::Size::new(f64::from(w), f64::from(h)),
-            scale: baseview::WindowScalePolicy::SystemScaleFactor,
+            scale: scale_policy,
         };
 
         let window = baseview::Window::open_parented(
@@ -599,13 +702,12 @@ impl<P: Params + 'static, M: IcedPlugin<P>> Editor for IcedEditor<P, M> {
                 };
                 let mut runtime = IcedRuntime::new((w, h), scale.clone(), font, program);
 
-                let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-                    backends: editor_backends(),
-                    ..Default::default()
-                });
-                let surface = unsafe { crate::platform::create_wgpu_surface(&instance, window) };
-                if let Some(surface) = surface {
-                    runtime.init_render(instance, surface);
+                // GPU init + every blocking swapchain call run on the
+                // surface pump (off this thread on Windows, inline
+                // elsewhere); `tick()` adopts the pipeline when init
+                // lands. On failure the editor stays blank, host alive.
+                if !runtime.spawn_pump(window) {
+                    log::error!("truce-iced: failed to spawn surface pump; editor disabled");
                 }
 
                 IcedBaseviewHandler::<P, M> {
@@ -613,6 +715,12 @@ impl<P: Params + 'static, M: IcedPlugin<P>> Editor for IcedEditor<P, M> {
                     pending_size,
                     scale,
                     last_cursor: None,
+                    min_size,
+                    max_size,
+                    aspect_ratio,
+                    resize_corrector: ResizeCorrector::default(),
+                    #[cfg(not(target_os = "linux"))]
+                    pending_correct: None,
                 }
             },
         );
@@ -707,6 +815,11 @@ impl<P: Params + 'static, M: IcedPlugin<P>> Editor for IcedEditor<P, M> {
         // Write to the shared cell; the runtime's `tick()` picks up the
         // change on its next frame and reconfigures the surface and
         // viewport.
+        self.host_scale_set = true;
         self.scale.set(factor);
+    }
+
+    fn set_uses_system_scale(&mut self, yes: bool) {
+        self.use_system_scale = yes;
     }
 }
