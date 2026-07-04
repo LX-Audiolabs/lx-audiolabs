@@ -3219,8 +3219,6 @@ dependencies = [
 [[package]]
 name = "truce-params"
 version = "1.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfa4dc425657dc0e19ee2e31b1d667f3574b736ef5038b9f785a119dd5e6f393"
 dependencies = [
  "bitflags 2.13.0",
 ]
