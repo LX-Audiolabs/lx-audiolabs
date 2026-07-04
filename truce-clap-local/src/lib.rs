@@ -1515,6 +1515,24 @@ fn make_params_extension<P: PluginExport>() -> clap_plugin_params {
 // Extension: remote_controls
 // ---------------------------------------------------------------------------
 
+/// Splits a `ParamInfo::group` into a CLAP remote-controls
+/// `(section_name, page_name)` pair on its last `/`, mirroring the
+/// convention CLAP's own `clap_param_info::module` path already uses
+/// ("/" as a tree separator). `"EQ/Lo Shelf"` becomes section `"EQ"`,
+/// page `"Lo Shelf"` - a host can offer one "EQ" button that cycles
+/// through each band's page (see `clap.remote-controls`'s own
+/// `[section:osc]` / `[name:osc1]` example). Splitting on the *last*
+/// `/` (not the first) keeps section names that themselves contain a
+/// `/` intact, e.g. `"M/S EQ/Mid"` becomes section `"M/S EQ"`, page
+/// `"Mid"` - not section `"M"`, page `"S EQ/Mid"`. A group with no `/`
+/// is its own single-page section, e.g. `"Compressor"` stays as-is.
+fn split_group(group: &str) -> (&str, &str) {
+    match group.rsplit_once('/') {
+        Some((section, page)) => (section, page),
+        None => (group, group),
+    }
+}
+
 /// Chunks a plugin's params into pages of at most
 /// `CLAP_REMOTE_CONTROLS_COUNT` (8), one run of pages per distinct
 /// non-empty `ParamInfo::group`. Ungrouped params (`group == ""`)
@@ -1585,12 +1603,14 @@ unsafe extern "C" fn remote_controls_get<P: PluginExport>(
             .filter(|page| page.0 == group)
             .count();
 
+        let (section_name, page_name) = split_group(group);
+
         let out = &mut *out;
         out.section_name = [0; CLAP_NAME_SIZE];
-        copy_str_to_buf(&mut out.section_name, group);
+        copy_str_to_buf(&mut out.section_name, section_name);
         out.page_id = remote_controls_page_id(group, chunk_index);
         out.page_name = [0; CLAP_NAME_SIZE];
-        copy_str_to_buf(&mut out.page_name, group);
+        copy_str_to_buf(&mut out.page_name, page_name);
         out.param_ids = [CLAP_INVALID_ID; CLAP_REMOTE_CONTROLS_COUNT];
         for (slot, &id) in out.param_ids.iter_mut().zip(ids.iter()) {
             *slot = id;

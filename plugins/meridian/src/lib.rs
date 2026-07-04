@@ -78,71 +78,71 @@ fn inflate_shape(x: f32, curve: f32) -> f32 {
 #[derive(Params)]
 pub struct MeridianParams {
     // HPF / LPF
-    #[param(name = "Low Cut", default = 2.0, range = "log(2.0, 2000.0)", unit = "Hz")]
+    #[param(name = "Low Cut", default = 2.0, range = "log(2.0, 2000.0)", unit = "Hz", group = "Filter")]
     pub hpf_freq: FloatParam,
-    #[param(name = "High Cut", default = 35000.0, range = "log(200.0, 35000.0)", unit = "Hz")]
+    #[param(name = "High Cut", default = 35000.0, range = "log(200.0, 35000.0)", unit = "Hz", group = "Filter")]
     pub lpf_freq: FloatParam,
-    #[param(name = "Cut Slope", default = 0, range = "discrete(0, 1)")]
+    #[param(name = "Cut Slope", default = 0, range = "discrete(0, 1)", group = "Filter")]
     pub cut_slope: IntParam,
 
     // Bass EQ shelf
-    #[param(name = "Lo Shelf Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "EQ")]
+    #[param(name = "Lo Shelf Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "EQ/Lo Shelf")]
     pub bass_gain: FloatParam,
-    #[param(name = "Lo Shelf Slope", default = 1, range = "discrete(0, 2)")]
+    #[param(name = "Lo Shelf Slope", default = 1, range = "discrete(0, 2)", group = "EQ/Lo Shelf")]
     pub bass_slope: IntParam,
 
     // Lo-Mid EQ
-    #[param(name = "Lo-Mid Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "EQ")]
+    #[param(name = "Lo-Mid Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "EQ/Lo-Mid")]
     pub lo_mid_gain: FloatParam,
-    #[param(name = "Lo-Mid Slope", default = 1, range = "discrete(0, 2)")]
+    #[param(name = "Lo-Mid Slope", default = 1, range = "discrete(0, 2)", group = "EQ/Lo-Mid")]
     pub lo_mid_slope: IntParam,
 
     // Mid EQ
-    #[param(name = "Mid Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "EQ")]
+    #[param(name = "Mid Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "EQ/Mid")]
     pub mid_gain: FloatParam,
-    #[param(name = "Mid Slope", default = 1, range = "discrete(0, 2)")]
+    #[param(name = "Mid Slope", default = 1, range = "discrete(0, 2)", group = "EQ/Mid")]
     pub mid_slope: IntParam,
 
     // High EQ
-    #[param(name = "Hi-Mid Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "EQ")]
+    #[param(name = "Hi-Mid Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "EQ/Hi-Mid")]
     pub high_gain: FloatParam,
-    #[param(name = "Hi-Mid Slope", default = 1, range = "discrete(0, 2)")]
+    #[param(name = "Hi-Mid Slope", default = 1, range = "discrete(0, 2)", group = "EQ/Hi-Mid")]
     pub high_slope: IntParam,
 
     // Excite (high shelf)
-    #[param(name = "Hi Shelf Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "EQ")]
+    #[param(name = "Hi Shelf Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "EQ/Hi Shelf")]
     pub excite_gain: FloatParam,
-    #[param(name = "Hi Shelf Slope", default = 1, range = "discrete(0, 2)")]
+    #[param(name = "Hi Shelf Slope", default = 1, range = "discrete(0, 2)", group = "EQ/Hi Shelf")]
     pub excite_slope: IntParam,
 
     // EQ band frequencies
-    #[param(name = "Lo Shelf Freq", default = 80.0, range = "log(40.0, 200.0)", unit = "Hz")]
+    #[param(name = "Lo Shelf Freq", default = 80.0, range = "log(40.0, 200.0)", unit = "Hz", group = "EQ/Lo Shelf")]
     pub eq_freq_1: FloatParam,
-    #[param(name = "Lo-Mid Freq", default = 300.0, range = "log(150.0, 800.0)", unit = "Hz")]
+    #[param(name = "Lo-Mid Freq", default = 300.0, range = "log(150.0, 800.0)", unit = "Hz", group = "EQ/Lo-Mid")]
     pub eq_freq_2: FloatParam,
-    #[param(name = "Mid Freq", default = 1000.0, range = "log(500.0, 3000.0)", unit = "Hz")]
+    #[param(name = "Mid Freq", default = 1000.0, range = "log(500.0, 3000.0)", unit = "Hz", group = "EQ/Mid")]
     pub eq_freq_3: FloatParam,
-    #[param(name = "Hi-Mid Freq", default = 4000.0, range = "log(2000.0, 10000.0)", unit = "Hz")]
+    #[param(name = "Hi-Mid Freq", default = 4000.0, range = "log(2000.0, 10000.0)", unit = "Hz", group = "EQ/Hi-Mid")]
     pub eq_freq_4: FloatParam,
-    #[param(name = "Hi Shelf Freq", default = 12000.0, range = "log(6000.0, 20000.0)", unit = "Hz")]
+    #[param(name = "Hi Shelf Freq", default = 12000.0, range = "log(6000.0, 20000.0)", unit = "Hz", group = "EQ/Hi Shelf")]
     pub eq_freq_5: FloatParam,
 
     // Tilt EQ
-    #[param(name = "Tilt", default = 0.0, range = "linear(-1.5, 1.5)", unit = "dB")]
+    #[param(name = "Tilt", default = 0.0, range = "linear(-1.5, 1.5)", unit = "dB", group = "Tilt")]
     pub tilt_gain: FloatParam,
 
     // Warmth (tube saturation)
-    #[param(name = "Warmth Drive", default = 0.0, range = "linear(0.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "Warmth Drive", default = 0.0, range = "linear(0.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "Saturator")]
     pub warmth_drive: FloatParam,
-    #[param(name = "Warmth Mix", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)")]
+    #[param(name = "Warmth Mix", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)", group = "Saturator")]
     pub warmth_mix: FloatParam,
 
     // Exciter (HF saturation)
-    #[param(name = "Excite Amount", default = 0.0, range = "linear(0.0, 30.0)", unit = "%", smooth = "linear(20)")]
+    #[param(name = "Excite Amount", default = 0.0, range = "linear(0.0, 30.0)", unit = "%", smooth = "linear(20)", group = "Exciter")]
     pub excite_amount: FloatParam,
-    #[param(name = "Excite Blend", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)")]
+    #[param(name = "Excite Blend", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)", group = "Exciter")]
     pub excite_blend: FloatParam,
-    #[param(name = "Excite Freq", default = 8000.0, range = "log(6000.0, 12000.0)", unit = "Hz")]
+    #[param(name = "Excite Freq", default = 8000.0, range = "log(6000.0, 12000.0)", unit = "Hz", group = "Exciter")]
     pub excite_freq: FloatParam,
 
     // Compressor
@@ -160,31 +160,31 @@ pub struct MeridianParams {
     pub comp_makeup: FloatParam,
 
     // Inflate (Oxford-Inflator-inspired loudness/density waveshaper)
-    #[param(name = "Inflate Effect", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)")]
+    #[param(name = "Inflate Effect", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)", group = "Inflate")]
     pub inflate_effect: FloatParam,
-    #[param(name = "Inflate Curve", default = 0.0, range = "linear(-50.0, 50.0)", smooth = "linear(20)")]
+    #[param(name = "Inflate Curve", default = 0.0, range = "linear(-50.0, 50.0)", smooth = "linear(20)", group = "Inflate")]
     pub inflate_curve: FloatParam,
-    #[param(name = "Inflate Band Split", default = 0)]
+    #[param(name = "Inflate Band Split", default = 0, group = "Inflate")]
     pub inflate_band_split: BoolParam,
-    #[param(name = "Inflate Clip", default = 0)]
+    #[param(name = "Inflate Clip", default = 0, group = "Inflate")]
     pub inflate_clip: BoolParam,
 
     // Stereo Width
-    #[param(name = "Stereo Width", default = 100.0, range = "linear(0.0, 200.0)", unit = "%", smooth = "linear(20)")]
+    #[param(name = "Stereo Width", default = 100.0, range = "linear(0.0, 200.0)", unit = "%", smooth = "linear(20)", group = "Stereo/Routing")]
     pub stereo_width: FloatParam,
     // Pan
-    #[param(name = "Pan", default = 0.0, range = "linear(-1.0, 1.0)", smooth = "linear(20)")]
+    #[param(name = "Pan", default = 0.0, range = "linear(-1.0, 1.0)", smooth = "linear(20)", group = "Stereo/Routing")]
     pub pan: FloatParam,
     // Output Gain
-    #[param(name = "Output Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "Output Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "Stereo/Routing")]
     pub output_gain: FloatParam,
 
     // States
-    #[param(name = "Mono Sum", default = 0)]
+    #[param(name = "Mono Sum", default = 0, group = "Stereo/Routing")]
     pub mono_active: BoolParam,
-    #[param(name = "Delta Diff", default = 0)]
+    #[param(name = "Delta Diff", default = 0, group = "Stereo/Routing")]
     pub delta_active: BoolParam,
-    #[param(name = "Bypass", default = 0)]
+    #[param(name = "Bypass", default = 0, group = "Stereo/Routing")]
     pub bypass_active: BoolParam,
 
     #[skip]
