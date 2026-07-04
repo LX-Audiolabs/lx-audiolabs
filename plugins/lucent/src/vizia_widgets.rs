@@ -41,6 +41,9 @@ pub struct KnobView {
     drag_start_y: f32,
     drag_start_norm: f32,
     last_click: Option<Instant>,
+    /// `DrawContext` has no public hover query (unlike `EventContext`), so
+    /// hover state is tracked here from `MouseEnter`/`MouseLeave` instead.
+    hovered: bool,
     on_gesture: Box<dyn Fn(&mut EventContext, Gesture)>,
 }
 
@@ -65,6 +68,7 @@ impl KnobView {
             drag_start_y: 0.0,
             drag_start_norm: 0.0,
             last_click: None,
+            hovered: false,
             on_gesture: Box::new(on_gesture),
         }
         .build(cx, |_| {})
@@ -74,7 +78,7 @@ impl KnobView {
 fn knob_arc(canvas: &vg::Canvas, cx: f32, cy: f32, inner_r: f32, outer_r: f32, a_start: f32, a_end: f32, color: vg::Color) {
     const N: usize = 48;
     let da = (a_end - a_start) / N as f32;
-    let mut path = vg::Path::new();
+    let mut path = vg::PathBuilder::new();
     path.move_to((cx + outer_r * a_start.cos(), cy + outer_r * a_start.sin()));
     for i in 1..=N {
         let a = a_start + da * i as f32;
@@ -88,7 +92,7 @@ fn knob_arc(canvas: &vg::Canvas, cx: f32, cy: f32, inner_r: f32, outer_r: f32, a
     let mut paint = vg::Paint::default();
     paint.set_anti_alias(true);
     paint.set_color(color);
-    canvas.draw_path(&path, &paint);
+    canvas.draw_path(&path.detach(), &paint);
 }
 
 fn rgba(r: f32, g: f32, b: f32, a: f32) -> vg::Color {
@@ -154,6 +158,14 @@ impl View for KnobView {
                     cx.needs_redraw();
                 }
             }
+            WindowEvent::MouseEnter => {
+                self.hovered = true;
+                cx.needs_redraw();
+            }
+            WindowEvent::MouseLeave => {
+                self.hovered = false;
+                cx.needs_redraw();
+            }
             _ => {}
         });
     }
@@ -207,7 +219,7 @@ impl View for KnobView {
         dot.set_color(vg::Color::WHITE);
         canvas.draw_circle((kcx + ind_r * a_ind.cos(), kcy + ind_r * a_ind.sin()), 2.5, &dot);
 
-        if cx.hovered() == cx.current() {
+        if self.hovered {
             let mut hover_ring = vg::Paint::default();
             hover_ring.set_anti_alias(true);
             hover_ring.set_style(vg::PaintStyle::Stroke);
