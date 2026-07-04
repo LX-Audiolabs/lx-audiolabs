@@ -6,7 +6,7 @@ au_manufacturer = "LxAL"
 
 [[plugin]]
 name = "Lucent Relay"
-bundle_id = "lucent-relay"
+bundle_id = "lucentrelay"
 crate = "lucent-relay"
 category = "effect"
 fourcc = "LRly"

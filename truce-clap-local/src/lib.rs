@@ -26,28 +26,34 @@ pub mod presets;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::marker::PhantomData;
 use std::mem::transmute;
+use std::path::Path;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use clap_sys::events::{
     CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_IS_LIVE, CLAP_EVENT_MIDI, CLAP_EVENT_MIDI_SYSEX,
-    CLAP_EVENT_NOTE_CHOKE, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_GESTURE_BEGIN,
-    CLAP_EVENT_PARAM_GESTURE_END, CLAP_EVENT_PARAM_MOD, CLAP_EVENT_PARAM_VALUE,
-    CLAP_EVENT_TRANSPORT, CLAP_TRANSPORT_HAS_BEATS_TIMELINE, CLAP_TRANSPORT_HAS_SECONDS_TIMELINE,
-    CLAP_TRANSPORT_HAS_TEMPO, CLAP_TRANSPORT_HAS_TIME_SIGNATURE, CLAP_TRANSPORT_IS_LOOP_ACTIVE,
-    CLAP_TRANSPORT_IS_PLAYING, CLAP_TRANSPORT_IS_RECORDING, clap_event_header, clap_event_midi,
-    clap_event_midi_sysex, clap_event_note, clap_event_param_gesture, clap_event_param_value,
-    clap_event_transport, clap_input_events, clap_output_events,
+    CLAP_EVENT_MIDI2, CLAP_EVENT_NOTE_CHOKE, CLAP_EVENT_NOTE_EXPRESSION, CLAP_EVENT_NOTE_OFF,
+    CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_GESTURE_BEGIN, CLAP_EVENT_PARAM_GESTURE_END,
+    CLAP_EVENT_PARAM_MOD, CLAP_EVENT_PARAM_VALUE, CLAP_EVENT_TRANSPORT,
+    CLAP_NOTE_EXPRESSION_BRIGHTNESS, CLAP_NOTE_EXPRESSION_EXPRESSION, CLAP_NOTE_EXPRESSION_PAN,
+    CLAP_NOTE_EXPRESSION_PRESSURE, CLAP_NOTE_EXPRESSION_TUNING, CLAP_NOTE_EXPRESSION_VIBRATO,
+    CLAP_NOTE_EXPRESSION_VOLUME, CLAP_TRANSPORT_HAS_BEATS_TIMELINE,
+    CLAP_TRANSPORT_HAS_SECONDS_TIMELINE, CLAP_TRANSPORT_HAS_TEMPO,
+    CLAP_TRANSPORT_HAS_TIME_SIGNATURE, CLAP_TRANSPORT_IS_LOOP_ACTIVE, CLAP_TRANSPORT_IS_PLAYING,
+    CLAP_TRANSPORT_IS_RECORDING, clap_event_header, clap_event_midi, clap_event_midi_sysex,
+    clap_event_midi2, clap_event_note, clap_event_note_expression, clap_event_param_gesture,
+    clap_event_param_value, clap_event_transport, clap_input_events, clap_output_events,
 };
 use clap_sys::ext::audio_ports::{
-    CLAP_AUDIO_PORT_IS_MAIN, CLAP_EXT_AUDIO_PORTS, CLAP_PORT_MONO, CLAP_PORT_STEREO,
-    clap_audio_port_info, clap_plugin_audio_ports,
+    CLAP_AUDIO_PORT_IS_MAIN, CLAP_AUDIO_PORT_PREFERS_64BITS, CLAP_AUDIO_PORT_SUPPORTS_64BITS,
+    CLAP_EXT_AUDIO_PORTS, CLAP_PORT_MONO, CLAP_PORT_STEREO, clap_audio_port_info,
+    clap_plugin_audio_ports,
 };
 use clap_sys::ext::latency::{CLAP_EXT_LATENCY, clap_plugin_latency};
 use clap_sys::ext::note_ports::{
-    CLAP_EXT_NOTE_PORTS, CLAP_NOTE_DIALECT_CLAP, CLAP_NOTE_DIALECT_MIDI, clap_note_port_info,
-    clap_plugin_note_ports,
+    CLAP_EXT_NOTE_PORTS, CLAP_NOTE_DIALECT_CLAP, CLAP_NOTE_DIALECT_MIDI, CLAP_NOTE_DIALECT_MIDI2,
+    clap_note_port_info, clap_plugin_note_ports,
 };
 use clap_sys::ext::params::{
     CLAP_EXT_PARAMS, CLAP_PARAM_IS_AUTOMATABLE, CLAP_PARAM_IS_BYPASS, CLAP_PARAM_IS_ENUM,
@@ -84,7 +90,7 @@ use clap_sys::stream::{clap_istream, clap_ostream};
 use clap_sys::string_sizes::{CLAP_NAME_SIZE, CLAP_PATH_SIZE};
 use clap_sys::version::CLAP_VERSION;
 
-use truce_core::Float;
+use truce_core::TransportSlot;
 use truce_core::buffer::AudioBuffer;
 use truce_core::bus::ChannelConfig;
 use truce_core::cast::{len_u32, size_of_u32};
@@ -94,12 +100,23 @@ use truce_core::editor::{
 };
 use truce_core::events::{EVENT_LIST_PREALLOC, Event, EventBody, EventList, TransportInfo};
 use truce_core::export::PluginExport;
-use truce_core::info::{PluginCategory, PluginInfo};
-use truce_core::midi::{decode_short_message, denorm_7bit, pitch_bend_to_bytes};
+use truce_core::info::{MidiDialect, PluginCategory, PluginInfo, resolve_name_override};
+use truce_core::meters::MeterStore;
+use truce_core::midi::{
+    PER_NOTE_VOLUME_MAX_GAIN, decode_short_message, denorm_7bit, downconvert_to_midi1,
+    event_to_midi1, per_note_bend_from_semitones, per_note_bend_semitones, pitch_bend_to_bytes,
+    route_midi_port,
+};
 use truce_core::plugin::PluginRuntime;
+use truce_core::presets::parse_preset_file;
 use truce_core::process::ProcessStatus;
 use truce_core::state;
-use truce_core::wrapper::{run_audio_block_with, run_extern_callback_with};
+use truce_core::state::PluginFormat;
+use truce_core::ump::decode_ump_channel_voice_2;
+use truce_core::wrapper::{
+    SharedPlugin, lock_plugin, run_audio_block_with, run_extern_callback_with, shared_plugin,
+};
+use truce_core::{Float, Sample};
 use truce_params::Params;
 use truce_params::{ParamFlags, ParamInfo, ParamRange};
 
@@ -143,16 +160,22 @@ type StateLoadQueue = crossbeam_queue::ArrayQueue<state::DeserializedState>;
 // ---------------------------------------------------------------------------
 
 struct ClapPluginData<P: PluginExport> {
-    /// The user's plugin instance.
-    plugin: P,
+    /// The user's plugin instance behind the wrapper-standard
+    /// mediation lock: the audio thread locks per block, `state_save`
+    /// (host thread) locks for the serialization, the editor's
+    /// `get_state` closure blocks for the (bounded) read. See
+    /// `truce_core::wrapper::SharedPlugin`.
+    plugin: SharedPlugin<P>,
     /// Stable handle to the params Arc, set once at instance creation.
     /// Host-thread callbacks (`params_get_value`, `params_value_to_text`,
-    /// `params_text_to_value`, `state_save`) read params through this
-    /// handle so they never form a `&data.plugin` reference - the audio
-    /// thread's `&mut data.plugin` would otherwise let LLVM deduce
-    /// noalias on the plugin field and reorder loads past the audio
-    /// thread's stores. Params are atomic-backed and `Sync`.
+    /// `params_text_to_value`) read params through this handle so a
+    /// param query never contends on the plugin lock. Params are
+    /// atomic-backed and `Sync`.
     params_arc: Arc<P::Params>,
+    /// Shared meter storage, set once at instance creation. The
+    /// editor's `get_meter` closure reads these atomic slots instead
+    /// of the plugin instance.
+    meter_store: Arc<MeterStore>,
     /// Atomic snapshots of the plugin's most recent `latency()` /
     /// `tail()`. Updated by the audio thread (or `init`/`reset`) so
     /// `latency_get` / `tail_get` read the value without touching
@@ -161,6 +184,9 @@ struct ClapPluginData<P: PluginExport> {
     tail_cache: AtomicU32,
     /// Re-usable event list for converting CLAP events each process call.
     event_list: EventList,
+    /// Sounding-note tracker backing wildcard `NOTE_OFF` / `NOTE_CHOKE`
+    /// expansion (see [`SoundingNotes`]). Audio-thread only.
+    sounding_notes: SoundingNotes,
     /// Re-usable output event list for the process context.
     output_events: EventList,
     /// Per-sub-block scratch the chunker writes rebased events into
@@ -202,7 +228,7 @@ struct ClapPluginData<P: PluginExport> {
     /// Flag: GUI changed params, need rescan on main thread.
     needs_rescan: Arc<AtomicBool>,
     /// Shared transport slot: audio thread writes each block, editor reads.
-    transport_slot: Arc<truce_core::TransportSlot>,
+    transport_slot: Arc<TransportSlot>,
     /// Host-reported GUI scale (via `clap_plugin_gui::set_scale`).
     /// Sources of truth, by platform:
     /// - **macOS**: ignored at `gui_get_size` (`AppKit` handles backing
@@ -226,21 +252,91 @@ struct ClapPluginData<P: PluginExport> {
     /// dangling pointer lives between blocks.
     input_slices: Vec<&'static [<P as PluginRuntime>::Sample]>,
     output_slices: Vec<&'static mut [<P as PluginRuntime>::Sample]>,
-    /// Per-channel widening scratch. Empty when `P::Sample == f32`
-    /// (slices point straight into host memory). When `P::Sample ==
-    /// f64`, each channel's f32 host input is widened into the
-    /// matching slot here and the slice in `input_slices` points
-    /// there.
+    /// Per-channel input conversion scratch. A slot stays empty when
+    /// the host wire for its port matches `P::Sample` (the slice in
+    /// `input_slices` points straight into host memory); on a
+    /// precision mismatch the channel is converted into the matching
+    /// slot here and the slice points there.
     input_widen: Vec<Vec<<P as PluginRuntime>::Sample>>,
-    /// Per-channel narrowing scratch. Same shape: only used when
-    /// `P::Sample == f64`, in which case the plugin writes here and
-    /// the wrapper copies + casts back to the host's f32 output
+    /// Per-channel output conversion scratch. Same shape: only used
+    /// on a precision mismatch, in which case the plugin writes here
+    /// and the wrapper copies + converts back to the host's output
     /// pointers after `process()` returns.
     output_narrow: Vec<Vec<<P as PluginRuntime>::Sample>>,
     /// Cached pointers to host output channels, captured at slice
-    /// build time so the post-`process` narrow loop can copy back
-    /// without re-walking the CLAP bus structures.
-    host_out_ptrs: Vec<*mut f32>,
+    /// build time so the post-`process` convert-back loop can copy
+    /// without re-walking the CLAP bus structures. Each entry is
+    /// tagged with the wire precision the host picked for its port.
+    host_out_ptrs: Vec<HostOutPtr>,
+}
+
+/// Host output channel pointer, tagged with the port's wire
+/// precision (the host picks 32- or 64-bit per port; 64-bit only on
+/// ports that advertised `CLAP_AUDIO_PORT_SUPPORTS_64BITS`).
+#[derive(Copy, Clone)]
+enum HostOutPtr {
+    Null,
+    F32(*mut f32),
+    F64(*mut f64),
+}
+
+/// Build the plugin-facing input slice for one host channel of wire
+/// precision `H`: zero-copy when `H` matches the plugin's sample
+/// type `S`, otherwise converted into `scratch` (f64 round-trip,
+/// lossless in the widening direction).
+///
+/// # Safety
+/// A non-null `host_ptr` must address `num_frames` readable samples
+/// that stay valid for the block; the returned slice's `'static`
+/// lifetime is fictional (same convention as `input_slices`).
+unsafe fn input_channel_slice<S: Sample, H: Sample>(
+    host_ptr: *const H,
+    num_frames: usize,
+    scratch: &mut Vec<S>,
+) -> &'static [S] {
+    if host_ptr.is_null() {
+        return &[];
+    }
+    unsafe {
+        if S::IS_F64 == H::IS_F64 {
+            // SAFETY: sealed traits - equal IS_F64 means S == H.
+            return std::slice::from_raw_parts(host_ptr.cast::<S>(), num_frames);
+        }
+        scratch.clear();
+        scratch.reserve(num_frames);
+        let host = std::slice::from_raw_parts(host_ptr, num_frames);
+        for &h in host {
+            scratch.push(S::from_f64(h.to_f64()));
+        }
+        std::slice::from_raw_parts(scratch.as_ptr(), num_frames)
+    }
+}
+
+/// Output twin of [`input_channel_slice`]: zero-copy into host
+/// memory when precisions match, otherwise the plugin renders into
+/// `scratch` and the post-`process` loop converts back to the host
+/// pointer.
+///
+/// # Safety
+/// Same contract as [`input_channel_slice`], with `num_frames`
+/// writable samples.
+unsafe fn output_channel_slice<S: Sample, H: Sample>(
+    host_ptr: *mut H,
+    num_frames: usize,
+    scratch: &mut Vec<S>,
+) -> &'static mut [S] {
+    if host_ptr.is_null() {
+        return &mut [];
+    }
+    unsafe {
+        if S::IS_F64 == H::IS_F64 {
+            // SAFETY: sealed traits - equal IS_F64 means S == H.
+            return std::slice::from_raw_parts_mut(host_ptr.cast::<S>(), num_frames);
+        }
+        scratch.clear();
+        scratch.resize(num_frames, S::default());
+        std::slice::from_raw_parts_mut(scratch.as_mut_ptr(), num_frames)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -268,7 +364,7 @@ unsafe impl Sync for DescriptorHolder {}
 /// `clap_name` (baked into `PluginInfo` by `truce::plugin_info!`),
 /// falling back to `PluginInfo::name`.
 fn resolved_name(info: &PluginInfo) -> &'static str {
-    truce_core::info::resolve_name_override(info.clap_name, info.name)
+    resolve_name_override(info.clap_name, info.name)
 }
 
 impl DescriptorHolder {
@@ -373,8 +469,11 @@ unsafe fn data_from_plugin<P: PluginExport>(
 unsafe extern "C" fn clap_plugin_init<P: PluginExport>(plugin: *const clap_plugin) -> bool {
     unsafe {
         let data = data_from_plugin::<P>(plugin);
-        data.plugin.init();
-        data.param_infos = data.plugin.params().param_infos();
+        {
+            let mut instance = lock_plugin(&data.plugin);
+            instance.init();
+            data.param_infos = instance.params().param_infos();
+        }
         // Query host params extension for request_flush support
         if !data.host.is_null()
             && let Some(get_ext) = (*data.host).get_extension
@@ -421,9 +520,12 @@ unsafe extern "C" fn clap_plugin_activate<P: PluginExport>(
         data.sample_rate = sample_rate;
         let max_block = max_frames_count as usize;
         data.max_block_size = max_block;
-        data.plugin.reset(sample_rate, max_block);
-        data.plugin.params().set_sample_rate(sample_rate);
-        data.plugin.params().snap_smoothers();
+        {
+            let mut instance = lock_plugin(&data.plugin);
+            instance.reset(sample_rate, max_block);
+            instance.params().set_sample_rate(sample_rate);
+            instance.params().snap_smoothers();
+        }
 
         // Pre-grow the widening / narrowing scratch on the f64 path.
         // Without this, the first audio block after `activate` hits
@@ -434,8 +536,7 @@ unsafe extern "C" fn clap_plugin_activate<P: PluginExport>(
         // do here is push the inner per-channel `Vec<P::Sample>`s up
         // to `max_block_size` frames so the per-block `.clear() +
         // .reserve()` path is no-op-on-the-allocator.
-        let same_precision = std::any::TypeId::of::<P::Sample>() == std::any::TypeId::of::<f32>();
-        if !same_precision {
+        if <P as PluginRuntime>::Sample::IS_F64 {
             let max_in = data.input_widen.capacity();
             let max_out = data.output_narrow.capacity();
             while data.input_widen.len() < max_in {
@@ -455,7 +556,7 @@ unsafe extern "C" fn clap_plugin_activate<P: PluginExport>(
                 }
             }
             while data.host_out_ptrs.len() < max_out {
-                data.host_out_ptrs.push(std::ptr::null_mut());
+                data.host_out_ptrs.push(HostOutPtr::Null);
             }
         }
 
@@ -480,8 +581,10 @@ unsafe extern "C" fn clap_plugin_stop_processing<P: PluginExport>(_plugin: *cons
 unsafe extern "C" fn clap_plugin_reset<P: PluginExport>(plugin: *const clap_plugin) {
     unsafe {
         let data = data_from_plugin::<P>(plugin);
-        data.plugin.reset(data.sample_rate, data.max_block_size);
-        data.plugin.params().snap_smoothers();
+        data.sounding_notes.clear_all();
+        let mut instance = lock_plugin(&data.plugin);
+        instance.reset(data.sample_rate, data.max_block_size);
+        instance.params().snap_smoothers();
     }
 }
 
@@ -502,6 +605,285 @@ unsafe extern "C" fn clap_plugin_on_main_thread<P: PluginExport>(plugin: *const 
 // Event conversion: CLAP input events -> EventList
 // ---------------------------------------------------------------------------
 
+/// 32-bit wire value -> CLAP `0..1` note-expression value.
+fn unit_from_u32(v: u32) -> f64 {
+    f64::from(v) / f64::from(u32::MAX)
+}
+
+/// CLAP `0..1` note-expression value -> 32-bit wire value.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn u32_from_unit(v: f64) -> u32 {
+    (v.clamp(0.0, 1.0) * f64::from(u32::MAX)).round() as u32
+}
+
+/// Map a truce per-note 2.0 event to a CLAP note expression
+/// `(expression_id, channel, note, value)`. `TUNING` is in semitones;
+/// the rest are `0..1`.
+fn clap_note_expression_of(body: &EventBody) -> Option<(i32, u8, u8, f64)> {
+    match *body {
+        // Registered per-note controllers only: the predefined CLAP
+        // expression ids carry the registered indices' semantics
+        // (7 = volume, 74 = brightness, ...); an assignable index is
+        // manufacturer-defined and must not alias onto them.
+        EventBody::PerNoteCC {
+            channel,
+            note,
+            cc,
+            value,
+            registered: true,
+            ..
+        } => {
+            let id = match cc {
+                7 => CLAP_NOTE_EXPRESSION_VOLUME,
+                10 => CLAP_NOTE_EXPRESSION_PAN,
+                1 => CLAP_NOTE_EXPRESSION_VIBRATO,
+                11 => CLAP_NOTE_EXPRESSION_EXPRESSION,
+                74 => CLAP_NOTE_EXPRESSION_BRIGHTNESS,
+                _ => return None,
+            };
+            // CLAP `VOLUME` is plain linear gain `0..=4` (the wire's
+            // quarter point is unity); the other ids are `0..=1`.
+            let value = if id == CLAP_NOTE_EXPRESSION_VOLUME {
+                PER_NOTE_VOLUME_MAX_GAIN * unit_from_u32(value)
+            } else {
+                unit_from_u32(value)
+            };
+            Some((id, channel, note, value))
+        }
+        EventBody::PerNotePitchBend {
+            channel,
+            note,
+            value,
+            ..
+        } => Some((
+            CLAP_NOTE_EXPRESSION_TUNING,
+            channel,
+            note,
+            per_note_bend_semitones(value),
+        )),
+        EventBody::PolyPressure2 {
+            channel,
+            note,
+            pressure,
+            ..
+        } => Some((
+            CLAP_NOTE_EXPRESSION_PRESSURE,
+            channel,
+            note,
+            unit_from_u32(pressure),
+        )),
+        _ => None,
+    }
+}
+
+/// Resolve a CLAP note event's `(channel, note)` address. CLAP carries
+/// both as `i16` where `-1` is a "match all" wildcard; truce's
+/// `EventBody` speaks concrete MIDI addresses (`channel 0..=15`,
+/// `note 0..=127`) and plugins index tables by them, so anything
+/// outside the domain - wildcards included - is dropped rather than
+/// delivered mislabeled. (Wildcard `NOTE_OFF` / `NOTE_CHOKE` don't take
+/// this path; see [`SoundingNotes`].)
+fn clap_note_address(ne: &clap_event_note) -> Option<(u8, u8)> {
+    let channel = u8::try_from(ne.channel).ok().filter(|c| *c <= 15)?;
+    let note = u8::try_from(ne.key).ok().filter(|k| *k <= 127)?;
+    Some((channel, note))
+}
+
+/// One wildcardable axis of a CLAP note address: `-1` matches all,
+/// a concrete in-domain value matches itself, out-of-domain junk
+/// matches nothing (the event drops, same as the concrete path).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NoteAxis {
+    All,
+    One(u8),
+    Invalid,
+}
+
+impl NoteAxis {
+    fn parse(raw: i16, domain: u8) -> Self {
+        if raw == -1 {
+            return Self::All;
+        }
+        match u8::try_from(raw) {
+            Ok(v) if v < domain => Self::One(v),
+            _ => Self::Invalid,
+        }
+    }
+
+    /// Concrete filter for [`SoundingNotes::drain_matching`]; `All`
+    /// filters nothing.
+    fn filter(self) -> Option<u8> {
+        match self {
+            Self::One(v) => Some(v),
+            Self::All | Self::Invalid => None,
+        }
+    }
+}
+
+/// Bitset of currently-sounding `(channel, key)` pairs, one 16x128
+/// set per MIDI input port, maintained from the decoded CLAP note
+/// events. Wildcard (`-1`) `NOTE_OFF` / `NOTE_CHOKE` addresses are
+/// spec-legal (`note_id`-addressing hosts release notes that way) but
+/// truce's `EventBody` speaks concrete addresses only - the set
+/// expands a wildcard to `NoteOff`s for exactly the sounding notes it
+/// matches, so a voice can't ring forever and the expansion stays
+/// bounded by real polyphony instead of the 2048-slot address space.
+/// Notes started through raw-MIDI or UMP events aren't tracked; hosts
+/// that address notes with wildcards start them with note events.
+///
+/// Known limitations, both spec-legal: the host's `note_id` is not
+/// round-tripped onto output events (truce emits `note_id: -1`), and
+/// `CLAP_EVENT_NOTE_END` is never emitted - so a polyphonic-modulation
+/// host can't correlate a truce plugin's output notes with its own
+/// voice bookkeeping, and it reclaims voices by its own timeout
+/// rather than on the plugin's say-so.
+struct SoundingNotes {
+    /// 2048 bits (16 channels x 128 keys) per input port.
+    ports: Vec<[u64; 32]>,
+}
+
+impl SoundingNotes {
+    fn new(midi_input_ports: u8) -> Self {
+        Self {
+            ports: vec![[0u64; 32]; usize::from(midi_input_ports.max(1))],
+        }
+    }
+
+    fn index(channel: u8, key: u8) -> (usize, u64) {
+        let bit = usize::from(channel & 0x0F) * 128 + usize::from(key & 0x7F);
+        (bit / 64, 1u64 << (bit % 64))
+    }
+
+    fn set(&mut self, port: u8, channel: u8, key: u8) {
+        if let Some(bits) = self.ports.get_mut(usize::from(port)) {
+            let (word, mask) = Self::index(channel, key);
+            bits[word] |= mask;
+        }
+    }
+
+    fn clear(&mut self, port: u8, channel: u8, key: u8) {
+        if let Some(bits) = self.ports.get_mut(usize::from(port)) {
+            let (word, mask) = Self::index(channel, key);
+            bits[word] &= !mask;
+        }
+    }
+
+    /// Forget every sounding note - the host reset all playing state,
+    /// so stale bits would make a later wildcard note-off emit
+    /// releases for notes that no longer exist.
+    fn clear_all(&mut self) {
+        for bits in &mut self.ports {
+            bits.fill(0);
+        }
+    }
+
+    /// Visit and clear every sounding `(channel, key)` on `port` that
+    /// matches the (possibly wildcard) axis filters.
+    fn drain_matching(
+        &mut self,
+        port: u8,
+        channel: Option<u8>,
+        key: Option<u8>,
+        f: impl FnMut(u8, u8),
+    ) {
+        self.visit_matching(port, channel, key, true, f);
+    }
+
+    /// Like [`Self::drain_matching`] but leaves the visited notes
+    /// sounding - expression fan-out addresses voices without
+    /// releasing them.
+    fn for_each_matching(
+        &mut self,
+        port: u8,
+        channel: Option<u8>,
+        key: Option<u8>,
+        f: impl FnMut(u8, u8),
+    ) {
+        self.visit_matching(port, channel, key, false, f);
+    }
+
+    fn visit_matching(
+        &mut self,
+        port: u8,
+        channel: Option<u8>,
+        key: Option<u8>,
+        clear: bool,
+        mut f: impl FnMut(u8, u8),
+    ) {
+        let Some(bits) = self.ports.get_mut(usize::from(port)) else {
+            return;
+        };
+        for (word_index, word) in bits.iter_mut().enumerate() {
+            let mut live = *word;
+            while live != 0 {
+                let bit = live.trailing_zeros() as usize;
+                live &= live - 1;
+                let flat = word_index * 64 + bit;
+                // Flat index is 0..2048, so both halves fit u8.
+                #[allow(clippy::cast_possible_truncation)]
+                let (ch, k) = ((flat / 128) as u8, (flat % 128) as u8);
+                if channel.is_some_and(|c| c != ch) || key.is_some_and(|n| n != k) {
+                    continue;
+                }
+                if clear {
+                    *word &= !(1u64 << bit);
+                }
+                f(ch, k);
+            }
+        }
+    }
+}
+
+/// Decode a CLAP note expression into its truce per-note 2.0 event,
+/// addressed to one concrete `(channel, note)` voice. The event's own
+/// (possibly wildcard) axes are resolved by the caller - see
+/// [`push_note_expressions`].
+fn note_expression_body(
+    ne: &clap_event_note_expression,
+    channel: u8,
+    note: u8,
+) -> Option<EventBody> {
+    let cc = match ne.expression_id {
+        CLAP_NOTE_EXPRESSION_TUNING => {
+            return Some(EventBody::PerNotePitchBend {
+                group: 0,
+                channel,
+                note,
+                value: per_note_bend_from_semitones(ne.value),
+            });
+        }
+        CLAP_NOTE_EXPRESSION_VOLUME => 7,
+        CLAP_NOTE_EXPRESSION_PAN => 10,
+        CLAP_NOTE_EXPRESSION_VIBRATO => 1,
+        CLAP_NOTE_EXPRESSION_EXPRESSION => 11,
+        CLAP_NOTE_EXPRESSION_BRIGHTNESS => 74,
+        CLAP_NOTE_EXPRESSION_PRESSURE => {
+            return Some(EventBody::PolyPressure2 {
+                group: 0,
+                channel,
+                note,
+                pressure: u32_from_unit(ne.value),
+            });
+        }
+        _ => return None,
+    };
+    // CLAP `VOLUME` arrives as plain linear gain `0..=4`; normalize
+    // into the wire domain so unity gain lands on the quarter point.
+    let value = if ne.expression_id == CLAP_NOTE_EXPRESSION_VOLUME {
+        u32_from_unit(ne.value / PER_NOTE_VOLUME_MAX_GAIN)
+    } else {
+        u32_from_unit(ne.value)
+    };
+    Some(EventBody::PerNoteCC {
+        group: 0,
+        channel,
+        note,
+        cc,
+        value,
+        registered: true,
+    })
+}
+
 /// Build a `TransportInfo` from a CLAP transport event/struct.
 ///
 /// Same flag-driven decoding is needed in two places - the
@@ -510,7 +892,6 @@ unsafe extern "C" fn clap_plugin_on_main_thread<P: PluginExport>(plugin: *const 
 /// the per-process `clap_process::transport` field. Hosts deliver
 /// transport state through whichever channel they prefer; the bit
 /// layout is identical, so the decode is too.
-//
 // CLAP transport positions arrive as `i64` fixed-point counts that
 // must be divided into `f64` seconds/beats; the `i64 as f64`
 // narrowing is bounded in practice by song-length (well below 2^52).
@@ -567,28 +948,148 @@ fn build_transport_info(t: &clap_event_transport, sample_rate: f64) -> Transport
     }
 }
 
-/// `CLAP_EVENT_NOTE_CHOKE` -> `EventBody::NoteOff`.
-///
-/// `truce_core::events::EventBody` has no dedicated choke variant, so
-/// this maps onto `NoteOff`: a choked voice at least gets released
-/// instead of hanging forever (not spec-perfect - a real choke is an
-/// immediate cut, not a release tail). CLAP allows `-1` ("all") on
-/// `channel`/`key` for a group choke; that can't be expressed as a
-/// single concrete `NoteOff`, so wildcard chokes return `None` rather
-/// than choking whatever an `as u8` wraparound would otherwise
-/// (mis)target.
-fn choke_to_note_off(note_event: &clap_event_note) -> Option<EventBody> {
-    if note_event.channel < 0 || note_event.key < 0 {
-        return None;
+/// MIDI port an inbound CLAP event arrived on, read from the event's
+/// `port_index`. Non-MIDI events (params, transport) report `0`. The
+/// wildcard-capable events (notes, note expressions) resolve a `-1`
+/// port in their own fan-out paths ([`push_note_offs`],
+/// [`push_note_expressions`]) - the collapse to `0` here only feeds
+/// concrete-address routing, and the raw MIDI / `SysEx` events carry
+/// an unsigned `port_index` with no wildcard to lose.
+unsafe fn clap_input_port(header: *const clap_event_header, type_: u16) -> u8 {
+    unsafe {
+        let idx: i32 = match type_ {
+            CLAP_EVENT_NOTE_ON | CLAP_EVENT_NOTE_OFF | CLAP_EVENT_NOTE_CHOKE => {
+                i32::from((*header.cast::<clap_event_note>()).port_index)
+            }
+            CLAP_EVENT_NOTE_EXPRESSION => {
+                i32::from((*header.cast::<clap_event_note_expression>()).port_index)
+            }
+            CLAP_EVENT_MIDI => i32::from((*header.cast::<clap_event_midi>()).port_index),
+            CLAP_EVENT_MIDI2 => i32::from((*header.cast::<clap_event_midi2>()).port_index),
+            CLAP_EVENT_MIDI_SYSEX => {
+                i32::from((*header.cast::<clap_event_midi_sysex>()).port_index)
+            }
+            _ => 0,
+        };
+        u8::try_from(idx).unwrap_or(0)
     }
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let (channel, note) = (note_event.channel as u8, note_event.key as u8);
-    Some(EventBody::NoteOff {
-        group: 0,
-        channel,
-        note,
-        velocity: 0,
-    })
+}
+
+/// Deliver a `NOTE_OFF` / `NOTE_CHOKE` as concrete `NoteOff`s. A
+/// concrete address is one event per matched port (clearing its
+/// sounding bit); a wildcard axis (`-1`, spec-legal from
+/// `note_id`-addressing hosts) expands to the sounding notes it
+/// matches - dropping it would leave those voices ringing forever.
+/// The port is an axis too: `port_index == -1` matches every input
+/// port, so the expansion walks each port's sounding set instead of
+/// collapsing onto the routed port. Out-of-domain junk on the channel
+/// or key axis drops the event, matching the concrete path's
+/// hostile-host guard.
+fn push_note_offs<P: PluginExport>(
+    data: &mut ClapPluginData<P>,
+    note_event: &clap_event_note,
+    sample_offset: u32,
+    port: u8,
+    velocity: u8,
+) {
+    let channel = NoteAxis::parse(note_event.channel, 16);
+    let key = NoteAxis::parse(note_event.key, 128);
+    if channel == NoteAxis::Invalid || key == NoteAxis::Invalid {
+        return;
+    }
+    let (first_port, last_port) = if note_event.port_index == -1 {
+        (0, data.info.midi_input_ports.max(1) - 1)
+    } else {
+        (port, port)
+    };
+    // Destructure so the tracker and the event list borrow disjointly.
+    let ClapPluginData {
+        sounding_notes,
+        event_list,
+        ..
+    } = data;
+    for p in first_port..=last_port {
+        if let (NoteAxis::One(channel), NoteAxis::One(note)) = (channel, key) {
+            sounding_notes.clear(p, channel, note);
+            event_list.push(Event::on_port(
+                sample_offset,
+                p,
+                EventBody::NoteOff {
+                    group: 0,
+                    channel,
+                    note,
+                    velocity,
+                },
+            ));
+        } else {
+            sounding_notes.drain_matching(p, channel.filter(), key.filter(), |channel, note| {
+                event_list.push(Event::on_port(
+                    sample_offset,
+                    p,
+                    EventBody::NoteOff {
+                        group: 0,
+                        channel,
+                        note,
+                        velocity,
+                    },
+                ));
+            });
+        }
+    }
+}
+
+/// Deliver a note expression to the voices it addresses. A concrete
+/// address is one event on the routed port; a wildcard axis (`-1`,
+/// spec-legal from `note_id`-addressing hosts) fans out to the
+/// sounding notes it matches, and the port is an axis too - dropping
+/// a wildcard would silence expression for exactly the hosts that
+/// rely on it. Out-of-domain junk on the channel or key axis drops
+/// the event, matching [`push_note_offs`].
+fn push_note_expressions<P: PluginExport>(
+    data: &mut ClapPluginData<P>,
+    ne: &clap_event_note_expression,
+    sample_offset: u32,
+    port: u8,
+) {
+    let channel = NoteAxis::parse(ne.channel, 16);
+    let key = NoteAxis::parse(ne.key, 128);
+    if channel == NoteAxis::Invalid || key == NoteAxis::Invalid {
+        return;
+    }
+    let (first_port, last_port) = if ne.port_index == -1 {
+        (0, data.info.midi_input_ports.max(1) - 1)
+    } else {
+        (port, port)
+    };
+    let midi2 = data.info.midi_input_dialect == MidiDialect::Midi2;
+    // Destructure so the tracker and the event list borrow disjointly.
+    let ClapPluginData {
+        sounding_notes,
+        event_list,
+        ..
+    } = data;
+    let mut push = |p: u8, channel: u8, note: u8| {
+        let Some(decoded) = note_expression_body(ne, channel, note) else {
+            return;
+        };
+        let body = if midi2 {
+            Some(decoded)
+        } else {
+            downconvert_to_midi1(&decoded)
+        };
+        if let Some(body) = body {
+            event_list.push(Event::on_port(sample_offset, p, body));
+        }
+    };
+    for p in first_port..=last_port {
+        if let (NoteAxis::One(channel), NoteAxis::One(note)) = (channel, key) {
+            push(p, channel, note);
+        } else {
+            sounding_notes.for_each_matching(p, channel.filter(), key.filter(), |channel, note| {
+                push(p, channel, note);
+            });
+        }
+    }
 }
 
 /// `sort` controls whether the resulting `event_list` gets a stable
@@ -630,51 +1131,57 @@ unsafe fn convert_input_events<P: PluginExport>(
             }
 
             let sample_offset = (*header).time;
+            // Stamp each event with the MIDI port it arrived on; an
+            // event on a port the plugin doesn't expose routes to 0.
+            // Non-MIDI events report 0. Single-port plugins always
+            // get 0.
+            let port = route_midi_port(
+                clap_input_port(header, (*header).type_),
+                data.info.midi_input_ports,
+            );
 
             match (*header).type_ {
                 CLAP_EVENT_NOTE_ON => {
                     let note_event = &*header.cast::<clap_event_note>();
-                    // CLAP delivers `channel`/`key` as `i16` but the
-                    // valid MIDI domain is `0..=15` / `0..=127`.
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    let (channel, note) = (note_event.channel as u8, note_event.key as u8);
+                    // The spec requires concrete addresses on NOTE_ON;
+                    // a wildcard port drops like the wildcard channel /
+                    // key axes (`clap_note_address`) instead of
+                    // masquerading as port 0.
+                    if note_event.port_index < 0 {
+                        continue;
+                    }
+                    let Some((channel, note)) = clap_note_address(note_event) else {
+                        continue;
+                    };
+                    data.sounding_notes.set(port, channel, note);
                     // CLAP's f64 velocity is a normalized [0, 1]; truce
                     // exposes it as a wire-native 7-bit value to match
                     // every other format. Plugins that want CLAP's full
                     // float precision can handle `NoteOn2` from
                     // `CLAP_EVENT_MIDI2` (when the host emits that path).
-                    data.event_list.push(Event {
+                    data.event_list.push(Event::on_port(
                         sample_offset,
-                        body: EventBody::NoteOn {
+                        port,
+                        EventBody::NoteOn {
                             group: 0,
                             channel,
                             note,
                             velocity: denorm_7bit(f32::from_f64(note_event.velocity)),
                         },
-                    });
+                    ));
                 }
                 CLAP_EVENT_NOTE_OFF => {
                     let note_event = &*header.cast::<clap_event_note>();
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    let (channel, note) = (note_event.channel as u8, note_event.key as u8);
-                    data.event_list.push(Event {
-                        sample_offset,
-                        body: EventBody::NoteOff {
-                            group: 0,
-                            channel,
-                            note,
-                            velocity: denorm_7bit(f32::from_f64(note_event.velocity)),
-                        },
-                    });
+                    let velocity = denorm_7bit(f32::from_f64(note_event.velocity));
+                    push_note_offs(data, note_event, sample_offset, port, velocity);
                 }
                 CLAP_EVENT_NOTE_CHOKE => {
+                    // A choke is an immediate voice cut (drum choke
+                    // groups, edit re-triggers). `EventBody` has no
+                    // choke variant, so deliver a `NoteOff`: a release
+                    // tail beats a voice hanging forever.
                     let note_event = &*header.cast::<clap_event_note>();
-                    if let Some(body) = choke_to_note_off(note_event) {
-                        data.event_list.push(Event {
-                            sample_offset,
-                            body,
-                        });
-                    }
+                    push_note_offs(data, note_event, sample_offset, port, 0);
                 }
                 CLAP_EVENT_PARAM_VALUE => {
                     // When a state load was applied at the head of
@@ -693,13 +1200,14 @@ unsafe fn convert_input_events<P: PluginExport>(
                     // `chunked_process::process_chunked` - that way
                     // the smoother sees `set_target` at the event's
                     // sample, not at the head of the audio block.
-                    data.event_list.push(Event {
+                    data.event_list.push(Event::on_port(
                         sample_offset,
-                        body: EventBody::ParamChange {
+                        port,
+                        EventBody::ParamChange {
                             id: param_event.param_id,
                             value: param_event.value,
                         },
-                    });
+                    ));
                 }
                 CLAP_EVENT_PARAM_MOD => {
                     // Same rationale as PARAM_VALUE above: drop
@@ -708,24 +1216,22 @@ unsafe fn convert_input_events<P: PluginExport>(
                         continue;
                     }
                     let mod_event = &*header.cast::<clap_event_param_value>();
-                    data.event_list.push(Event {
+                    data.event_list.push(Event::on_port(
                         sample_offset,
-                        body: EventBody::ParamMod {
+                        port,
+                        EventBody::ParamMod {
                             id: mod_event.param_id,
                             note_id: mod_event.note_id,
                             value: mod_event.value,
                         },
-                    });
+                    ));
                 }
                 CLAP_EVENT_TRANSPORT => {
                     let transport = &*header.cast::<clap_event_transport>();
-                    data.event_list.push(Event {
+                    data.event_list.push(Event::new(
                         sample_offset,
-                        body: EventBody::Transport(build_transport_info(
-                            transport,
-                            data.sample_rate,
-                        )),
-                    });
+                        EventBody::Transport(build_transport_info(transport, data.sample_rate)),
+                    ));
                 }
                 CLAP_EVENT_MIDI => {
                     // CLAP carries MIDI 1.0 channel-voice messages as
@@ -739,10 +1245,8 @@ unsafe fn convert_input_events<P: PluginExport>(
                     if let Some(body) =
                         decode_short_message(midi.data[0], midi.data[1], midi.data[2])
                     {
-                        data.event_list.push(Event {
-                            sample_offset,
-                            body,
-                        });
+                        data.event_list
+                            .push(Event::on_port(sample_offset, port, body));
                     }
                 }
                 CLAP_EVENT_MIDI_SYSEX => {
@@ -763,23 +1267,43 @@ unsafe fn convert_input_events<P: PluginExport>(
                     };
                     let _ = data.event_list.push_sysex(sample_offset, bytes);
                 }
+                // Decode the UMP packet. A `Midi2`-dialect plugin gets
+                // the native 2.0 `EventBody` variants (group nibble
+                // included); a plugin that didn't opt into MIDI 2.0 gets
+                // the 1.0 down-conversion instead of a dropped event -
+                // hosts don't always honor the advertised dialect, so a
+                // 2.0 packet can still arrive at a 1.0 plugin.
+                CLAP_EVENT_MIDI2 => {
+                    let midi2 = &*header.cast::<clap_event_midi2>();
+                    if let Some(decoded) = decode_ump_channel_voice_2(midi2.data) {
+                        let body = if data.info.midi_input_dialect == MidiDialect::Midi2 {
+                            Some(decoded)
+                        } else {
+                            downconvert_to_midi1(&decoded)
+                        };
+                        if let Some(body) = body {
+                            data.event_list
+                                .push(Event::on_port(sample_offset, port, body));
+                        }
+                    }
+                }
+                CLAP_EVENT_NOTE_EXPRESSION => {
+                    // Per-note expression (hosts send these for MPE-style
+                    // input). Decode to the 2.0 per-note event - fanned
+                    // out across wildcard axes - with the down-converted
+                    // channel form for plugins that didn't opt into 2.0.
+                    let ne = &*header.cast::<clap_event_note_expression>();
+                    push_note_expressions(data, ne, sample_offset, port);
+                }
                 _ => {
-                    // Unsupported event type (system real-time,
-                    // MIDI 2.0, NOTE_END, NOTE_EXPRESSION) - skip
-                    // silently. NOTE_END is plugin->host only (voice
-                    // lifecycle reporting), nothing to convert on the
-                    // input side. NOTE_EXPRESSION has no EventBody
-                    // representation yet. MIDI 2.0 demux is gated
-                    // behind a per-plug-in version opt-in that's not
-                    // wired yet; until then the channel voice 1.0 +
-                    // `SysEx` + `NOTE_CHOKE` paths above are the only
-                    // ones surfaced.
+                    // Unsupported event type (system real-time, utility)
+                    // - skip silently.
                 }
             }
         }
 
         if sort {
-            data.event_list.sort();
+            data.event_list.ensure_sorted_by_offset();
         }
     }
 }
@@ -874,6 +1398,15 @@ unsafe extern "C" fn clap_plugin_process<P: PluginExport>(
             return CLAP_PROCESS_CONTINUE;
         }
 
+        // Lock the plugin for the whole block. Uncontended this is
+        // one CAS; contended only when a host/GUI state callback is
+        // mid-serialization, which then delays this block by the
+        // remainder of that `save_state` call. Lock through a local
+        // Arc clone so the guard doesn't pin a borrow of `data`
+        // (later per-block work needs `&mut data`).
+        let plugin_arc = Arc::clone(&data.plugin);
+        let mut instance = lock_plugin(&plugin_arc);
+
         // Apply any state-load that the host or editor handed us
         // since the last block. Runs before per-block work so the
         // plugin sees consistent params for the entire block. The
@@ -881,7 +1414,7 @@ unsafe extern "C" fn clap_plugin_process<P: PluginExport>(
         // newest blob and the older one is dropped - preferred to
         // the audio thread chasing stale state across blocks.
         let state_loaded = data.pending_state.pop().is_some_and(|state| {
-            state::apply_state(&mut data.plugin, &state);
+            state::apply_state(&mut *instance, &state);
             true
         });
 
@@ -923,67 +1456,52 @@ unsafe extern "C" fn clap_plugin_process<P: PluginExport>(
         );
 
         // Build per-channel slices preserving channel index across
-        // every bus. A null bus (`buf.data32 == null`) emits empty
-        // slices for each of its declared channels rather than being
-        // skipped - skipping would shift downstream buses' channel
-        // indices and silently re-route audio onto the wrong bus for
-        // multi-bus plugins.
+        // every bus. A null bus (neither data pointer set) emits
+        // empty slices for each of its declared channels rather than
+        // being skipped - skipping would shift downstream buses'
+        // channel indices and silently re-route audio onto the wrong
+        // bus for multi-bus plugins.
         //
-        // CLAP audio is always `f32` on the wire. If `P::Sample` is
-        // also `f32`, slices point straight at host memory (zero-
-        // copy). If `P::Sample` is `f64`, each channel's host input
-        // is widened into per-channel scratch in `input_widen`, and
-        // the matching `output_narrow` slot is what the plugin
-        // writes into - we copy + narrow back to the host's f32
-        // output pointers after `process()` returns. Compares
-        // `TypeId` at runtime; the same-precision path stays a
-        // single pointer cast.
-        let same_precision = std::any::TypeId::of::<P::Sample>() == std::any::TypeId::of::<f32>();
-
+        // The host picks the wire precision per port: `data64` is
+        // only set on ports that advertised
+        // `CLAP_AUDIO_PORT_SUPPORTS_64BITS` (f64 plugins). When the
+        // wire matches `P::Sample`, slices point straight at host
+        // memory (zero-copy); otherwise the channel is converted
+        // through the matching `input_widen` / `output_narrow` slot
+        // and copied back after `process()` returns.
         data.input_slices.clear();
         // Reset each inner scratch buffer's length to 0 (preserves
         // its heap allocation), don't `.clear()` the outer
         // `Vec<Vec<_>>` - that would drop every inner Vec and force
-        // the per-channel `Vec::with_capacity` push below to
-        // re-allocate every block, defeating the activate-time
-        // pre-grow.
+        // the per-channel push below to re-allocate every block,
+        // defeating the activate-time pre-grow.
         for buf in &mut data.input_widen {
             buf.clear();
         }
         // The outer Vec is pre-sized in `clap_plugin_activate`; the
-        // while-loop below only runs as a fallback if the pre-grow
+        // while-loops below only run as a fallback if the pre-grow
         // didn't cover the bus layout the host actually picked.
+        // `Vec::new()` keeps the fallback allocation-free; the inner
+        // scratch only allocates if that channel actually converts.
         let mut flat_in_idx = 0usize;
         for bus_idx in 0..proc.audio_inputs_count {
             let buf = &*proc.audio_inputs.add(bus_idx as usize);
+            let bus_is_f64 = !buf.data64.is_null();
             for ch in 0..buf.channel_count {
-                let host_ptr: *const f32 = if buf.data32.is_null() {
-                    std::ptr::null()
-                } else {
-                    *buf.data32.add(ch as usize)
-                };
-                let slice: &[P::Sample] = if host_ptr.is_null() {
+                while data.input_widen.len() <= flat_in_idx {
+                    data.input_widen.push(Vec::new());
+                }
+                let scratch = &mut data.input_widen[flat_in_idx];
+                let slice: &'static [P::Sample] = if bus_is_f64 {
+                    let host_ptr: *const f64 = *buf.data64.add(ch as usize);
+                    input_channel_slice::<P::Sample, f64>(host_ptr, num_frames, scratch)
+                } else if buf.data32.is_null() {
                     &[]
-                } else if same_precision {
-                    // SAFETY: runtime check above proved P::Sample == f32.
-                    let raw = host_ptr.cast::<P::Sample>();
-                    std::slice::from_raw_parts(raw, num_frames)
                 } else {
-                    while data.input_widen.len() <= flat_in_idx {
-                        data.input_widen.push(Vec::with_capacity(num_frames));
-                    }
-                    let scratch = &mut data.input_widen[flat_in_idx];
-                    scratch.clear();
-                    scratch.reserve(num_frames);
-                    let host = std::slice::from_raw_parts(host_ptr, num_frames);
-                    for &h in host {
-                        scratch.push(P::Sample::from_f32(h));
-                    }
-                    // SAFETY: `scratch` lives in `data` which outlives this block.
-                    std::slice::from_raw_parts(scratch.as_ptr(), num_frames)
+                    let host_ptr: *const f32 = *buf.data32.add(ch as usize);
+                    input_channel_slice::<P::Sample, f32>(host_ptr, num_frames, scratch)
                 };
-                data.input_slices
-                    .push(transmute::<&[P::Sample], &'static [P::Sample]>(slice));
+                data.input_slices.push(slice);
                 flat_in_idx += 1;
             }
         }
@@ -998,31 +1516,34 @@ unsafe extern "C" fn clap_plugin_process<P: PluginExport>(
         let mut flat_out_idx = 0usize;
         for bus_idx in 0..proc.audio_outputs_count {
             let buf = &mut *proc.audio_outputs.add(bus_idx as usize);
+            let bus_is_f64 = !buf.data64.is_null();
             for ch in 0..buf.channel_count {
-                let host_ptr: *mut f32 = if buf.data32.is_null() {
-                    std::ptr::null_mut()
+                while data.output_narrow.len() <= flat_out_idx {
+                    data.output_narrow.push(Vec::new());
+                }
+                let scratch = &mut data.output_narrow[flat_out_idx];
+                let slice: &'static mut [P::Sample] = if bus_is_f64 {
+                    let host_ptr: *mut f64 = *buf.data64.add(ch as usize);
+                    data.host_out_ptrs.push(if host_ptr.is_null() {
+                        HostOutPtr::Null
+                    } else {
+                        HostOutPtr::F64(host_ptr)
+                    });
+                    output_channel_slice::<P::Sample, f64>(host_ptr, num_frames, scratch)
                 } else {
-                    *buf.data32.add(ch as usize)
+                    let host_ptr: *mut f32 = if buf.data32.is_null() {
+                        std::ptr::null_mut()
+                    } else {
+                        *buf.data32.add(ch as usize)
+                    };
+                    data.host_out_ptrs.push(if host_ptr.is_null() {
+                        HostOutPtr::Null
+                    } else {
+                        HostOutPtr::F32(host_ptr)
+                    });
+                    output_channel_slice::<P::Sample, f32>(host_ptr, num_frames, scratch)
                 };
-                data.host_out_ptrs.push(host_ptr);
-                let slice: &mut [P::Sample] = if host_ptr.is_null() {
-                    &mut []
-                } else if same_precision {
-                    let raw = host_ptr.cast::<P::Sample>();
-                    std::slice::from_raw_parts_mut(raw, num_frames)
-                } else {
-                    while data.output_narrow.len() <= flat_out_idx {
-                        data.output_narrow.push(Vec::with_capacity(num_frames));
-                    }
-                    let scratch = &mut data.output_narrow[flat_out_idx];
-                    scratch.clear();
-                    scratch.resize(num_frames, P::Sample::default());
-                    std::slice::from_raw_parts_mut(scratch.as_mut_ptr(), num_frames)
-                };
-                data.output_slices
-                    .push(transmute::<&mut [P::Sample], &'static mut [P::Sample]>(
-                        slice,
-                    ));
+                data.output_slices.push(slice);
                 flat_out_idx += 1;
             }
         }
@@ -1064,41 +1585,46 @@ unsafe extern "C" fn clap_plugin_process<P: PluginExport>(
             min_subblock_samples: data.info.automation.min_subblock_samples,
         };
         let status = process_chunked(
-            &mut data.plugin,
+            &mut *instance,
             data.params_arc.as_ref() as &dyn Params,
             &mut audio_buffer,
             chunk_args,
         );
 
-        // Narrow + copy back to host f32 outputs if the plugin ran
-        // in f64. No-op when `P::Sample == f32`: the plugin wrote
-        // directly into host memory and `output_narrow` is empty.
-        // `zip` over the two slices instead of indexing - if either
-        // vector is shorter (it shouldn't be, but a future drift
-        // would hit this), iteration stops at the min cleanly
-        // rather than panicking on an out-of-bounds index.
-        if !same_precision {
-            debug_assert_eq!(
-                data.host_out_ptrs.len(),
-                data.output_narrow.len(),
-                "CLAP narrow-back: host_out_ptrs / output_narrow drifted out of lockstep",
-            );
-            for (host_ptr, plugin) in data.host_out_ptrs.iter().zip(data.output_narrow.iter()) {
-                if host_ptr.is_null() {
-                    continue;
+        // Convert + copy back to host outputs for every channel that
+        // rendered into scratch (wire precision differed from
+        // `P::Sample`). Zero-copy channels leave their scratch slot
+        // empty and are skipped - the plugin already wrote host
+        // memory. `zip` over the two vectors instead of indexing -
+        // if either is shorter (it shouldn't be, but a future drift
+        // would hit this), iteration stops at the min cleanly rather
+        // than panicking on an out-of-bounds index.
+        for (host_ptr, plugin) in data.host_out_ptrs.iter().zip(data.output_narrow.iter()) {
+            if plugin.is_empty() {
+                continue;
+            }
+            match *host_ptr {
+                HostOutPtr::Null => {}
+                HostOutPtr::F32(p) => {
+                    let host = std::slice::from_raw_parts_mut(p, num_frames);
+                    for (h, &s) in host.iter_mut().zip(plugin.iter()) {
+                        *h = s.to_f32();
+                    }
                 }
-                let host = std::slice::from_raw_parts_mut(*host_ptr, num_frames);
-                for (h, &p) in host.iter_mut().zip(plugin.iter()) {
-                    *h = p.to_f32();
+                HostOutPtr::F64(p) => {
+                    let host = std::slice::from_raw_parts_mut(p, num_frames);
+                    for (h, &s) in host.iter_mut().zip(plugin.iter()) {
+                        *h = s.to_f64();
+                    }
                 }
             }
         }
 
         // Refresh latency / tail caches so the host's main-thread
-        // queries don't have to call into `data.plugin`.
+        // queries don't have to take the plugin lock.
         data.latency_cache
-            .store(data.plugin.latency(), Ordering::Relaxed);
-        data.tail_cache.store(data.plugin.tail(), Ordering::Relaxed);
+            .store(instance.latency(), Ordering::Relaxed);
+        data.tail_cache.store(instance.tail(), Ordering::Relaxed);
 
         // Flush GUI-initiated param changes to host output events
         flush_gui_changes::<P>(data, proc.out_events);
@@ -1108,7 +1634,15 @@ unsafe extern "C" fn clap_plugin_process<P: PluginExport>(
             let Some(try_push) = (*proc.out_events).try_push else {
                 return CLAP_PROCESS_CONTINUE;
             };
+            // CLAP requires the output queue sorted by time; a plugin
+            // that pushes block-level events (an LFO, a mode-switch
+            // sweep) after per-event ones would otherwise hand the
+            // host an unsorted queue.
+            data.output_events.ensure_sorted_by_offset();
+            // Route each output event to the note port the plugin
+            // stamped it with; an out-of-range port routes to 0.
             for event in data.output_events.iter() {
+                let out_port = route_midi_port(event.port, data.info.midi_output_ports);
                 match &event.body {
                     EventBody::NoteOn {
                         channel,
@@ -1125,7 +1659,7 @@ unsafe extern "C" fn clap_plugin_process<P: PluginExport>(
                                 flags: 0,
                             },
                             note_id: -1,
-                            port_index: 0,
+                            port_index: i16::from(out_port),
                             channel: i16::from(*channel),
                             key: i16::from(*note),
                             velocity: f64::from(*velocity) / 127.0,
@@ -1147,7 +1681,7 @@ unsafe extern "C" fn clap_plugin_process<P: PluginExport>(
                                 flags: 0,
                             },
                             note_id: -1,
-                            port_index: 0,
+                            port_index: i16::from(out_port),
                             channel: i16::from(*channel),
                             key: i16::from(*note),
                             velocity: f64::from(*velocity) / 127.0,
@@ -1170,7 +1704,7 @@ unsafe extern "C" fn clap_plugin_process<P: PluginExport>(
                                 type_: CLAP_EVENT_MIDI,
                                 flags: 0,
                             },
-                            port_index: 0,
+                            port_index: u16::from(out_port),
                             data: [0xB0 | (channel & 0x0F), *cc, *value],
                         };
                         try_push(proc.out_events, &raw const ev.header);
@@ -1189,7 +1723,7 @@ unsafe extern "C" fn clap_plugin_process<P: PluginExport>(
                                 type_: CLAP_EVENT_MIDI,
                                 flags: 0,
                             },
-                            port_index: 0,
+                            port_index: u16::from(out_port),
                             data: [0xA0 | (channel & 0x0F), *note, *pressure],
                         };
                         try_push(proc.out_events, &raw const ev.header);
@@ -1205,7 +1739,7 @@ unsafe extern "C" fn clap_plugin_process<P: PluginExport>(
                                 type_: CLAP_EVENT_MIDI,
                                 flags: 0,
                             },
-                            port_index: 0,
+                            port_index: u16::from(out_port),
                             data: [0xD0 | (channel & 0x0F), *pressure, 0],
                         };
                         try_push(proc.out_events, &raw const ev.header);
@@ -1220,7 +1754,7 @@ unsafe extern "C" fn clap_plugin_process<P: PluginExport>(
                                 type_: CLAP_EVENT_MIDI,
                                 flags: 0,
                             },
-                            port_index: 0,
+                            port_index: u16::from(out_port),
                             data: [0xE0 | (channel & 0x0F), lsb, msb],
                         };
                         try_push(proc.out_events, &raw const ev.header);
@@ -1236,7 +1770,7 @@ unsafe extern "C" fn clap_plugin_process<P: PluginExport>(
                                 type_: CLAP_EVENT_MIDI,
                                 flags: 0,
                             },
-                            port_index: 0,
+                            port_index: u16::from(out_port),
                             data: [0xC0 | (channel & 0x0F), *program, 0],
                         };
                         try_push(proc.out_events, &raw const ev.header);
@@ -1288,19 +1822,106 @@ unsafe extern "C" fn clap_plugin_process<P: PluginExport>(
                                 type_: CLAP_EVENT_MIDI_SYSEX,
                                 flags: 0,
                             },
-                            port_index: 0,
+                            port_index: u16::from(out_port),
                             buffer: bytes.as_ptr(),
                             size: len_u32(bytes.len()),
                         };
                         try_push(proc.out_events, &raw const ev.header);
                     }
-                    // MIDI 2.0, ParamMod, Transport, and per-note
-                    // events: the plugin-output direction isn't
-                    // routinely emitted by truce plugins; leave them
-                    // as silent skips rather than building partial
-                    // encoders. MIDI 2.0 emission stays parked
-                    // until a per-plug-in version opt-in lands.
-                    _ => {}
+                    // MIDI 2.0 channel-voice + per-note events. Emitted
+                    // CLAP-native so every host reads them: notes as
+                    // `clap_event_note` (full 16-bit velocity via the f64
+                    // field), per-note control as note expressions, and
+                    // channel-level control down-converted to raw MIDI.
+                    // Native `CLAP_EVENT_MIDI2` output is only consumed by
+                    // UMP-aware hosts; note graphs (Bitwig, ...) read notes
+                    // + expressions. ParamMod / Transport have no wire form
+                    // and fall through the encoder as `None`.
+                    EventBody::NoteOn2 {
+                        channel,
+                        note,
+                        velocity,
+                        ..
+                    } => {
+                        let ev = clap_event_note {
+                            header: clap_event_header {
+                                size: size_of_u32::<clap_event_note>(),
+                                time: event.sample_offset,
+                                space_id: CLAP_CORE_EVENT_SPACE_ID,
+                                type_: CLAP_EVENT_NOTE_ON,
+                                flags: 0,
+                            },
+                            note_id: -1,
+                            port_index: i16::from(out_port),
+                            channel: i16::from(*channel),
+                            key: i16::from(*note),
+                            velocity: f64::from(*velocity) / f64::from(u16::MAX),
+                        };
+                        try_push(proc.out_events, &raw const ev.header);
+                    }
+                    EventBody::NoteOff2 {
+                        channel,
+                        note,
+                        velocity,
+                        ..
+                    } => {
+                        let ev = clap_event_note {
+                            header: clap_event_header {
+                                size: size_of_u32::<clap_event_note>(),
+                                time: event.sample_offset,
+                                space_id: CLAP_CORE_EVENT_SPACE_ID,
+                                type_: CLAP_EVENT_NOTE_OFF,
+                                flags: 0,
+                            },
+                            note_id: -1,
+                            port_index: i16::from(out_port),
+                            channel: i16::from(*channel),
+                            key: i16::from(*note),
+                            velocity: f64::from(*velocity) / f64::from(u16::MAX),
+                        };
+                        try_push(proc.out_events, &raw const ev.header);
+                    }
+                    body if clap_note_expression_of(body).is_some() => {
+                        let (expression_id, channel, note, value) =
+                            clap_note_expression_of(body).unwrap();
+                        let ev = clap_event_note_expression {
+                            header: clap_event_header {
+                                size: size_of_u32::<clap_event_note_expression>(),
+                                time: event.sample_offset,
+                                space_id: CLAP_CORE_EVENT_SPACE_ID,
+                                type_: CLAP_EVENT_NOTE_EXPRESSION,
+                                flags: 0,
+                            },
+                            expression_id,
+                            note_id: -1,
+                            port_index: i16::from(out_port),
+                            channel: i16::from(channel),
+                            key: i16::from(note),
+                            value,
+                        };
+                        try_push(proc.out_events, &raw const ev.header);
+                    }
+                    body => {
+                        // Channel-level 2.0 (ControlChange2 / PitchBend2 /
+                        // ChannelPressure2 / ProgramChange2): down-convert
+                        // to a 1.0 short message and emit as raw MIDI.
+                        if let Some(m1) = downconvert_to_midi1(body)
+                            && let Some((_, data)) = event_to_midi1(&m1)
+                        {
+                            let ev = clap_event_midi {
+                                header: clap_event_header {
+                                    size: size_of_u32::<clap_event_midi>(),
+                                    time: event.sample_offset,
+                                    space_id: CLAP_CORE_EVENT_SPACE_ID,
+                                    type_: CLAP_EVENT_MIDI,
+                                    flags: 0,
+                                },
+                                port_index: u16::from(out_port),
+                                data,
+                            };
+                            try_push(proc.out_events, &raw const ev.header);
+                        }
+                    }
                 }
             }
         }
@@ -1642,12 +2263,11 @@ unsafe extern "C" fn state_save<P: PluginExport>(
     run_extern_callback_with::<P, bool>("CLAP", "save_state", false, || unsafe {
         let data = data_from_plugin::<P>(plugin);
         let (ids, values) = data.params_arc.collect_values();
-        // `plugin.save_state()` reads through the plugin reference: a
-        // user impl that mutates non-atomic state from `process` while
-        // also reading it from `save_state` races here. The contract
-        // is "save_state must be safe to call concurrently with
-        // process"; impls that copy from atomic params are fine.
-        let extra = data.plugin.save_state();
+        // Lock the plugin for the serialization: a block in flight
+        // holds the lock, so this waits for the block boundary and
+        // `save_state` never runs concurrently with `process` - plain
+        // (non-atomic) plugin fields are safe to read here.
+        let extra = lock_plugin(&data.plugin).save_state();
         let blob = state::serialize_state(data.plugin_id_hash, &ids, &values, &extra);
 
         // Write to the CLAP output stream
@@ -1709,23 +2329,16 @@ unsafe extern "C" fn state_load<P: PluginExport>(
             return false;
         }
 
-        let deserialized = match state::deserialize_state(&blob, data.plugin_id_hash) {
-            Some(d) => d,
-            None => {
-                // Not a truce envelope (e.g. legacy nice-plug JSON
-                // session). No known param IDs to restore host-thread
-                // side, but hand the raw bytes to the plugin's
-                // load_state() unchanged via the same audio-thread
-                // handoff queue as a normal load - PluginRuntime::
-                // load_state takes &mut P, which would alias
-                // process()'s &mut P if called here on the host
-                // thread. A plugin-side migration path can still
-                // recognize its own legacy format from `extra`.
-                state::DeserializedState {
-                    params: Vec::new(),
-                    extra: Some(blob),
-                }
-            }
+        // Not this plugin's envelope? Offer the bytes to the plugin's
+        // `migrate_state` hook (legacy sessions from a pre-truce
+        // build); `None` fails the load honestly.
+        let Some(deserialized) = state::parse_or_migrate::<P>(
+            &blob,
+            data.plugin_id_hash,
+            state::PluginFormat::Clap,
+            None,
+        ) else {
+            return false;
         };
 
         // Apply params synchronously on the host thread (atomic-safe)
@@ -1780,8 +2393,19 @@ unsafe extern "C" fn preset_load_from_location<P: PluginExport>(
         };
         let data = data_from_plugin::<P>(plugin);
 
+        // Same classification as a session load: an envelope under a
+        // different plugin id (a pre-identity-change save) is offered
+        // to the plugin's `migrate_state` hook instead of refused
+        // outright. Discovery only lists same-id presets, but a host
+        // can hand any path here (drag-drop, saved location).
+        let Some(bytes) = std::fs::read(Path::new(path)).ok() else {
+            return false;
+        };
+        let Some((_, blob)) = parse_preset_file(&bytes) else {
+            return false;
+        };
         let Some(deserialized) =
-            truce_core::presets::load_preset_file(std::path::Path::new(path), data.plugin_id_hash)
+            state::parse_or_migrate::<P>(&blob, data.plugin_id_hash, PluginFormat::Clap, None)
         else {
             return false;
         };
@@ -1866,6 +2490,12 @@ unsafe extern "C" fn audio_ports_get<P: PluginExport>(
         } else {
             0
         };
+        // f64 plugins take the host's 64-bit wire directly (zero
+        // copy, no precision loss at the boundary); the process loop
+        // reads whichever of data32/data64 the host picked per port.
+        if <P as PluginRuntime>::Sample::IS_F64 {
+            out.flags |= CLAP_AUDIO_PORT_SUPPORTS_64BITS | CLAP_AUDIO_PORT_PREFERS_64BITS;
+        }
         out.port_type = match bus.channels {
             ChannelConfig::Mono => CLAP_PORT_MONO.as_ptr(),
             ChannelConfig::Stereo => CLAP_PORT_STEREO.as_ptr(),
@@ -1892,17 +2522,17 @@ unsafe extern "C" fn note_ports_count<P: PluginExport>(
     _plugin: *const clap_plugin,
     is_input: bool,
 ) -> u32 {
-    // Declare a note port only in the directions the plugin actually
-    // uses, from the one `PluginInfo` capability pair (category
-    // default, overridable via `midi_input` / `midi_output`). A plain
-    // audio effect declares neither.
+    // Declare the plugin's MIDI ports for this direction. Count comes
+    // from `PluginInfo` (category default of 0-or-1, raised by
+    // `midi_input_ports` / `midi_output_ports`). A plain audio effect
+    // declares neither direction.
     let info = P::info();
-    let enabled = if is_input {
-        info.accepts_midi_in
+    let ports = if is_input {
+        info.midi_input_ports
     } else {
-        info.emits_midi
+        info.midi_output_ports
     };
-    u32::from(enabled)
+    u32::from(ports)
 }
 
 unsafe extern "C" fn note_ports_get<P: PluginExport>(
@@ -1912,12 +2542,36 @@ unsafe extern "C" fn note_ports_get<P: PluginExport>(
     info: *mut clap_note_port_info,
 ) -> bool {
     unsafe {
-        if index != 0 {
+        let in_ports = u32::from(P::info().midi_input_ports);
+        let out_ports = u32::from(P::info().midi_output_ports);
+        let (ports, opposite) = if is_input {
+            (in_ports, out_ports)
+        } else {
+            (out_ports, in_ports)
+        };
+        // clap-validator's output-port sweep queries with
+        // `is_input = true` (its note_ports.rs), so a plugin with more
+        // note outputs than inputs fails every test that fetches the
+        // note-port config. Answer an out-of-range query with the
+        // matching port of the *other* direction - what the sweep meant
+        // to ask. `ports` flips along with the direction so the name
+        // below numbers by the resolved direction's count (the same
+        // port id must always answer with the same name). Compliant
+        // hosts iterate `0..count(direction)` and can never reach
+        // this; remove when the validator queries the direction it
+        // iterates.
+        let (is_input, ports) = if index < ports {
+            (is_input, ports)
+        } else if index < opposite {
+            (!is_input, opposite)
+        } else {
             return false;
-        }
+        };
 
         let out = &mut *info;
-        out.id = u32::from(!is_input);
+        // Port ids must be unique across the plugin. Fold the direction
+        // bit and the index together: input k -> 2k, output k -> 2k+1.
+        out.id = (index << 1) | u32::from(!is_input);
         // Notes go out as `CLAP_EVENT_NOTE`, but every other
         // channel-voice message and SysEx go out as `CLAP_EVENT_MIDI`
         // (raw MIDI dialect), so advertise both dialects or a
@@ -1927,15 +2581,33 @@ unsafe extern "C" fn note_ports_get<P: PluginExport>(
         // raw-MIDI path.
         out.supported_dialects = CLAP_NOTE_DIALECT_CLAP | CLAP_NOTE_DIALECT_MIDI;
         out.preferred_dialect = CLAP_NOTE_DIALECT_CLAP;
+        // A port that opted into MIDI 2.0 also carries UMP: advertise
+        // the MIDI2 dialect so the host routes `CLAP_EVENT_MIDI2` to us
+        // (in) and reads it back (out). Still CLAP-preferred - MIDI2 is
+        // the opt-in native path, not the default.
+        let dialect = if is_input {
+            P::info().midi_input_dialect
+        } else {
+            P::info().midi_output_dialect
+        };
+        if dialect == MidiDialect::Midi2 {
+            out.supported_dialects |= CLAP_NOTE_DIALECT_MIDI2;
+        }
         out.name = [0; CLAP_NAME_SIZE];
-        copy_str_to_buf(
-            &mut out.name,
-            if is_input {
-                "Note Input"
-            } else {
-                "Note Output"
-            },
-        );
+        let base = if is_input {
+            "Note Input"
+        } else {
+            "Note Output"
+        };
+        // Number the ports only when there's more than one, so the
+        // single-port case keeps its plain label. Not the audio thread -
+        // allocation here is fine.
+        let name = if ports > 1 {
+            format!("{base} {}", index + 1)
+        } else {
+            base.to_string()
+        };
+        copy_str_to_buf(&mut out.name, &name);
 
         true
     }
@@ -2027,7 +2699,9 @@ unsafe extern "C" fn gui_create<P: PluginExport>(
         if data.gui_created {
             return true;
         }
-        data.editor = data.plugin.editor();
+        // Editor construction needs `&mut P`; the lock waits out
+        // at most one in-flight audio block.
+        data.editor = lock_plugin(&data.plugin).editor();
         data.gui_created = data.editor.is_some();
         data.gui_created
     }
@@ -2042,7 +2716,7 @@ unsafe extern "C" fn gui_destroy<P: PluginExport>(plugin: *const clap_plugin) {
             // drop, NSView teardown, baseview window close) would
             // otherwise become an unhandled Obj-C exception in
             // the host.
-            let editor_ptr: *mut dyn truce_core::editor::Editor = editor.as_mut();
+            let editor_ptr: *mut dyn Editor = editor.as_mut();
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 (*editor_ptr).close();
             }));
@@ -2164,13 +2838,9 @@ unsafe fn gui_set_parent_inner<P: PluginExport>(
             return false;
         }
 
-        let params = data.plugin.params_arc();
-        // SAFETY: `data.plugin` is the `Box::into_raw` plugin instance owned
-        // by the host's plugin slot - outlives the editor. Params fields are
-        // atomic; cross-thread reads from the GUI thread are sound. The host
-        // pointers are valid for the plugin's lifetime; closures capturing
-        // them run on the main thread only.
-        let plugin_ptr = SendPtr::new(&raw const data.plugin);
+        let params = Arc::clone(&data.params_arc);
+        let meter_store = Arc::clone(&data.meter_store);
+        let plugin_lock = Arc::clone(&data.plugin);
         let gui_changes = data.gui_changes.clone();
         let gui_changes2 = data.gui_changes.clone();
         let gui_changes3 = data.gui_changes.clone();
@@ -2252,13 +2922,16 @@ unsafe fn gui_set_parent_inner<P: PluginExport>(
                         .format_value(id, plain)
                         .unwrap_or_else(|| format!("{plain:.1}"))
                 }),
-                get_meter: Box::new(move |id| {
-                    let plugin = plugin_ptr.get();
-                    plugin.get_meter(id)
-                }),
+                get_meter: Box::new(move |id| meter_store.read(id)),
                 get_state: Box::new(move || {
-                    let plugin = plugin_ptr.get();
-                    plugin.save_state()
+                    // Editor state read. Blocking here is safe and
+                    // bounded: the GUI thread holds nothing the audio
+                    // thread waits on, and the audio thread releases
+                    // the plugin lock at every block end - single-
+                    // digit ms worst case. A try_lock's empty fallback
+                    // was ambiguous with "no custom state", so a lost
+                    // race silently kept stale editor state.
+                    lock_plugin(&plugin_lock).save_state()
                 }),
                 set_state: Box::new(move |bytes| {
                     // The editor sends RAW custom-state bytes - exactly
@@ -2745,6 +3418,7 @@ pub unsafe fn create_plugin_instance<P: PluginExport>(
     let plugin_id_hash = state::hash_plugin_id(info.clap_id);
     let param_infos = instance.params().param_infos();
     let params_arc = instance.params_arc();
+    let meter_store = instance.meter_store();
     let latency_cache = AtomicU32::new(instance.latency());
     let tail_cache = AtomicU32::new(instance.tail());
 
@@ -2766,11 +3440,13 @@ pub unsafe fn create_plugin_instance<P: PluginExport>(
         .unwrap_or(0);
 
     let data = Box::new(ClapPluginData::<P> {
-        plugin: instance,
+        plugin: shared_plugin(instance),
         params_arc,
+        meter_store,
         latency_cache,
         tail_cache,
         event_list: EventList::with_capacity(EVENT_LIST_PREALLOC),
+        sounding_notes: SoundingNotes::new(info.midi_input_ports),
         output_events: EventList::with_capacity(EVENT_LIST_PREALLOC),
         sub_event_scratch: EventList::with_capacity(EVENT_LIST_PREALLOC),
         param_infos,
@@ -2785,7 +3461,7 @@ pub unsafe fn create_plugin_instance<P: PluginExport>(
         gui_changes: Arc::new(GuiChangeQueue::new(GUI_QUEUE_CAPACITY)),
         pending_state: Arc::new(StateLoadQueue::new(1)),
         needs_rescan: Arc::new(AtomicBool::new(false)),
-        transport_slot: truce_core::TransportSlot::new(),
+        transport_slot: TransportSlot::new(),
         host_scale: 1.0,
         host_scale_set_by_host: false,
         input_slices: Vec::with_capacity(max_in),
@@ -2831,6 +3507,7 @@ macro_rules! export_clap {
         mod _clap_entry {
             use super::*;
             use std::ffi::{CStr, c_char, c_void};
+            use std::path::Path;
             use std::ptr;
             use std::sync::OnceLock;
 
@@ -2971,44 +3648,187 @@ mod transport_tests {
 }
 
 #[cfg(test)]
-mod note_choke_tests {
-    use super::{choke_to_note_off, clap_event_note};
+mod note_expression_tests {
+    use super::{
+        CLAP_NOTE_EXPRESSION_TUNING, CLAP_NOTE_EXPRESSION_VOLUME, clap_event_note_expression,
+        clap_note_expression_of, note_expression_body,
+    };
     use truce_core::events::EventBody;
 
-    fn note_event(channel: i16, key: i16) -> clap_event_note {
-        // SAFETY: clap_event_note is a repr(C) POD; all-zero is a
-        // valid value, fields under test are overwritten below.
-        let mut n: clap_event_note = unsafe { std::mem::zeroed() };
-        n.channel = channel;
-        n.key = key;
-        n
+    fn expression(id: i32, value: f64) -> clap_event_note_expression {
+        // SAFETY: clap_event_note_expression is a repr(C) POD; all-zero
+        // is valid (channel 0, key 0).
+        let mut ne: clap_event_note_expression = unsafe { std::mem::zeroed() };
+        ne.expression_id = id;
+        ne.value = value;
+        ne
     }
 
     #[test]
-    fn concrete_channel_and_key_becomes_note_off() {
-        let n = note_event(3, 60);
-        match choke_to_note_off(&n) {
-            Some(EventBody::NoteOff {
-                channel,
-                note,
-                velocity,
+    fn volume_crosses_in_the_gain_domain() {
+        // CLAP `VOLUME` is plain linear gain `0..=4`; wire full-scale
+        // must land on gain 4 (+12 dB), unity on the quarter point.
+        let (id, _, _, value) = clap_note_expression_of(&EventBody::PerNoteCC {
+            group: 0,
+            channel: 0,
+            note: 60,
+            cc: 7,
+            value: u32::MAX,
+            registered: true,
+        })
+        .expect("volume maps");
+        assert_eq!(id, CLAP_NOTE_EXPRESSION_VOLUME);
+        assert!((value - 4.0).abs() < 1e-9);
+
+        // Host unity gain decodes to the wire's quarter point.
+        let body = note_expression_body(&expression(CLAP_NOTE_EXPRESSION_VOLUME, 1.0), 0, 60)
+            .expect("volume decodes");
+        let EventBody::PerNoteCC { cc: 7, value, .. } = body else {
+            panic!("expected volume PerNoteCC, got {body:?}");
+        };
+        assert!((f64::from(value) / f64::from(u32::MAX) - 0.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn assignable_per_note_cc_is_not_an_expression() {
+        // Only registered per-note indices carry the predefined
+        // expression semantics; an assignable index 7 is not volume.
+        assert!(
+            clap_note_expression_of(&EventBody::PerNoteCC {
+                group: 0,
+                channel: 0,
+                note: 60,
+                cc: 7,
+                value: u32::MAX,
+                registered: false,
+            })
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn tuning_full_scale_is_48_semitones() {
+        let (_, _, _, semis) = clap_note_expression_of(&EventBody::PerNotePitchBend {
+            group: 0,
+            channel: 0,
+            note: 60,
+            value: u32::MAX,
+        })
+        .expect("tuning maps");
+        assert!((semis - 48.0).abs() < 1e-6);
+
+        // A host bend beyond the wire's range saturates.
+        let body = note_expression_body(&expression(CLAP_NOTE_EXPRESSION_TUNING, 120.0), 0, 60)
+            .expect("tuning decodes");
+        assert!(matches!(
+            body,
+            EventBody::PerNotePitchBend {
+                value: u32::MAX,
                 ..
-            }) => {
-                assert_eq!(channel, 3);
-                assert_eq!(note, 60);
-                assert_eq!(velocity, 0);
             }
-            other => panic!("expected NoteOff, got {other:?}"),
+        ));
+    }
+}
+
+#[cfg(test)]
+mod sounding_notes_tests {
+    use super::{NoteAxis, SoundingNotes};
+
+    #[test]
+    fn wildcard_axis_parses_all_concrete_and_junk() {
+        assert_eq!(NoteAxis::parse(-1, 16), NoteAxis::All); // wildcard
+        assert_eq!(NoteAxis::parse(3, 16), NoteAxis::One(3)); // concrete
+        assert_eq!(NoteAxis::parse(16, 16), NoteAxis::Invalid); // out of domain
+        assert_eq!(NoteAxis::parse(-2, 128), NoteAxis::Invalid); // hostile
+    }
+
+    #[test]
+    fn drain_matches_only_the_requested_axes() {
+        let mut s = SoundingNotes::new(2);
+        s.set(0, 0, 60);
+        s.set(0, 3, 60);
+        s.set(0, 3, 64);
+        s.set(1, 3, 60); // other port: never touched below
+
+        // Key wildcard, concrete channel: both channel-3 notes drain.
+        let mut hits = Vec::new();
+        s.drain_matching(0, Some(3), None, |ch, k| hits.push((ch, k)));
+        assert_eq!(hits, [(3, 60), (3, 64)]);
+
+        // Drained notes are cleared - a second wildcard finds nothing.
+        hits.clear();
+        s.drain_matching(0, Some(3), None, |ch, k| hits.push((ch, k)));
+        assert!(hits.is_empty());
+
+        // Channel wildcard, concrete key.
+        s.set(0, 5, 60);
+        hits.clear();
+        s.drain_matching(0, None, Some(60), |ch, k| hits.push((ch, k)));
+        assert_eq!(hits, [(0, 60), (5, 60)]);
+
+        // Both wildcard: everything left on the port.
+        s.set(0, 9, 1);
+        hits.clear();
+        s.drain_matching(0, None, None, |ch, k| hits.push((ch, k)));
+        assert_eq!(hits, [(9, 1)]);
+
+        // The other port's note survived it all.
+        hits.clear();
+        s.drain_matching(1, None, None, |ch, k| hits.push((ch, k)));
+        assert_eq!(hits, [(3, 60)]);
+    }
+
+    #[test]
+    fn concrete_off_clears_the_bit() {
+        let mut s = SoundingNotes::new(1);
+        s.set(0, 0, 60);
+        s.clear(0, 0, 60);
+        let mut hits = Vec::new();
+        s.drain_matching(0, None, None, |ch, k| hits.push((ch, k)));
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn for_each_leaves_notes_sounding() {
+        // Expression fan-out addresses voices without releasing them:
+        // the same wildcard visit must keep finding the note.
+        let mut s = SoundingNotes::new(1);
+        s.set(0, 2, 60);
+        s.set(0, 2, 64);
+        for _ in 0..2 {
+            let mut hits = Vec::new();
+            s.for_each_matching(0, Some(2), None, |ch, k| hits.push((ch, k)));
+            assert_eq!(hits, [(2, 60), (2, 64)]);
         }
     }
+}
 
-    #[test]
-    fn wildcard_channel_is_skipped() {
-        assert!(choke_to_note_off(&note_event(-1, 60)).is_none());
+#[cfg(test)]
+mod note_address_tests {
+    use super::{clap_event_note, clap_note_address};
+
+    fn note(channel: i16, key: i16) -> clap_event_note {
+        // SAFETY: clap_event_note is a repr(C) POD; all-zero is valid.
+        let mut ne: clap_event_note = unsafe { std::mem::zeroed() };
+        ne.channel = channel;
+        ne.key = key;
+        ne
     }
 
     #[test]
-    fn wildcard_key_is_skipped() {
-        assert!(choke_to_note_off(&note_event(3, -1)).is_none());
+    fn concrete_address_resolves() {
+        assert_eq!(clap_note_address(&note(15, 127)), Some((15, 127)));
+        assert_eq!(clap_note_address(&note(0, 0)), Some((0, 0)));
+    }
+
+    #[test]
+    fn wildcard_and_out_of_range_are_dropped() {
+        // `-1` is CLAP's "match all" wildcard; anything past the MIDI
+        // domain is a hostile/buggy host. Neither may reach a plugin
+        // that indexes tables by note/channel.
+        assert_eq!(clap_note_address(&note(-1, 60)), None);
+        assert_eq!(clap_note_address(&note(0, -1)), None);
+        assert_eq!(clap_note_address(&note(16, 60)), None);
+        assert_eq!(clap_note_address(&note(0, 128)), None);
     }
 }
