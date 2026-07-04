@@ -38,3 +38,4 @@ inherits = "release"
 
 [patch.crates-io]
 truce-clap = { path = "truce-clap-local" }
+truce-params = { path = "truce-params-local" }
