@@ -514,38 +514,54 @@ pub struct GoniometerCanvas {
     pub correlation: f32,
 }
 
+/// Per-widget-instance state kept by iced across frames. `background` caches
+/// the grid + circle geometry, which only changes on resize — avoids
+/// re-tessellating it on every redraw alongside the animated dots.
+pub struct GoniometerState {
+    background: canvas::Cache,
+}
+
+impl Default for GoniometerState {
+    fn default() -> Self {
+        Self { background: canvas::Cache::new() }
+    }
+}
+
 impl<Message> canvas::Program<Message> for GoniometerCanvas {
-    type State = ();
+    type State = GoniometerState;
     fn draw(
         &self,
-        _state: &Self::State,
+        state: &Self::State,
         renderer: &truce_iced::iced::Renderer,
         _theme: &truce_iced::iced::Theme,
         bounds: Rectangle,
         _cursor: Cursor,
     ) -> Vec<Geometry> {
-        let mut frame = canvas::Frame::new(renderer, bounds.size());
         let w = bounds.width;
         let h = bounds.height;
         let cx = w * 0.5;
         let cy = h * 0.5;
         let scale = cx.min(cy) * 0.9;
 
-        frame.fill(&Path::rectangle(Point::ORIGIN, bounds.size()), Color::from_rgb(0.06, 0.06, 0.06));
+        let background = state.background.draw(renderer, bounds.size(), |frame| {
+            frame.fill(&Path::rectangle(Point::ORIGIN, bounds.size()), Color::from_rgb(0.06, 0.06, 0.06));
 
-        let grid_stroke = Stroke {
-            style: canvas::Style::Solid(Color::from_rgba(1.0, 1.0, 1.0, 0.08)),
-            width: 1.0,
-            ..Default::default()
-        };
-        frame.stroke(&Path::line(Point::new(cx, 0.0), Point::new(cx, h)), grid_stroke);
-        frame.stroke(&Path::line(Point::new(0.0, cy), Point::new(w, cy)), grid_stroke);
-        frame.stroke(&Path::line(Point::new(0.0, 0.0), Point::new(w, h)), grid_stroke);
-        frame.stroke(&Path::line(Point::new(w, 0.0), Point::new(0.0, h)), grid_stroke);
-        frame.stroke(
-            &Path::circle(Point::new(cx, cy), scale),
-            Stroke { style: canvas::Style::Solid(Color::from_rgba(1.0, 1.0, 1.0, 0.06)), width: 1.0, ..Default::default() },
-        );
+            let grid_stroke = Stroke {
+                style: canvas::Style::Solid(Color::from_rgba(1.0, 1.0, 1.0, 0.08)),
+                width: 1.0,
+                ..Default::default()
+            };
+            frame.stroke(&Path::line(Point::new(cx, 0.0), Point::new(cx, h)), grid_stroke);
+            frame.stroke(&Path::line(Point::new(0.0, cy), Point::new(w, cy)), grid_stroke);
+            frame.stroke(&Path::line(Point::new(0.0, 0.0), Point::new(w, h)), grid_stroke);
+            frame.stroke(&Path::line(Point::new(w, 0.0), Point::new(0.0, h)), grid_stroke);
+            frame.stroke(
+                &Path::circle(Point::new(cx, cy), scale),
+                Stroke { style: canvas::Style::Solid(Color::from_rgba(1.0, 1.0, 1.0, 0.06)), width: 1.0, ..Default::default() },
+            );
+        });
+
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
 
         if let Ok(samples) = self.samples.lock() {
             let n = samples.len();
@@ -553,17 +569,28 @@ impl<Message> canvas::Program<Message> for GoniometerCanvas {
                 let draw_count = n.min(2048);
                 let third = draw_count / 3;
                 let wp = self.write_pos % n;
+                let inv_sqrt2 = std::f32::consts::FRAC_1_SQRT_2;
 
                 for group in 0..3u8 {
                     let alpha = match group { 0 => 0.12, 1 => 0.30, _ => 0.72 };
                     let dot_color = Color::from_rgba(0.1, 0.9, 0.5, alpha);
                     let start = group as usize * third;
                     let end = if group == 2 { draw_count } else { (group as usize + 1) * third };
+
+                    // One fill() per dot. Batching all dots into a single Path
+                    // and filling once looked cheaper (fewer draw calls) but is
+                    // catastrophic: lyon's fill tessellator resolves every
+                    // pairwise intersection across the subpaths in one sweep, so
+                    // the spread, partially-overlapping dots of a live signal
+                    // cost ~O(N²) on the host GUI thread and freeze the host
+                    // during playback. Independent per-circle fills tessellate a
+                    // trivial convex shape each — linear, no cross-dot work.
+                    // For real draw-call reduction use point-sprite/instancing,
+                    // not a multi-subpath fill.
                     for k in start..end {
                         let age = draw_count - 1 - k;
                         let idx = (wp + n - age - 1) % n;
                         let [l, r] = samples[idx];
-                        let inv_sqrt2 = std::f32::consts::FRAC_1_SQRT_2;
                         let m = (l + r) * inv_sqrt2;
                         let s = (l - r) * inv_sqrt2;
                         // Standard vectorscope convention: L = upper-left, R = upper-right.
@@ -598,7 +625,7 @@ impl<Message> canvas::Program<Message> for GoniometerCanvas {
             ..canvas::Text::default()
         });
 
-        vec![frame.into_geometry()]
+        vec![background, frame.into_geometry()]
     }
 }
 
