@@ -36,6 +36,18 @@ panic = "abort"
 [profile.shell]
 inherits = "release"
 
+# Temporary, for the Lucent-Vizia hang debugging session (see CLAP-vault
+# features/2026-07-04-truce-2.0-upgrade-plan.md) - `strip = true` on
+# [profile.release] erases every symbol, so WinDbg's stack traces show
+# raw offsets against the nearest exported name instead of real function
+# names. Keeps everything else (opt-level/lto/codegen-units) identical to
+# release so the hang still reproduces at the same optimization level -
+# only symbols differ. Delete this profile once the hang is root-caused.
+[profile.dbg]
+inherits = "release"
+strip = false
+debug = "full"
+
 [patch.crates-io]
 truce-clap = { path = "truce-clap-local" }
 # truce-vizia (git dep, Lucent/Lucent-Relay) pulls its own truce-params +
