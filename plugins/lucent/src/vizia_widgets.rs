@@ -172,6 +172,7 @@ impl View for KnobView {
 
     fn draw(&self, cx: &mut DrawContext, canvas: &vg::Canvas) {
         let b = cx.bounds();
+        canvas.translate((b.x, b.y));
         let (kcx, kcy) = (b.width() / 2.0, b.height() / 2.0);
         let r = (b.width().min(b.height()) / 2.0 - 3.0).max(8.0);
 
