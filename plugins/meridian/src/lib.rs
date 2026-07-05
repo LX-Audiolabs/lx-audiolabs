@@ -24,7 +24,7 @@ mod editor;
 mod vizia_canvas;
 
 const WINDOW_W: u32 = 990;
-const WINDOW_H: u32 = 660;
+const WINDOW_H: u32 = 760;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -532,26 +532,26 @@ impl PluginLogic for Meridian {
         }
 
         // Smoothed parameter values (per-block reads via value(), truce pattern)
-        let warmth_drive_db = self.params.warmth_drive.value() as f32;
-        let warmth_mix_pct = self.params.warmth_mix.value() as f32;
-        let excite_amt = self.params.excite_amount.value() as f32;
-        let excite_blend = self.params.excite_blend.value() as f32;
-        let comp_t = self.params.comp_threshold.value() as f32;
-        let comp_m = self.params.comp_mix.value() as f32;
-        let comp_att = self.params.comp_attack.value() as f32;
-        let comp_rel = self.params.comp_release.value() as f32;
-        let ratio = self.params.comp_character.value() as f32;
+        let warmth_drive_db = self.params.warmth_drive.value();
+        let warmth_mix_pct = self.params.warmth_mix.value();
+        let excite_amt = self.params.excite_amount.value();
+        let excite_blend = self.params.excite_blend.value();
+        let comp_t = self.params.comp_threshold.value();
+        let comp_m = self.params.comp_mix.value();
+        let comp_att = self.params.comp_attack.value();
+        let comp_rel = self.params.comp_release.value();
+        let ratio = self.params.comp_character.value();
         let knee = (1.0 - (ratio - 1.5) / 2.5) * 6.0;
-        let comp_makeup_gain = db_to_gain(self.params.comp_makeup.value() as f32);
+        let comp_makeup_gain = db_to_gain(self.params.comp_makeup.value());
 
-        let inflate_effect = self.params.inflate_effect.value() as f32 / 100.0;
-        let inflate_curve = self.params.inflate_curve.value() as f32;
+        let inflate_effect = self.params.inflate_effect.value() / 100.0;
+        let inflate_curve = self.params.inflate_curve.value();
         let inflate_band_split = self.params.inflate_band_split.value();
         let inflate_clip = self.params.inflate_clip.value();
 
-        let width = self.params.stereo_width.value() as f32 / 100.0;
-        let pan = self.params.pan.value() as f32;
-        let out_gain = db_to_gain(self.params.output_gain.value() as f32);
+        let width = self.params.stereo_width.value() / 100.0;
+        let pan = self.params.pan.value();
+        let out_gain = db_to_gain(self.params.output_gain.value());
 
         let mut snap_phase = self.params.shared.snap_phase.load(Ordering::Acquire);
         let mono = match snap_phase { 2 => true, 3 => false, _ => self.params.mono_active.value() };
@@ -820,15 +820,15 @@ impl PluginLogic for Meridian {
             if let Ok(mut spectrum_frame) = self.params.shared.spectrum_bins.try_lock() {
                 shared_analysis::compute_spectrum_bins(
                     &self.fft_output_cache,
-                    &mut *spectrum_frame,
+                    &mut spectrum_frame,
                     fft_size,
                     sample_rate,
                 );
             }
 
             // Update spectrum_avg (EMA) from spectrum_bins
-            if let Ok(mut avg) = self.params.shared.spectrum_avg.try_lock() {
-                if let Ok(bins) = self.params.shared.spectrum_bins.try_lock() {
+            if let Ok(mut avg) = self.params.shared.spectrum_avg.try_lock()
+                && let Ok(bins) = self.params.shared.spectrum_bins.try_lock() {
                     let n_bins = SPECTRUM_BINS;
                     // Energy-gating: only update EMA if signal above -80 dB
                     let frame_energy = bins.iter().map(|x| x * x).sum::<f32>() / n_bins as f32;
@@ -850,7 +850,6 @@ impl PluginLogic for Meridian {
                         avg[k] = avg[k] * (1.0 - alpha) + input * alpha;
                     }
                 }
-            }
         }
 
         // SNAP FFT

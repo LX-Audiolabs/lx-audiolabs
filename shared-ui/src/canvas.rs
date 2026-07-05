@@ -5,9 +5,19 @@
 //! Plugin-specific views (EqSpectrumView, CompressorEnvelopeView, EqCurveView)
 //! live in their respective plugin crates.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use vizia::prelude::*;
 use vizia::vg;
+
+/// `vg::Font::default()` builds a bare `SkFont` with no typeface attached -
+/// `canvas.draw_str()` silently draws nothing with it. Load the system
+/// default typeface once and reuse it for every `fill_text()` call.
+fn default_typeface() -> Option<vg::Typeface> {
+    static TYPEFACE: OnceLock<Option<vg::Typeface>> = OnceLock::new();
+    TYPEFACE
+        .get_or_init(|| vg::FontMgr::new().legacy_make_typeface(None, vg::FontStyle::default()))
+        .clone()
+}
 
 // ─── Drawing Helpers ─────────────────────────────────────────────────────────
 
@@ -46,8 +56,10 @@ pub fn line(canvas: &vg::Canvas, x1: f32, y1: f32, x2: f32, y2: f32, color: vg::
 }
 
 pub fn fill_text(canvas: &vg::Canvas, text: &str, x: f32, y: f32, size: f32, color: vg::Color) {
-    let mut f = vg::Font::default();
-    f.set_size(size);
+    let f = match default_typeface() {
+        Some(tf) => vg::Font::new(tf, size),
+        None => { let mut f = vg::Font::default(); f.set_size(size); f }
+    };
     canvas.draw_str(text, (x, y), &f, &fill_paint(color));
 }
 
@@ -191,6 +203,10 @@ impl View for GoniometerView {
                 let wp = self.write_pos % n;
                 let inv_sqrt2 = std::f32::consts::FRAC_1_SQRT_2;
 
+                // ponytail: batched via canvas.draw_points (native Skia point-list
+                // primitive), NOT the lyon fill-tessellator that caused the 2026-07-04
+                // host freeze (bugs/all/2026-07-04-goniometer-batch-fill-host-freeze) -
+                // that bug was in lyon's O(N^2) multi-subpath fill, unrelated to this API.
                 for group in 0..3u8 {
                     let alpha = match group {
                         0 => 0.12,
@@ -201,7 +217,7 @@ impl View for GoniometerView {
                     let start = group as usize * third;
                     let end = if group == 2 { draw_count } else { (group as usize + 1) * third };
 
-                    let paint = fill_paint(dot_color);
+                    let mut points: Vec<vg::Point> = Vec::with_capacity(end - start);
                     for k in start..end {
                         let age = draw_count - 1 - k;
                         let idx = (wp + n - age - 1) % n;
@@ -211,20 +227,25 @@ impl View for GoniometerView {
                         let sx = cx_ - s * scale;
                         let sy = cy - m * scale;
                         if sx >= 0.0 && sx <= w && sy >= 0.0 && sy <= h {
-                            canvas.draw_circle((sx, sy), 0.9, &paint);
+                            points.push((sx, sy).into());
                         }
                     }
+                    let mut paint = fill_paint(dot_color);
+                    paint.set_style(vg::PaintStyle::Stroke);
+                    paint.set_stroke_width(1.8); // matches previous draw_circle radius 0.9 (diameter 1.8)
+                    paint.set_stroke_cap(vg::PaintCap::Round);
+                    canvas.draw_points(vg::canvas::PointMode::Points, &points, &paint);
                 }
             }
         }
 
         let corr = self.correlation.clamp(-1.0, 1.0);
         let dot_color = if corr > 0.7 {
-            rgb(0.0, 0.85, 0.35)
+            rgb(0.0, 0.75, 0.3)
         } else if corr >= 0.0 {
-            rgb(1.0, 0.45, 0.1)
+            rgb(1.0, 0.55, 0.1)
         } else {
-            rgb(0.9, 0.2, 0.2)
+            rgb(1.0, 0.25, 0.25)
         };
         let (dot_x, dot_y) = (8.0, h - 8.0);
         canvas.draw_circle((dot_x, dot_y), 3.5, &fill_paint(dot_color));
@@ -411,15 +432,6 @@ impl View for SpectrumView {
                     eq.line_color.b() as f32 / 255.0,
                 );
                 let ea = eq.line_color.a() as f32 / 255.0;
-
-                let mut fill_builder = vg::PathBuilder::new();
-                fill_builder.move_to((eq.points[0].0 * width, height));
-                for &(x, db) in &eq.points {
-                    fill_builder.line_to((x * width, eq_to_y(db)));
-                }
-                fill_builder.line_to((eq.points.last().unwrap().0 * width, height));
-                fill_builder.close();
-                canvas.draw_path(&fill_builder.detach(), &fill_paint(col(er, eg, eb, eq.fill_alpha)));
 
                 let mut line_builder = vg::PathBuilder::new();
                 line_builder.move_to((eq.points[0].0 * width, eq_to_y(eq.points[0].1)));

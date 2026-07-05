@@ -11,7 +11,7 @@ mod editor;
 
 const FFT_SIZE: usize = 2048;
 const WINDOW_W: u32 = 260;
-const WINDOW_H: u32 = 160;
+const WINDOW_H: u32 = 240;
 
 // ─── Parameters ──────────────────────────────────────────────────────────────
 // Truce requires at least one Param field. `process()` always copies input to
@@ -107,15 +107,13 @@ impl LucentRelay {
     }
 
     fn claim_slot(&mut self) {
-        if self.claimed_slot.is_none() {
-            if let Some(hub) = relay_hub() {
-                if let Some((slot, generation)) = hub.claim_slot(shared_analysis::shm::now_ms()) {
+        if self.claimed_slot.is_none()
+            && let Some(hub) = relay_hub()
+                && let Some((slot, generation)) = hub.claim_slot(shared_analysis::shm::now_ms()) {
                     self.claimed_slot = Some(slot);
                     self.claimed_generation = generation;
                     self.fallback_label = format!("Relay {}", slot + 1);
                 }
-            }
-        }
         self.shm_state.shm_slot.store(
             self.claimed_slot.map(|s| s as i32).unwrap_or(-1),
             std::sync::atomic::Ordering::Release,
@@ -142,7 +140,7 @@ impl LucentRelay {
                     let sel = handle.target();
                     let resolved: Option<String> = if lucents.len() == 1 {
                         Some(lucents[0].clone())
-                    } else if lucents.iter().any(|x| *x == sel) {
+                    } else if lucents.contains(&sel) {
                         Some(sel)
                     } else {
                         None
@@ -289,9 +287,8 @@ impl Drop for LucentRelay {
         if let Some(alive) = self.liveness.take() {
             alive.store(false, std::sync::atomic::Ordering::Release);
         }
-        if let Some(slot) = self.claimed_slot.take() {
-            if let Some(hub) = relay_hub() { hub.release_slot(slot); }
-        }
+        if let Some(slot) = self.claimed_slot.take()
+            && let Some(hub) = relay_hub() { hub.release_slot(slot); }
         editor::remove_relay_handle(Arc::as_ptr(&self.params) as usize);
     }
 }

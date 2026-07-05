@@ -9,37 +9,7 @@
 use vizia::prelude::*;
 use vizia::vg;
 
-fn col(r: f32, g: f32, b: f32, a: f32) -> vg::Color {
-    vg::Color::from_argb(
-        (a.clamp(0.0, 1.0) * 255.0) as u8,
-        (r.clamp(0.0, 1.0) * 255.0) as u8,
-        (g.clamp(0.0, 1.0) * 255.0) as u8,
-        (b.clamp(0.0, 1.0) * 255.0) as u8,
-    )
-}
-
-fn stroke_paint(color: vg::Color, width: f32) -> vg::Paint {
-    let mut p = vg::Paint::default();
-    p.set_anti_alias(true);
-    p.set_color(color);
-    p.set_style(vg::PaintStyle::Stroke);
-    p.set_stroke_width(width);
-    p
-}
-
-fn fill_paint(color: vg::Color) -> vg::Paint {
-    let mut p = vg::Paint::default();
-    p.set_anti_alias(true);
-    p.set_color(color);
-    p.set_style(vg::PaintStyle::Fill);
-    p
-}
-
-fn fill_text(canvas: &vg::Canvas, text: &str, x: f32, y: f32, size: f32, color: vg::Color) {
-    let mut f = vg::Font::default();
-    f.set_size(size);
-    canvas.draw_str(text, (x, y), &f, &fill_paint(color));
-}
+use shared_ui::{col, stroke_paint, fill_paint, fill_text};
 
 pub struct EqCurveView {
     pub points: Vec<(f32, f32)>, // (x_norm 0..1, db) — 240 points
@@ -75,9 +45,7 @@ impl View for EqCurveView {
             let grid = stroke_paint(col(1.0, 1.0, 1.0, alpha), 0.6);
             canvas.draw_line((0.0, y), (w, y), &grid);
 
-            let mut label_font = vg::Font::default();
-            label_font.set_size(9.0);
-            canvas.draw_str(&format!("{db:+}"), (2.0, y - 2.0), &label_font, &fill_paint(col(1.0, 1.0, 1.0, 0.35)));
+            fill_text(canvas, &format!("{db:+}"), 2.0, y - 2.0, 9.0, col(1.0, 1.0, 1.0, 0.35));
         }
 
         // Frequency labels
@@ -89,24 +57,6 @@ impl View for EqCurveView {
         // Zero-db line
         let zero_y = h - h * (-self.db_min + 12.0) / (db_range + 12.0);
         canvas.draw_line((0.0, zero_y), (w, zero_y), &stroke_paint(col(1.0, 1.0, 1.0, 0.18), 0.8));
-
-        // Curve — filled area under the line
-        let mut path = vg::PathBuilder::new();
-        let first_y = h - h * (self.points[0].1 - self.db_min + 12.0) / (db_range + 12.0);
-        path.move_to((0.0, h)); // bottom-left corner
-        path.move_to((0.0, first_y));
-        for (xn, db) in &self.points {
-            let x = xn * w;
-            let y = h - h * (db - self.db_min + 12.0) / (db_range + 12.0);
-            path.line_to((x, y));
-        }
-        path.line_to((w, h)); // bottom-right corner
-        path.close();
-
-        let mut fill = vg::Paint::default();
-        fill.set_anti_alias(true);
-        fill.set_color(col(1.0, 0.45, 0.1, 0.12));
-        canvas.draw_path(&path.detach(), &fill);
 
         // Curve line
         let mut line_path = vg::PathBuilder::new();

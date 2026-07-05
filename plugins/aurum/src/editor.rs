@@ -14,7 +14,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 fn rgb(r: f32, g: f32, b: f32) -> Color { Color::rgba((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8, 255) }
 fn col(r: f32, g: f32, b: f32, a: f32) -> Color { Color::rgba((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8, (a * 255.0) as u8) }
 
-#[derive(Clone)] struct Tel { peak_l: f32, peak_r: f32, peak_hl: f32, peak_hr: f32, peak_h: f32, phase_c: f32, bal: f32, in_peak: f32, gr: f32, snap: u32 }
+#[derive(Clone)] struct Tel { peak_l: f32, peak_r: f32, peak_hl: f32, peak_hr: f32, peak_h: f32, phase_c: f32, bal: f32, in_peak: f32, gr: f32 }
 
 struct Ticker { shared: Arc<SharedState>, tel: Signal<Tel>, snap: Signal<u32>, lt: RefCell<Instant> }
 impl Ticker { fn new(cx: &mut Context, s: Arc<SharedState>, tel: Signal<Tel>, snap: Signal<u32>) -> Handle<'_, Self> { Self { shared: s, tel, snap, lt: RefCell::new(Instant::now()) }.build(cx, |_| {}) } }
@@ -24,7 +24,7 @@ impl View for Ticker {
         let due = { let mut l = self.lt.borrow_mut(); if Instant::now().duration_since(*l) >= Duration::from_millis(33) { *l = Instant::now(); true } else { false } };
         if due {
             let mut s = self.snap.get(); if s > 0 { s -= 1; self.snap.set(s); }
-            self.tel.update(|t| *t = Tel { peak_l: self.shared.output_peak_l.load(Ordering::Relaxed), peak_r: self.shared.output_peak_r.load(Ordering::Relaxed), peak_hl: self.shared.peak_hold_l.load(Ordering::Relaxed), peak_hr: self.shared.peak_hold_r.load(Ordering::Relaxed), peak_h: self.shared.peak_hold.load(Ordering::Relaxed), phase_c: self.shared.phase_correlation.load(Ordering::Relaxed), bal: self.shared.balance.load(Ordering::Relaxed), in_peak: self.shared.input_peak.load(Ordering::Relaxed), gr: self.shared.gain_reduction.load(Ordering::Relaxed), snap: s, });
+            self.tel.update(|t| *t = Tel { peak_l: self.shared.output_peak_l.load(Ordering::Relaxed), peak_r: self.shared.output_peak_r.load(Ordering::Relaxed), peak_hl: self.shared.peak_hold_l.load(Ordering::Relaxed), peak_hr: self.shared.peak_hold_r.load(Ordering::Relaxed), peak_h: self.shared.peak_hold.load(Ordering::Relaxed), phase_c: self.shared.phase_correlation.load(Ordering::Relaxed), bal: self.shared.balance.load(Ordering::Relaxed), in_peak: self.shared.input_peak.load(Ordering::Relaxed), gr: self.shared.gain_reduction.load(Ordering::Relaxed) });
         }
         cx.needs_redraw();
     }
@@ -41,7 +41,7 @@ fn tgl(l: &ParamLens<AurumParams>, id: P) { set(l, id, if l.get_plain(id) != 0.0
 
 pub fn build(cx: &mut Context, lens: ParamLens<AurumParams>, params: Arc<AurumParams>, shared: Arc<SharedState>) {
     let cfg = shared_analysis::load_config("Aurum"); let vp = Signal::new(cfg.vault_path.clone()); let show = Signal::new(false); let vpi = Signal::new(cfg.vault_path.unwrap_or_default()); let tab = Signal::new(0usize);
-    let tel = Signal::new(Tel { peak_l: -90.0, peak_r: -90.0, peak_hl: -90.0, peak_hr: -90.0, peak_h: -90.0, phase_c: 1.0, bal: 0.0, in_peak: -90.0, gr: 0.0, snap: 0 }); let snap_sig = Signal::new(0u32);
+    let tel = Signal::new(Tel { peak_l: -90.0, peak_r: -90.0, peak_hl: -90.0, peak_hr: -90.0, peak_h: -90.0, phase_c: 1.0, bal: 0.0, in_peak: -90.0, gr: 0.0 }); let snap_sig = Signal::new(0u32);
     Ticker::new(cx, shared.clone(), tel, snap_sig).width(Pixels(1.0)).height(Pixels(1.0));
     let lh = lens.clone(); let ph = params.clone();
     let _lb = lens.clone(); let _pb = params.clone(); let sb = shared.clone();

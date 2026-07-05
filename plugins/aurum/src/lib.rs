@@ -370,18 +370,18 @@ impl PluginLogic for Aurum {
             let in_l = buffer.input(0)[i];
             let in_r = buffer.input(1)[i];
 
-            let clip_ceiling = 10.0_f32.powf(self.params.clip_ceiling.value() as f32 / 20.0);
-            let clip_softness = self.params.clip_softness.value() as f32 / 100.0;
-            let sat_drive_stereo = self.params.sat_drive_stereo.value() as f32;
-            let sat_drive_mid = self.params.sat_drive_mid.value() as f32;
-            let sat_drive_side = self.params.sat_drive_side.value() as f32;
-            let sat_mix = self.params.sat_mix.value() as f32 / 100.0;
-            let width = self.params.stereo_width.value() as f32;
-            let mb_global_gain = 10.0_f32.powf(self.params.mb_global_gain.value() as f32 / 20.0);
-            let mb_makeup_lo = 10.0_f32.powf(self.params.mb_gain_mid_lo.value() as f32 / 20.0);
-            let mb_makeup_hi = 10.0_f32.powf(self.params.mb_gain_mid_hi.value() as f32 / 20.0);
-            let mb_makeup_side = 10.0_f32.powf(self.params.mb_gain_side.value() as f32 / 20.0);
-            let out_gain = 10.0_f32.powf(self.params.output_gain.value() as f32 / 20.0);
+            let clip_ceiling = 10.0_f32.powf(self.params.clip_ceiling.value() / 20.0);
+            let clip_softness = self.params.clip_softness.value() / 100.0;
+            let sat_drive_stereo = self.params.sat_drive_stereo.value();
+            let sat_drive_mid = self.params.sat_drive_mid.value();
+            let sat_drive_side = self.params.sat_drive_side.value();
+            let sat_mix = self.params.sat_mix.value() / 100.0;
+            let width = self.params.stereo_width.value();
+            let mb_global_gain = 10.0_f32.powf(self.params.mb_global_gain.value() / 20.0);
+            let mb_makeup_lo = 10.0_f32.powf(self.params.mb_gain_mid_lo.value() / 20.0);
+            let mb_makeup_hi = 10.0_f32.powf(self.params.mb_gain_mid_hi.value() / 20.0);
+            let mb_makeup_side = 10.0_f32.powf(self.params.mb_gain_side.value() / 20.0);
+            let out_gain = 10.0_f32.powf(self.params.output_gain.value() / 20.0);
 
             // [2] Clipper
             let (cl, cr) = if clip_ms_mode {

@@ -163,12 +163,11 @@ fn parse_aether_preset(content: &str) -> Option<AetherProfile> {
 fn scan_aether_presets(dir: &std::path::Path) -> Vec<(String, PathBuf, AetherProfile)> {
     let mut v=Vec::new();
     if let Ok(entries)=std::fs::read_dir(dir){for e in entries.flatten(){let p=e.path();
-        if p.extension().is_some_and(|x|x=="md"){if let Ok(c)=std::fs::read_to_string(&p){
-            if let Some(mut pf)=parse_aether_preset(&c){
+        if p.extension().is_some_and(|x|x=="md")&& let Ok(c)=std::fs::read_to_string(&p)
+            && let Some(mut pf)=parse_aether_preset(&c){
                 if pf.name.is_empty(){pf.name=p.file_stem().and_then(|s|s.to_str()).unwrap_or("Unnamed").to_string();}
                 v.push((pf.name.clone(),p,pf));
             }
-        }}
     }}
     v
 }
@@ -354,10 +353,12 @@ pub fn build(cx: &mut Context, lens: ParamLens<AetherParams>, params: Arc<Aether
                         save_last_preset(&vp_p.get(), &name);
                     }
                 })
-                .width(Pixels(140.0));
+                .width(Pixels(170.0))
+                .height(Pixels(20.0))
+                .font_size(11.0);
 
             // Preset name
-            Textbox::new(cx, preset_name_signal).width(Pixels(100.0));
+            Textbox::new(cx, preset_name_signal).width(Pixels(170.0)).height(Pixels(20.0)).font_size(11.0);
 
             // Save
             let params_save = params.clone();
@@ -366,11 +367,24 @@ pub fn build(cx: &mut Context, lens: ParamLens<AetherParams>, params: Arc<Aether
                 let name = preset_name_signal.get();
                 if !name.is_empty() {
                     let md = build_profile_md(&params_save);
-                    if let Some(path) = vp_save.get() {
-                        let fp = std::path::Path::new(&path).join(format!("{name}.md"));
-                        let p = fp.clone();
-                        std::thread::spawn(move || { let _ = std::fs::write(&p, md); });
+                    // Fall back to the plugin's own data dir when no vault
+                    // path is configured yet - matches Meridian/Equilibrium,
+                    // so SAVE always writes something instead of silently
+                    // no-op'ing.
+                    let dir = match vp_save.get() {
+                        Some(vp) if !vp.is_empty() => std::path::PathBuf::from(vp),
+                        _ => shared_analysis::get_plugin_dir("Aether").join("presets"),
+                    };
+                    let _ = std::fs::create_dir_all(&dir);
+                    let fp = dir.join(format!("{name}.md"));
+                    if std::fs::write(&fp, md).is_ok() {
                         save_last_preset(&vp_save.get(), &name);
+                        let mut names = preset_opts.get();
+                        if !names.contains(&name) {
+                            names.push(name.clone());
+                            preset_opts.set(names.clone());
+                        }
+                        if let Some(idx) = names.iter().position(|n| n == &name) { sel_idx.set(idx); }
                     }
                 }
             });
@@ -393,9 +407,9 @@ pub fn build(cx: &mut Context, lens: ParamLens<AetherParams>, params: Arc<Aether
                 lens_bypass.automate(AetherParamsParamId::Bypass, if v {1.0} else {0.0});
                 bypass_signal.set(v);
             })
-            .width(Pixels(70.0)).height(Pixels(26.0))
+            .width(Pixels(70.0)).height(Pixels(shared_ui::BUTTON_HEIGHT))
             .background_color(Memo::new(move |_| {
-                if bypass_signal.get() { col(0.5,0.08,0.08,1.0) } else { col(0.15,0.15,0.15,1.0) }
+                if bypass_signal.get() { shared_ui::AMBER } else { shared_ui::IDLE_BG }
             }));
         })
         .width(Stretch(1.0)).height(Pixels(44.0)).padding(Pixels(8.0))
@@ -412,29 +426,40 @@ pub fn build(cx: &mut Context, lens: ParamLens<AetherParams>, params: Arc<Aether
 
 fn build_setup(cx: &mut Context, vault_input: Signal<String>, vault_path: Signal<Option<String>>, show_setup: Signal<bool>) {
     VStack::new(cx, move |cx| {
-        Element::new(cx).height(Stretch(1.0));
-        HStack::new(cx, move |cx| {
-            Element::new(cx).width(Stretch(1.0));
-            VStack::new(cx, move |cx| {
-                Label::new(cx, "Vault Path").font_size(14.0).color(Color::white());
-                Textbox::new(cx, vault_input).width(Pixels(350.0));
-                HStack::new(cx, move |cx| {
-                    small_button(cx, "SAVE", move |_cx| {
-                        let p = vault_input.get().trim().to_string();
-                        let new = if p.is_empty() { None } else { Some(p) };
-                        vault_path.set(new.clone());
-                        let mut cfg = shared_analysis::load_config("Aether");
-                        cfg.vault_path = new;
-                        let _ = shared_analysis::save_config("Aether", &cfg);
-                        show_setup.set(false);
-                    });
-                    small_button(cx, "CANCEL", move |_cx| show_setup.set(false));
-                }).width(Auto).horizontal_gap(Pixels(8.0));
-            }).width(Auto).vertical_gap(Pixels(8.0));
-            Element::new(cx).width(Stretch(1.0));
-        }).width(Stretch(1.0)).height(Stretch(1.0)).alignment(Alignment::Center);
-        Element::new(cx).height(Stretch(1.0));
-    }).width(Stretch(1.0)).height(Stretch(1.0)).background_color(rgb(0.08,0.08,0.08));
+        VStack::new(cx, move |cx| {
+            Label::new(cx, "LX AUDIOLABS - SETUP").font_size(18.0).color(Color::white());
+            Label::new(cx, "Configure your Vault path for Aether:").font_size(12.0).color(Color::white());
+            Textbox::new(cx, vault_input)
+                .placeholder("Enter Vault absolute path...")
+                .width(Stretch(1.0));
+            HStack::new(cx, move |cx| {
+                small_button(cx, "SAVE", move |_cx| {
+                    let p = vault_input.get().trim().to_string();
+                    let new = if p.is_empty() { None } else { Some(p) };
+                    vault_path.set(new.clone());
+                    let mut cfg = shared_analysis::load_config("Aether");
+                    cfg.vault_path = new;
+                    let _ = shared_analysis::save_config("Aether", &cfg);
+                    show_setup.set(false);
+                });
+                small_button(cx, "CANCEL", move |_cx| show_setup.set(false));
+            })
+            .horizontal_gap(Pixels(10.0))
+            .height(Auto);
+        })
+        .width(Pixels(600.0))
+        .height(Auto)
+        .padding(Pixels(20.0))
+        .vertical_gap(Pixels(15.0))
+        .background_color(col(0.15, 0.15, 0.15, 1.0))
+        .border_color(col(0.3, 0.3, 0.3, 1.0))
+        .border_width(Pixels(1.0))
+        .corner_radius(Pixels(4.0));
+    })
+    .width(Stretch(1.0))
+    .height(Stretch(1.0))
+    .alignment(Alignment::Center)
+    .background_color(rgb(0.08,0.08,0.08));
 }
 
 fn build_main(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamLens<AetherParams>, params: Arc<AetherParams>, _shared: Arc<SharedState>) {
@@ -473,33 +498,37 @@ fn build_eq_section(cx: &mut Context, lens: &ParamLens<AetherParams>, params: &A
 fn build_band_column(cx: &mut Context, i: usize, lens: &ParamLens<AetherParams>, params: &Arc<AetherParams>) {
     let l = lens.clone(); let p = params.clone();
     VStack::new(cx, move |cx| {
-        let type_label = crate::band_type_label(eq_type_val(&p, i));
-        let l1 = l.clone(); let p1 = p.clone();
-        Button::new(cx, move |cx| Label::new(cx, type_label).font_size(9.0))
-            .on_press(move |_cx| { let n = (eq_type_val(&p1, i) + 1) % 4; set_eq_type(&l1, i, n); })
-            .width(Pixels(56.0)).height(Pixels(22.0))
-            .background_color(if eq_type_val(&p, i) != 0 { col(0.25,0.12,0.05,1.0) } else { col(0.14,0.14,0.14,1.0) });
+        let type_signal = Signal::new(eq_type_val(&p, i));
+        let l1 = l.clone();
+        Button::new(cx, move |cx| {
+            Label::new(cx, Memo::new(move |_| crate::band_type_label(type_signal.get()))).font_size(9.0)
+        })
+            .on_press(move |_cx| { let n = (type_signal.get() + 1) % 4; set_eq_type(&l1, i, n); type_signal.set(n); })
+            .width(Pixels(56.0)).height(Pixels(shared_ui::BUTTON_HEIGHT))
+            .background_color(Memo::new(move |_| {
+                if type_signal.get() != 0 { shared_ui::AMBER } else { shared_ui::IDLE_BG }
+            }));
 
         Label::new(cx, "FREQ").font_size(8.0).color(col(0.6,0.6,0.6,1.0));
         let l2 = l.clone();
         let freq_s = Signal::new(format!("{:.0}", eq_freq_val(&p, i)));
         Textbox::new(cx, freq_s).on_edit(move |_cx, s| {
             if let Ok(v) = s.trim().parse::<f32>() { set_eq_freq(&l2, i, v.clamp(FREQ_MIN, FREQ_MAX)); }
-        }).width(Pixels(56.0));
+        }).width(Pixels(56.0)).height(Pixels(20.0)).font_size(11.0);
 
         Label::new(cx, "GAIN").font_size(8.0).color(col(0.6,0.6,0.6,1.0));
         let l3 = l.clone();
         let gain_s = Signal::new(format!("{:.1}", eq_gain_val(&p, i)));
         Textbox::new(cx, gain_s).on_edit(move |_cx, s| {
             if let Ok(v) = s.trim().parse::<f32>() { set_eq_gain(&l3, i, v.clamp(-12.0, 12.0)); }
-        }).width(Pixels(56.0));
+        }).width(Pixels(56.0)).height(Pixels(20.0)).font_size(11.0);
 
         Label::new(cx, "Q").font_size(8.0).color(col(0.6,0.6,0.6,1.0));
         let l4 = l;
         let q_s = Signal::new(format!("{:.2}", eq_q_val(&p, i)));
         Textbox::new(cx, q_s).on_edit(move |_cx, s| {
             if let Ok(v) = s.trim().parse::<f32>() { set_eq_q(&l4, i, v.clamp(0.3, 8.0)); }
-        }).width(Pixels(56.0));
+        }).width(Pixels(56.0)).height(Pixels(20.0)).font_size(11.0);
     }).width(Auto).height(Auto).vertical_gap(Pixels(2.0)).alignment(Alignment::Center);
 }
 
@@ -516,14 +545,15 @@ fn build_blend_reset(cx: &mut Context, lens: &ParamLens<AetherParams>, params: &
         Element::new(cx).height(Pixels(60.0));
 
         let lr = l.clone();
-        small_button(cx, "RESET", move |_cx| {
+        shared_ui::danger_button(cx, "RESET", move |_cx| {
             for i in 0..5 { let(fd,qd,td)=BAND_DEF[i]; set_eq_freq(&lr,i,fd);set_eq_gain(&lr,i,0.0);set_eq_q(&lr,i,qd);set_eq_type(&lr,i,td); }
             lr.automate(AetherParamsParamId::Blend, 1.0);
-            lr.automate(AetherParamsParamId::CfAngle, (30.0/45.0) as f64);
+            lr.automate(AetherParamsParamId::CfAngle, 30.0/45.0);
             lr.automate(AetherParamsParamId::CfAmount, 0.0);
             lr.automate(AetherParamsParamId::CfRealism, 0.0);
             lr.automate(AetherParamsParamId::Gain, 0.5);
-        });
+        })
+        .width(Pixels(60.0));
     }).width(Pixels(104.0)).height(Auto).vertical_gap(Pixels(4.0)).alignment(Alignment::Center);
 }
 
@@ -551,14 +581,19 @@ fn build_crossfeed(cx: &mut Context, lens: &ParamLens<AetherParams>, params: &Ar
                         if let Gesture::Change(v) = g { lb.automate(AetherParamsParamId::CfAmount, (v/100.0).clamp(0.0,1.0) as f64); }
                     }).width(Pixels(40.0)).height(Pixels(40.0));
             }).width(Auto).vertical_gap(Pixels(2.0)).alignment(Alignment::Center);
-        }).horizontal_gap(Pixels(6.0));
+        }).width(Auto).horizontal_gap(Pixels(6.0)).alignment(Alignment::Center);
 
         Element::new(cx).height(Pixels(10.0));
 
-        let p4 = p3.clone();
-        Button::new(cx, move |cx| Label::new(cx, crate::realism_label(p3.cf_realism.value_i32())).font_size(9.0))
-            .on_press(move |_cx| { let n = (p4.cf_realism.value_i32() + 1) % 3; l3.automate(AetherParamsParamId::CfRealism, n as f64 / 2.0); })
-            .width(Pixels(110.0)).height(Pixels(26.0));
+        let realism_signal = Signal::new(p3.cf_realism.value_i32());
+        Button::new(cx, move |cx| {
+            Label::new(cx, Memo::new(move |_| crate::realism_label(realism_signal.get()))).font_size(9.0)
+        })
+            .on_press(move |_cx| { let n = (realism_signal.get() + 1) % 3; l3.automate(AetherParamsParamId::CfRealism, n as f64 / 2.0); realism_signal.set(n); })
+            .width(Pixels(110.0)).height(Pixels(shared_ui::BUTTON_HEIGHT))
+            .background_color(Memo::new(move |_| {
+                if realism_signal.get() != 0 { shared_ui::AMBER } else { shared_ui::IDLE_BG }
+            }));
     }).width(Pixels(131.0)).height(Auto).vertical_gap(Pixels(4.0)).alignment(Alignment::Center);
 }
 

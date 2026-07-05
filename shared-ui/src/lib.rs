@@ -1,5 +1,6 @@
 pub mod widgets;
 pub mod canvas;
+pub mod buttons;
 
 pub use widgets::{Gesture, KnobView, HSliderView, format_knob_value};
 pub use canvas::{
@@ -7,4 +8,9 @@ pub use canvas::{
     StereoMeterView, GoniometerView,
     EqCurve, SpectrumCurve, SpectrumConfig, SpectrumView,
     smooth_spectrum_third_octave,
+};
+pub use buttons::{
+    toggle_button, toggle_button_small, danger_button,
+    AMBER, IDLE_BG, DANGER_BG, DANGER_TEXT,
+    BUTTON_HEIGHT, BUTTON_HEIGHT_SMALL, KNOB_SIZE, SLIDER_HEIGHT,
 };

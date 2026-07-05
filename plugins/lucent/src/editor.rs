@@ -36,8 +36,6 @@ use crate::ui::{LucentUiState, RelayData};
 use shared_ui::{GoniometerView, SpectrumConfig, SpectrumCurve, SpectrumView, StereoMeterView, fmt_db, Gesture, KnobView, format_knob_value, rgb as vg_rgb};
 use crate::{LucentParams, LucentParamsParamId, read_masking, read_resonance};
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-
 fn col(r: f32, g: f32, b: f32, a: f32) -> Color {
     Color::rgba(
         (r.clamp(0.0, 1.0) * 255.0) as u8,
@@ -190,9 +188,9 @@ fn tick(
 
         if snap_now {
             t.snap_blink = 72;
-        } else if t.snap_blink == 1 {
-            if let Some(ref vp) = acc.vault_path {
-                if !vp.is_empty() {
+        } else if t.snap_blink == 1
+            && let Some(ref vp) = acc.vault_path
+                && !vp.is_empty() {
                     let stereo = shared.snap_stereo_snap.try_lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
                     let mono = shared.snap_mono_snap.try_lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
                     let delta = shared.snap_delta_snap.try_lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
@@ -201,8 +199,6 @@ fn tick(
                     let fname = snap_filename(vp);
                     let _ = std::fs::write(std::path::Path::new(vp).join(&fname), &md);
                 }
-            }
-        }
         if t.snap_blink > 0 {
             t.snap_blink -= 1;
         }
@@ -358,11 +354,10 @@ pub fn build(cx: &mut Context, lens: ParamLens<LucentParams>, shared: Arc<Shared
     let config = shared_analysis::load_config("Lucent");
 
     let mut initial_name = "Lucent".to_string();
-    if let Ok(name) = params.name.read() {
-        if !name.is_empty() {
+    if let Ok(name) = params.name.read()
+        && !name.is_empty() {
             initial_name = name.clone();
         }
-    }
 
     let telemetry = Signal::new(Telemetry {
         own_spectrum: Vec::new(),
@@ -449,25 +444,21 @@ pub fn build(cx: &mut Context, lens: ParamLens<LucentParams>, shared: Arc<Shared
                 let mode = lens_for_mode.get_plain(LucentParamsParamId::AnalyzeMode) as i64;
                 let label = match mode { 0 => "STANDALONE", 2 => "RELAY", _ => "HYBRID" };
                 let lens_press = lens_for_mode.clone();
-                Button::new(cx, |cx| Label::new(cx, label).font_size(11.0))
-                    .on_press(move |_cx| {
-                        let current = lens_press.get_plain(LucentParamsParamId::AnalyzeMode) as i64;
-                        let next: i64 = match current { 1 => 0, 0 => 2, _ => 1 };
-                        lens_press.automate(LucentParamsParamId::AnalyzeMode, next as f64 / 2.0);
-                        lens_press.value_signal(LucentParamsParamId::AnalyzeMode).set(next as f32 / 2.0);
-                    })
-                    .width(Pixels(110.0))
-                    .background_color(col(0.15, 0.1, 0.05, 1.0));
+                shared_ui::toggle_button(cx, label, true, move |_cx| {
+                    let current = lens_press.get_plain(LucentParamsParamId::AnalyzeMode) as i64;
+                    let next: i64 = match current { 1 => 0, 0 => 2, _ => 1 };
+                    lens_press.automate(LucentParamsParamId::AnalyzeMode, next as f64 / 2.0);
+                    lens_press.value_signal(LucentParamsParamId::AnalyzeMode).set(next as f32 / 2.0);
+                })
+                .width(Pixels(110.0));
             });
 
-            Button::new(cx, |cx| Label::new(cx, "RESET").font_size(12.0))
-                .on_press(move |_cx| {
-                    shared_for_reset.reset_peak.store(true, Ordering::Relaxed);
-                    shared_for_reset.peak_hold.store(-100.0, Ordering::Relaxed);
-                    shared_for_reset.peak_hold_l.store(-100.0, Ordering::Relaxed);
-                    shared_for_reset.peak_hold_r.store(-100.0, Ordering::Relaxed);
-                })
-                .background_color(col(0.2, 0.08, 0.08, 1.0));
+            shared_ui::danger_button(cx, "RESET", move |_cx| {
+                shared_for_reset.reset_peak.store(true, Ordering::Relaxed);
+                shared_for_reset.peak_hold.store(-100.0, Ordering::Relaxed);
+                shared_for_reset.peak_hold_l.store(-100.0, Ordering::Relaxed);
+                shared_for_reset.peak_hold_r.store(-100.0, Ordering::Relaxed);
+            });
         })
         .width(Auto)
         .height(Auto)
@@ -484,8 +475,6 @@ pub fn build(cx: &mut Context, lens: ParamLens<LucentParams>, shared: Arc<Shared
         // ── LEFT SIDEBAR ─────────────────────────────────────────────────
         let shared_for_snap = shared.clone();
         VStack::new(cx, move |cx| {
-            Label::new(cx, "LX AUDIOLABS").font_size(14.0).color(Color::white());
-
             // Built once, not inside a `Binding` on `telemetry` - `tick()`
             // calls `telemetry.update(...)` unconditionally every ~33ms
             // (Vizia signals have no equality check, see
@@ -536,7 +525,15 @@ pub fn build(cx: &mut Context, lens: ParamLens<LucentParams>, shared: Arc<Shared
                 if setup_visible.get() {
                     build_setup_form(cx, vault_path_input, setup_visible);
                 } else {
-                    build_main_panel(cx, telemetry, lens.clone(), sensitivity_display);
+                    // `build_main_panel` reads AnalyzeMode once at build time
+                    // (masking availability, spectrum source) - rebuild it
+                    // whenever the mode switches, or those go stale until the
+                    // editor is reopened.
+                    let mode_signal = lens.value_signal(LucentParamsParamId::AnalyzeMode);
+                    let lens = lens.clone();
+                    Binding::new(cx, mode_signal, move |cx| {
+                        build_main_panel(cx, telemetry, lens.clone(), sensitivity_display);
+                    });
                 }
             });
         })
@@ -554,7 +551,7 @@ pub fn build(cx: &mut Context, lens: ParamLens<LucentParams>, shared: Arc<Shared
                 VStack::new(cx, move |cx| {
                     StereoMeterView::new(cx, t.peak_l, t.peak_r, t.peak_hold_l, t.peak_hold_r, t.balance)
                         .width(Stretch(1.0))
-                        .height(Pixels(180.0));
+                        .height(Pixels(255.0));
 
                     HStack::new(cx, move |cx| {
                         Label::new(cx, fmt_db(t.peak_hold_l)).font_size(11.0).color(rgb(1.0, 0.45, 0.1));
@@ -660,7 +657,8 @@ fn build_main_panel(
                                     }
                                 });
                             })
-                            .background_color(if active { rgb(1.0, 0.45, 0.1) } else { col(0.15, 0.15, 0.15, 1.0) });
+                            .height(Pixels(shared_ui::BUTTON_HEIGHT))
+                            .background_color(if active { shared_ui::AMBER } else { shared_ui::IDLE_BG });
                     }
                 }
             })
@@ -668,7 +666,7 @@ fn build_main_panel(
             .height(Pixels(48.0))
             .padding(Pixels(8.0))
             .horizontal_gap(Pixels(6.0))
-            .alignment(Alignment::Center)
+            .alignment(Alignment::Left)
             .background_color(rgb(0.09, 0.09, 0.09));
         }
 
@@ -751,8 +749,9 @@ fn build_main_panel(
                 Label::new(cx, Memo::new(move |_| if telemetry.get().show_resonance { "ON" } else { "OFF" }))
             })
             .on_press(move |_cx| telemetry.update(|t| t.show_resonance = !t.show_resonance))
+            .height(Pixels(shared_ui::BUTTON_HEIGHT))
             .background_color(Memo::new(move |_| {
-                if telemetry.get().show_resonance { rgb(1.0, 0.45, 0.1) } else { col(0.15, 0.15, 0.15, 1.0) }
+                if telemetry.get().show_resonance { shared_ui::AMBER } else { shared_ui::IDLE_BG }
             }));
         })
         .width(Stretch(1.0))
@@ -789,7 +788,7 @@ fn build_main_panel(
             let lens_knob = lens.clone();
             KnobView::new(
                 cx,
-                lens.get_plain(LucentParamsParamId::Sensitivity),
+                (lens.get_plain(LucentParamsParamId::Sensitivity) / 100.0).clamp(0.0, 1.0),
                 0.5,
                 0.0,
                 100.0,
@@ -804,8 +803,8 @@ fn build_main_panel(
                     Gesture::End => lens_knob.end_edit(LucentParamsParamId::Sensitivity),
                 },
             )
-            .width(Pixels(48.0))
-            .height(Pixels(48.0));
+            .width(Pixels(40.0))
+            .height(Pixels(40.0));
 
             Label::new(cx, Memo::new(move |_| format_knob_value(sensitivity_display.get(), 100.0)))
                 .font_size(10.0)
@@ -831,11 +830,10 @@ fn snap_filename(vault_path: &str) -> String {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for e in entries.flatten() {
             let s = e.file_name().to_string_lossy().into_owned();
-            if let Some(inner) = s.strip_prefix("SNAPSHOT-").and_then(|r| r.strip_suffix(".md")) {
-                if let Ok(n) = inner.parse::<u32>() {
+            if let Some(inner) = s.strip_prefix("SNAPSHOT-").and_then(|r| r.strip_suffix(".md"))
+                && let Ok(n) = inner.parse::<u32>() {
                     max_n = max_n.max(n);
                 }
-            }
         }
     }
     format!("SNAPSHOT-{:03}.md", max_n + 1)
