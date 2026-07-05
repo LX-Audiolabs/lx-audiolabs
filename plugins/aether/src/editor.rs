@@ -21,7 +21,7 @@ use shared_dsp::Biquad;
 use truce_vizia::ParamLens;
 
 use crate::aether_canvas::EqCurveView;
-use shared_ui::{Gesture, KnobView, format_knob_value};
+use shared_ui::{Gesture, KnobView};
 use crate::{AetherParams, AetherParamsParamId};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");

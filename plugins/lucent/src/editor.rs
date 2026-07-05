@@ -742,6 +742,9 @@ fn build_main_panel(
     // subscribes to `telemetry` and updates text/color on this same,
     // persistent Button entity in place.
     HStack::new(cx, move |cx| {
+        let lens_resonance = lens.clone();
+        let lens_masking = lens.clone();
+        let lens_sensitivity = lens;
         HStack::new(cx, move |cx| {
             VStack::new(cx, move |cx| {
                 Label::new(cx, "RESONANCE").font_size(10.0).color(rgb(1.0, 0.55, 0.15));
@@ -751,8 +754,8 @@ fn build_main_panel(
             })
             .width(Stretch(1.0));
             {
-                let sig = lens.value_signal(LucentParamsParamId::ResonanceActive);
-                let lens_r = lens.clone();
+                let sig = lens_resonance.value_signal(LucentParamsParamId::ResonanceActive);
+                let lens_r = lens_resonance.clone();
                 Binding::new(cx, sig, move |cx| {
                     let active = lens_r.get(LucentParamsParamId::ResonanceActive) > 0.5;
                     let lens_r = lens_r.clone();
@@ -781,8 +784,8 @@ fn build_main_panel(
             if mode == 0 {
                 Label::new(cx, "OFF").color(col(0.35, 0.35, 0.35, 1.0));
             } else {
-                let sig = lens.value_signal(LucentParamsParamId::MaskingActive);
-                let lens_m = lens.clone();
+                let sig = lens_masking.value_signal(LucentParamsParamId::MaskingActive);
+                let lens_m = lens_masking.clone();
                 Binding::new(cx, sig, move |cx| {
                     let active = lens_m.get(LucentParamsParamId::MaskingActive) > 0.5;
                     let lens_m = lens_m.clone();
@@ -801,10 +804,10 @@ fn build_main_panel(
         .background_color(rgb(0.1, 0.1, 0.1));
 
         VStack::new(cx, move |cx| {
-            let lens_knob = lens.clone();
+            let lens_knob = lens_sensitivity.clone();
             KnobView::new(
                 cx,
-                (lens.get_plain(LucentParamsParamId::Sensitivity) / 100.0).clamp(0.0, 1.0),
+                (lens_sensitivity.get_plain(LucentParamsParamId::Sensitivity) / 100.0).clamp(0.0, 1.0),
                 0.5,
                 0.0,
                 100.0,

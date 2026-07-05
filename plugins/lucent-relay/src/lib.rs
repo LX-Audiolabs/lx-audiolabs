@@ -68,6 +68,7 @@ pub struct LucentRelay {
     cached_name:   String,
     fallback_label: String,
     cached_target:  String,
+    #[allow(dead_code)]
     target_buf:    [u8; shared_analysis::shm::MAX_NAME_LEN],
     liveness:      Option<Arc<std::sync::atomic::AtomicBool>>,
 }
