@@ -10,7 +10,7 @@
 use truce::prelude::*;
 use truce_core::editor::Editor;
 use truce_core::state::StateLoadError;
-use truce_iced::IcedEditor;
+use truce_vizia::ViziaEditor;
 use std::sync::Arc;
 use std::f32::consts::FRAC_PI_4;
 use std::sync::atomic::Ordering;
@@ -21,6 +21,7 @@ use shared_dsp::{Biquad, LR2Crossover, TiltEq, Compressor, AutoLoudMeter, DBTP_C
 use shared_analysis::{SharedState, SPECTRUM_BINS, SCOPE_BUFFER_LEN, SnapFFT, SnapMode};
 
 mod editor;
+mod vizia_canvas;
 
 const WINDOW_W: u32 = 990;
 const WINDOW_H: u32 = 660;
@@ -1003,7 +1004,12 @@ impl PluginLogic for Meridian {
     fn state_changed(&mut self) {}
 
     fn editor(&self) -> Box<dyn Editor> {
-        IcedEditor::<MeridianParams, editor::MeridianEditor>::new(self.params.clone(), (WINDOW_W, WINDOW_H)).into_editor()
+        let shared = self.params.shared.clone();
+        let params = self.params.clone();
+        ViziaEditor::<MeridianParams>::new(self.params.clone(), (WINDOW_W, WINDOW_H), move |cx, lens| {
+            editor::build(cx, lens, shared.clone(), params.clone())
+        })
+        .into_editor()
     }
 }
 

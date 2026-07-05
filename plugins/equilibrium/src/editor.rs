@@ -20,8 +20,8 @@ use vizia::vg;
 use shared_analysis::SharedState;
 use truce_vizia::ParamLens;
 
-use crate::vizia_canvas::{fmt_db, EqSpectrumView, GoniometerView, StereoMeterView};
-use crate::vizia_widgets::{format_knob_value, Gesture, HSliderView, KnobView};
+use shared_ui::{fmt_db, GoniometerView, StereoMeterView, format_knob_value, Gesture, HSliderView, KnobView};
+use crate::vizia_canvas::EqSpectrumView;
 use crate::{EquilibriumParams, EquilibriumParamsParamId as K};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -164,27 +164,45 @@ fn tick(shared: &SharedState, params: &EquilibriumParams, accum: &Arc<Mutex<Tick
     let balance = shared.balance.load(Ordering::Acquire);
 
     acc.preset_refresh_counter = acc.preset_refresh_counter.wrapping_add(1);
-    if acc.preset_refresh_counter % 60 == 0 {
+    let refresh_presets = acc.preset_refresh_counter % 60 == 0;
+    if refresh_presets {
         acc.presets = load_presets(acc.vault_path.as_deref());
-        // Low-frequency (~2s), not the 33ms tick itself - the sidebar's
-        // preset list is keyed off this, not `telemetry`, so its Buttons
-        // never see the tick-driven rebuild-drops-clicks issue documented
-        // on `Ticker`/`build_main_panel`.
-        params_gen.update(|g| *g = g.wrapping_add(1));
     }
 
     let measuring = shared.auto_loud_measuring.load(Ordering::Acquire);
+    let mut auto_loud_applied = false;
     if !measuring {
         let offset = shared.auto_loud_gain_offset.load(Ordering::Acquire);
         if offset.abs() > 0.05 {
             let cur = params.output_gain.raw_target() as f32;
             params.output_gain.set_value((cur + offset).clamp(-12.0, 12.0) as f64);
             shared.auto_loud_gain_offset.store(0.0, Ordering::Release);
+            auto_loud_applied = true;
         }
     }
 
     let snap_now = shared.snap_active.load(Ordering::Acquire);
     let vault_path = acc.vault_path.clone();
+    // Drop the lock before params_gen.update()/telemetry.update(): both run
+    // vizia_reactive effects synchronously, and the SNAP button's Memo
+    // (build_sidebar) locks `accum` itself - held across either call, it
+    // self-deadlocks the UI thread on this same non-reentrant Mutex.
+    drop(acc);
+
+    if refresh_presets {
+        // Low-frequency (~2s), not the 33ms tick itself - the sidebar's
+        // preset list is keyed off this, not `telemetry`, so its Buttons
+        // never see the tick-driven rebuild-drops-clicks issue documented
+        // on `Ticker`/`build_main_panel`.
+        params_gen.update(|g| *g = g.wrapping_add(1));
+    }
+    // set_value() is an atomic store only (no UI notify) - bump params_gen
+    // so the Output Gain knob's Binding re-reads it (Auto Loud moves this
+    // param from outside any knob drag). Placed after `drop(acc)` for the
+    // same self-deadlock reason as the preset-refresh bump above.
+    if auto_loud_applied && !refresh_presets {
+        params_gen.update(|g| *g = g.wrapping_add(1));
+    }
 
     telemetry.update(move |t| {
         t.band_levels = band_levels;
@@ -289,7 +307,13 @@ fn styled_toggle(cx: &mut Context, lens: ParamLens<EquilibriumParams>, id: K, la
         Button::new(cx, move |cx| Label::new(cx, label).font_size(12.0))
             .on_press(move |_cx| {
                 let now = lens.get(id) <= 0.5;
-                lens.automate(id, if now { 1.0 } else { 0.0 });
+                let norm = if now { 1.0 } else { 0.0 };
+                lens.automate(id, norm);
+                // automate() only writes the backend param store - `sig` is
+                // a separate Signal seeded once by value_signal() and never
+                // otherwise updated, so without this push this Binding would
+                // never refire and the button would never repaint.
+                sig.set(norm as f32);
             })
             .padding(Pixels(6.0))
             .background_color(if active { rgb(1.0, 0.45, 0.1) } else { col(0.15, 0.15, 0.15, 1.0) });
@@ -306,7 +330,9 @@ fn styled_toggle_dyn(cx: &mut Context, lens: ParamLens<EquilibriumParams>, id: K
         Button::new(cx, move |cx| Label::new(cx, if active { label_on } else { label_off }).font_size(12.0))
             .on_press(move |_cx| {
                 let now = lens.get(id) <= 0.5;
-                lens.automate(id, if now { 1.0 } else { 0.0 });
+                let norm = if now { 1.0 } else { 0.0 };
+                lens.automate(id, norm);
+                sig.set(norm as f32);
             })
             .padding(Pixels(6.0))
             .background_color(if active { rgb(1.0, 0.45, 0.1) } else { col(0.15, 0.15, 0.15, 1.0) });
@@ -434,7 +460,7 @@ pub fn build(cx: &mut Context, lens: ParamLens<EquilibriumParams>, shared: Arc<S
         .height(Stretch(1.0))
         .background_color(rgb(0.06, 0.06, 0.06));
 
-        build_right_sidebar(cx, telemetry, lens_body.clone(), shared_body.clone());
+        build_right_sidebar(cx, telemetry, lens_body.clone(), shared_body.clone(), params_gen);
     })
     .width(Stretch(1.0))
     .height(Stretch(1.0));
@@ -780,32 +806,48 @@ fn build_main_panel(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamL
 
 // ─── Right sidebar (output level, pre-master, auto loud, goniometer) ───────
 
-fn build_right_sidebar(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamLens<EquilibriumParams>, shared: Arc<SharedState>) {
+fn build_right_sidebar(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamLens<EquilibriumParams>, shared: Arc<SharedState>, params_gen: Signal<u32>) {
     VStack::new(cx, move |cx| {
         Label::new(cx, "OUTPUT LEVEL").font_size(12.0).color(col(0.75, 0.75, 0.75, 1.0));
 
         let lens_hs = lens.clone();
         let shared_hs = shared.clone();
         HStack::new(cx, move |cx| {
-            let out_gain = lens_hs.get_plain(K::OutputGain);
-            let lens_knob = lens_hs.clone();
-            let out_gain_display = Signal::new(out_gain);
-            let norm = ((out_gain + 12.0) / 24.0).clamp(0.0, 1.0);
-            KnobView::new(cx, norm, 0.5, -12.0, 12.0, true, move |_cx, g| match g {
-                Gesture::Start => lens_knob.begin_edit(K::OutputGain),
-                Gesture::Change(v) => {
-                    let n = ((v as f64) + 12.0) / 24.0;
-                    lens_knob.set(K::OutputGain, n.clamp(0.0, 1.0));
-                    out_gain_display.set(v);
+            // OutputGain can move from outside a knob drag (Auto Loud applies
+            // its offset in `tick()`, which bumps `params_gen` for exactly
+            // this reason) - re-read the plain value on every bump so the
+            // knob doesn't go stale like it did before this Binding existed.
+            Binding::new(cx, params_gen, {
+                let lens_hs = lens_hs.clone();
+                move |cx| {
+                    let out_gain = lens_hs.get_plain(K::OutputGain);
+                    let lens_knob = lens_hs.clone();
+                    let out_gain_display = Signal::new(out_gain);
+                    let norm = ((out_gain + 12.0) / 24.0).clamp(0.0, 1.0);
+                    KnobView::new(cx, norm, 0.5, -12.0, 12.0, true, move |_cx, g| match g {
+                        Gesture::Start => lens_knob.begin_edit(K::OutputGain),
+                        Gesture::Change(v) => {
+                            let n = ((v as f64) + 12.0) / 24.0;
+                            lens_knob.set(K::OutputGain, n.clamp(0.0, 1.0));
+                            out_gain_display.set(v);
+                        }
+                        Gesture::End => lens_knob.end_edit(K::OutputGain),
+                    })
+                    .width(Pixels(48.0))
+                    .height(Pixels(48.0));
                 }
-                Gesture::End => lens_knob.end_edit(K::OutputGain),
-            })
-            .width(Pixels(48.0))
-            .height(Pixels(48.0));
+            });
 
             VStack::new(cx, move |cx| {
-                let pre_target = lens_hs.get_plain(K::PreMasterTargetDb);
                 styled_toggle(cx, lens_hs.clone(), K::PreMasterActive, "PRE-MASTER");
+                // PreMasterTargetDb can move from outside a slider drag
+                // (RESET ALL), which bumps `params_gen` for exactly this
+                // reason - re-read the plain value on every bump so the
+                // slider doesn't go stale.
+                Binding::new(cx, params_gen, {
+                    let lens_hs = lens_hs.clone();
+                    move |cx| {
+                let pre_target = lens_hs.get_plain(K::PreMasterTargetDb);
                 let pre_display = Signal::new(pre_target);
                 Label::new(cx, Memo::new(move |_| format!("Target: {:.1} dB", pre_display.get()))).font_size(10.0).color(col(0.75, 0.75, 0.75, 1.0));
                 let lens_pre = lens_hs.clone();
@@ -820,6 +862,8 @@ fn build_right_sidebar(cx: &mut Context, telemetry: Signal<Telemetry>, lens: Par
                 })
                 .width(Stretch(1.0))
                 .height(Pixels(22.0));
+                    }
+                });
 
                 // Built once, not inside a `Binding` on `telemetry` - `tick()`
                 // calls `telemetry.update(...)` unconditionally every ~33ms
@@ -869,7 +913,7 @@ fn build_right_sidebar(cx: &mut Context, telemetry: Signal<Telemetry>, lens: Par
         let shared_reset = shared.clone();
         Binding::new(cx, telemetry, move |cx| {
             let t = telemetry.get();
-            StereoMeterView::new(cx, t.peak_l, t.peak_r, t.peak_hold_l, t.peak_hold_r, t.balance).width(Stretch(1.0)).height(Pixels(120.0));
+            StereoMeterView::new(cx, t.peak_l, t.peak_r, t.peak_hold_l, t.peak_hold_r, t.balance).width(Stretch(1.0)).height(Pixels(155.0));
 
             let shared_l = shared_reset.clone();
             let shared_r = shared_reset.clone();
@@ -975,21 +1019,29 @@ fn build_footer(
 
         VStack::new(cx, move |cx| {
             Label::new(cx, "MONO FLOOR").font_size(10.0).color(rgb(1.0, 0.55, 0.15));
-            let mf = lens_mono.get_plain(K::MonoFloor);
-            let lens_mf = lens_mono.clone();
-            let mf_display = Signal::new(mf);
-            KnobView::new(cx, (mf / 300.0).clamp(0.0, 1.0), 0.0, 0.0, 300.0, false, move |_cx, g| match g {
-                Gesture::Start => lens_mf.begin_edit(K::MonoFloor),
-                Gesture::Change(v) => {
-                    let n = (v as f64) / 300.0;
-                    lens_mf.set(K::MonoFloor, n.clamp(0.0, 1.0));
-                    mf_display.set(v);
+            // Mono Floor can move from outside a knob drag (RESET ALL),
+            // which bumps `params_gen` for exactly this reason - re-read
+            // the plain value on every bump so the knob doesn't go stale.
+            Binding::new(cx, params_gen, {
+                let lens_mono = lens_mono.clone();
+                move |cx| {
+                    let mf = lens_mono.get_plain(K::MonoFloor);
+                    let lens_mf = lens_mono.clone();
+                    let mf_display = Signal::new(mf);
+                    KnobView::new(cx, (mf / 300.0).clamp(0.0, 1.0), 0.0, 0.0, 300.0, false, move |_cx, g| match g {
+                        Gesture::Start => lens_mf.begin_edit(K::MonoFloor),
+                        Gesture::Change(v) => {
+                            let n = (v as f64) / 300.0;
+                            lens_mf.set(K::MonoFloor, n.clamp(0.0, 1.0));
+                            mf_display.set(v);
+                        }
+                        Gesture::End => lens_mf.end_edit(K::MonoFloor),
+                    })
+                    .width(Pixels(48.0))
+                    .height(Pixels(48.0));
+                    Label::new(cx, Memo::new(move |_| format!("{} Hz", format_knob_value(mf_display.get(), 300.0)))).font_size(10.0).color(rgb(1.0, 0.65, 0.3));
                 }
-                Gesture::End => lens_mf.end_edit(K::MonoFloor),
-            })
-            .width(Pixels(48.0))
-            .height(Pixels(48.0));
-            Label::new(cx, Memo::new(move |_| format!("{} Hz", format_knob_value(mf_display.get(), 300.0)))).font_size(10.0).color(rgb(1.0, 0.65, 0.3));
+            });
         })
         .vertical_gap(Pixels(4.0))
         .alignment(Alignment::Center)
@@ -1004,7 +1056,10 @@ fn build_footer(
     })
     .width(Stretch(1.0))
     .height(Pixels(110.0))
-    .padding(Pixels(8.0))
+    .padding_left(Pixels(28.0))
+    .padding_right(Pixels(8.0))
+    .padding_top(Pixels(8.0))
+    .padding_bottom(Pixels(8.0))
     .alignment(Alignment::Center)
     .horizontal_gap(Pixels(15.0))
     .background_color(rgb(0.08, 0.08, 0.08));
@@ -1060,6 +1115,11 @@ fn do_save_preset(accum: &Arc<Mutex<TickAccum>>, telemetry: &Signal<Telemetry>, 
     let md = shared_analysis::export_preset_to_markdown(&prof);
     if std::fs::write(&fp, &md).is_ok() {
         acc.presets = load_presets(acc.vault_path.as_deref());
+        // Drop before params_gen.update(): the preset-list Binding it
+        // triggers locks `accum` itself - held across that call, it
+        // self-deadlocks (same non-reentrant-Mutex issue as tick()'s
+        // telemetry.update() call, see comment there).
+        drop(acc);
         preset_name_input.set(String::new());
         params_gen.update(|g| *g = g.wrapping_add(1));
     }

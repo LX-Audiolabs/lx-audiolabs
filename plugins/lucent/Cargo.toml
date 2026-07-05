@@ -38,6 +38,7 @@ clap-sys     = { workspace = true, optional = true }
 
 shared-dsp      = { path = "../../shared-dsp" }
 shared-analysis = { path = "../../shared-analysis", features = ["dev-logging"] }
+shared-ui       = { path = "../../shared-ui" }
 tracing         = "0.1"
 realfft         = "3"
 

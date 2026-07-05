@@ -145,8 +145,6 @@ fn suppress_harmonics(spectrum: &[f32], peaks: Vec<(usize, f32)>) -> Vec<(usize,
 
 mod editor;
 mod ui;
-mod vizia_canvas;
-mod vizia_widgets;
 
 const WINDOW_W: u32 = 990;
 const WINDOW_H: u32 = 550;
