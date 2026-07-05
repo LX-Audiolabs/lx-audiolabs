@@ -63,20 +63,20 @@ Not lazy about: understanding the problem, input validation at trust boundaries,
 
 Before ANY planning, analysis or code changes you MUST read via MCP:
 
-1. CLAUDE.md (Bootstrap)
-2. GOVERNANCE.md (alle Agent-Regeln)
-3. START-HERE.md
-4. VAULT-SCHEMA.md
-5. CURRENT-STATE.md
-6. status/INDEX-SESSIONS.md
-7. status/INDEX-OPEN-BUGS.md
-8. status/todo-next-session.md
+1. BOOTSTRAP.md — Versionen, Bugs, Tasks, Tech-Stack (Single Entry Point ~2KB)
+2. GOVERNANCE.md — Alle Agent-Regeln
 
 If the task targets a specific plugin, also read:
 
 plugins/plugin-{name}.md
 
-If ANY required document cannot be read:
+Only read these on-demand when needed:
+- status/INDEX-OPEN-BUGS.md — Full bug details
+- status/INDEX-FEATURES-ACTIVE.md — Feature details
+- status/INDEX-SESSIONS.md — Session history
+- CURRENT-STATE.md — Detailed status log
+
+If ANY required document (BOOTSTRAP, GOVERNANCE) cannot be read:
 
 STOP.
 
