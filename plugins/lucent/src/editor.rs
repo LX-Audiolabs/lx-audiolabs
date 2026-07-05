@@ -33,11 +33,7 @@ use shared_analysis::{SharedState, SPECTRUM_BINS};
 use truce_vizia::ParamLens;
 
 use crate::ui::{LucentUiState, RelayData};
-use crate::vizia_canvas::{
-    GoniometerView, SpectrumConfig, SpectrumCurve, SpectrumView, StereoMeterView, fmt_db,
-    rgb as vg_rgb,
-};
-use crate::vizia_widgets::{Gesture, KnobView, format_knob_value};
+use shared_ui::{GoniometerView, SpectrumConfig, SpectrumCurve, SpectrumView, StereoMeterView, fmt_db, Gesture, KnobView, format_knob_value, rgb as vg_rgb};
 use crate::{LucentParams, LucentParamsParamId, read_masking, read_resonance};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -725,6 +721,7 @@ fn build_main_panel(
             config: SpectrumConfig::default(),
             resonance_peaks,
             masking,
+            eq_curve: None,
         })
         .width(Stretch(1.0))
         .height(Stretch(1.0));

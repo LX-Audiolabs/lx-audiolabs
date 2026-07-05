@@ -21,7 +21,6 @@ use shared_analysis::{SharedState, SCOPE_BUFFER_LEN, SnapFFT, SnapMode};
 
 mod editor;
 mod vizia_canvas;
-mod vizia_widgets;
 
 const BAND_COUNT: usize = 5;
 const WINDOW_W: u32 = 990;

@@ -1,9 +1,8 @@
 [package]
 name = "shared-ui"
-version = "0.1.0"
+version = "2.0.0"
 edition = "2021"
+description = "LX Audiolabs shared Vizia UI widgets, canvas views, and drawing helpers"
 
 [dependencies]
-truce       = { workspace = true }
-truce-iced  = { workspace = true }
-shared-analysis = { path = "../shared-analysis" }
+vizia = { git = "https://github.com/vizia/vizia.git", rev = "24c47433098fcc8e29668a22fcb71771807d86d6", default-features = false, features = ["baseview"] }

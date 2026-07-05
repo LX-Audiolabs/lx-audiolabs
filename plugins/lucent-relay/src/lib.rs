@@ -1,7 +1,7 @@
 use truce::prelude::*;
 use truce_core::custom_state::State as StateSerialize;
 use truce_core::state::StateLoadError;
-use truce_iced::IcedEditor;
+use truce_vizia::ViziaEditor;
 use std::sync::{Arc, Mutex};
 use realfft::{RealFftPlanner, RealToComplex, num_complex::Complex};
 
@@ -271,9 +271,14 @@ impl PluginLogic for LucentRelay {
     }
 
     fn editor(&self) -> Box<dyn Editor> {
-        IcedEditor::<LucentRelayParams, editor::RelayUi>::new(
+        // Vizia migration (2026-07-05). Relais has no params to bind -
+        // editor::build only needs the RelayHandle (via registry) and
+        // polls relay_hub for consumer list + connection status.
+        let params = self.params.clone();
+        ViziaEditor::<LucentRelayParams>::new(
             self.params.clone(),
             (WINDOW_W, WINDOW_H),
+            move |cx, _lens| editor::build(cx, params.clone()),
         )
         .into_editor()
     }
