@@ -1459,81 +1459,90 @@ fn build_footer(
             let params = params.clone();
             move |cx| {
                 Label::new(cx, "COMPRESSOR").font_size(10.0).color(rgb(1.0, 0.55, 0.15));
-                // 6 knobs horizontal
-                Binding::new(cx, params_gen, {
-                    let lens = lens.clone();
-                    let params = params.clone();
-                    move |cx| {
+                // 6 knobs horizontal with GR envelope display to their right
                 HStack::new(cx, {
                     let lens = lens.clone();
                     let params = params.clone();
                     move |cx| {
-                for (label, id, field, min, max) in [
-                    ("THRESH", K::CompThreshold, (|p: &MeridianParams| &p.comp_threshold) as FloatField, -30.0f32, 0.0f32),
-                    ("MIX", K::CompMix, (|p: &MeridianParams| &p.comp_mix) as FloatField, 0.0, 100.0),
-                    ("ATTACK", K::CompAttack, (|p: &MeridianParams| &p.comp_attack) as FloatField, 5.0, 50.0),
-                    ("RELEASE", K::CompRelease, (|p: &MeridianParams| &p.comp_release) as FloatField, 50.0, 300.0),
-                    ("RATIO", K::CompCharacter, (|p: &MeridianParams| &p.comp_character) as FloatField, 1.5, 4.0),
-                    ("MAKEUP", K::CompMakeup, (|p: &MeridianParams| &p.comp_makeup) as FloatField, 0.0, 12.0),
-                ] {
-                    let lens = lens.clone();
-                    let params = params.clone();
-                    let value = lens.get_plain(id);
-                    let display = Signal::new(value);
-                    let norm = ((value - min) / (max - min)).clamp(0.0, 1.0);
-                    VStack::new(cx, move |cx| {
-                        KnobView::new(cx, norm, 0.0, min, max, false, move |_cx, g| match g {
-                            Gesture::Start => lens.begin_edit(id),
-                            Gesture::Change(v) => {
-                                lens.set(id, field(&params).info.range.normalize(v as f64));
-                                display.set(v);
+                        Binding::new(cx, params_gen, {
+                            let lens = lens.clone();
+                            let params = params.clone();
+                            move |cx| {
+                                HStack::new(cx, {
+                                    let lens = lens.clone();
+                                    let params = params.clone();
+                                    move |cx| {
+                                        for (label, id, field, min, max) in [
+                                            ("THRESH", K::CompThreshold, (|p: &MeridianParams| &p.comp_threshold) as FloatField, -30.0f32, 0.0f32),
+                                            ("MIX", K::CompMix, (|p: &MeridianParams| &p.comp_mix) as FloatField, 0.0, 100.0),
+                                            ("ATTACK", K::CompAttack, (|p: &MeridianParams| &p.comp_attack) as FloatField, 5.0, 50.0),
+                                            ("RELEASE", K::CompRelease, (|p: &MeridianParams| &p.comp_release) as FloatField, 50.0, 300.0),
+                                            ("RATIO", K::CompCharacter, (|p: &MeridianParams| &p.comp_character) as FloatField, 1.5, 4.0),
+                                            ("MAKEUP", K::CompMakeup, (|p: &MeridianParams| &p.comp_makeup) as FloatField, 0.0, 12.0),
+                                        ] {
+                                            let lens = lens.clone();
+                                            let params = params.clone();
+                                            let value = lens.get_plain(id);
+                                            let display = Signal::new(value);
+                                            let norm = ((value - min) / (max - min)).clamp(0.0, 1.0);
+                                            VStack::new(cx, move |cx| {
+                                                KnobView::new(cx, norm, 0.0, min, max, false, move |_cx, g| match g {
+                                                    Gesture::Start => lens.begin_edit(id),
+                                                    Gesture::Change(v) => {
+                                                        lens.set(id, field(&params).info.range.normalize(v as f64));
+                                                        display.set(v);
+                                                    }
+                                                    Gesture::End => lens.end_edit(id),
+                                                })
+                                                .width(Pixels(40.0))
+                                                .height(Pixels(40.0));
+                                                Label::new(cx, Memo::new(move |_| format_knob_value(display.get(), max))).font_size(9.0).color(rgb(1.0, 0.65, 0.3));
+                                                Label::new(cx, label).font_size(9.0).color(col(0.75, 0.75, 0.75, 1.0));
+                                            })
+                                            .alignment(Alignment::Center)
+                                            .width(Pixels(40.0));
+                                        }
+                                    }
+                                })
+                                .horizontal_gap(Pixels(16.0))
+                                .alignment(Alignment::Center)
+                                .height(Auto);
                             }
-                            Gesture::End => lens.end_edit(id),
-                        })
-                        .width(Pixels(40.0))
-                        .height(Pixels(40.0));
-                        Label::new(cx, Memo::new(move |_| format_knob_value(display.get(), max))).font_size(9.0).color(rgb(1.0, 0.65, 0.3));
-                        Label::new(cx, label).font_size(9.0).color(col(0.75, 0.75, 0.75, 1.0));
-                    })
-                    .alignment(Alignment::Center)
-                    .width(Pixels(40.0));
-                }
+                        });
+
+                        Binding::new(cx, telemetry, move |cx| {
+                            let t = telemetry.get();
+                            HStack::new(cx, move |cx| {
+                                CompressorEnvelopeView::new(cx, CompressorEnvelopeView {
+                                    history: t.gr_history.clone(),
+                                    current: t.gain_reduction,
+                                    peak_hold: t.gr_peak_hold,
+                                })
+                                .width(Pixels(110.0))
+                                .height(Pixels(24.0));
+                                VStack::new(cx, move |cx| {
+                                    Label::new(cx, format!("PK: {:.1}", t.gr_peak_hold)).font_size(9.0).color(rgb(1.0, 0.6, 0.2));
+                                    Label::new(cx, format!("GR: {:.1}", t.gain_reduction)).font_size(8.0).color(rgb(1.0, 0.3, 0.3));
+                                })
+                                .alignment(Alignment::Center)
+                                .width(Auto);
+                            })
+                            .horizontal_gap(Pixels(4.0))
+                            .alignment(Alignment::Center)
+                            .width(Auto)
+                            .height(Auto);
+                        });
                     }
                 })
                 .horizontal_gap(Pixels(16.0))
                 .alignment(Alignment::Center)
                 .height(Auto);
-                    }
-                });
-                // GR envelope display below the knobs
-                Binding::new(cx, telemetry, move |cx| {
-                    let t = telemetry.get();
-                    HStack::new(cx, move |cx| {
-                        CompressorEnvelopeView::new(cx, CompressorEnvelopeView {
-                            history: t.gr_history.clone(),
-                            current: t.gain_reduction,
-                            peak_hold: t.gr_peak_hold,
-                        })
-                        .width(Pixels(110.0))
-                        .height(Pixels(24.0));
-                        VStack::new(cx, move |cx| {
-                            Label::new(cx, format!("PK: {:.1}", t.gr_peak_hold)).font_size(9.0).color(rgb(1.0, 0.6, 0.2));
-                            Label::new(cx, format!("GR: {:.1}", t.gain_reduction)).font_size(8.0).color(rgb(1.0, 0.3, 0.3));
-                        })
-                        .alignment(Alignment::Center)
-                        .width(Auto);
-                    })
-                    .horizontal_gap(Pixels(4.0))
-                    .alignment(Alignment::Center)
-                    .width(Auto)
-                    .height(Auto);
-                });
             }
         })
         .padding(Pixels(4.0))
         .vertical_gap(Pixels(4.0))
         .alignment(Alignment::Center)
-        .width(Pixels(440.0));
+        .width(Pixels(510.0));
 
         vsep(cx);
 
@@ -1584,7 +1593,7 @@ fn build_footer(
         .padding(Pixels(10.0))
         .vertical_gap(Pixels(6.0))
         .alignment(Alignment::Center)
-        .width(Pixels(220.0));
+        .width(Pixels(175.0));
 
         vsep(cx);
 
@@ -1624,12 +1633,12 @@ fn build_footer(
         .padding(Pixels(10.0))
         .vertical_gap(Pixels(6.0))
         .alignment(Alignment::Center)
-        .width(Pixels(185.0));
+        .width(Pixels(140.0));
 
         vsep(cx);
 
         shared_ui::danger_button_big(cx, "RESET", move |_cx| reset_all(&lens, &params, &shared, &accum, params_gen))
-            .width(Pixels(70.0));
+            .width(Pixels(60.0));
     })
     .width(Stretch(1.0))
     .height(Pixels(110.0))
