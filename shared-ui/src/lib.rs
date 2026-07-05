@@ -10,7 +10,9 @@ pub use canvas::{
     smooth_spectrum_third_octave,
 };
 pub use buttons::{
-    toggle_button, toggle_button_small, danger_button,
+    toggle_button, toggle_button_small, toggle_button_big, toggle_button_big_amber_text,
+    push_button_big, danger_button, danger_button_big,
     AMBER, IDLE_BG, DANGER_BG, DANGER_TEXT,
-    BUTTON_HEIGHT, BUTTON_HEIGHT_SMALL, KNOB_SIZE, SLIDER_HEIGHT,
+    BUTTON_HEIGHT, BUTTON_HEIGHT_SMALL, BUTTON_HEIGHT_BIG,
+    KNOB_SIZE, SLIDER_HEIGHT, STEREO_METER_HEIGHT,
 };

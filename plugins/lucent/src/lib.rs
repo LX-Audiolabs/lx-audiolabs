@@ -444,12 +444,16 @@ impl PeakTracker {
 
 #[derive(Params)]
 pub struct LucentParams {
-    #[param(name = "Analyze Mode", default = 0, range = "discrete(0, 2)")]
+    #[param(name = "Analyze Mode", default = 0, range = "discrete(0, 2)", group = "Lucent")]
     pub analyze_mode: IntParam,
+    #[param(name = "Resonance", default = 1, group = "Lucent")]
+    pub resonance_active: BoolParam,
+    #[param(name = "Masking", default = 1, group = "Lucent")]
+    pub masking_active: BoolParam,
     /// How deep the resonance/masking detectors dig: 0% = shallow (only
     /// strong, sustained findings), 100% = deep (surfaces weaker, shorter
     /// ones too). 50% reproduces the previously hand-tuned thresholds.
-    #[param(name = "Sensitivity", default = 50.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)")]
+    #[param(name = "Sensitivity", default = 50.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)", group = "Lucent")]
     pub sensitivity: FloatParam,
     #[skip]
     pub name: RwLock<String>,

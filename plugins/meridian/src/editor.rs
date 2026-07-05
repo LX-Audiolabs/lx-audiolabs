@@ -448,6 +448,9 @@ struct TickAccum {
     vault_path: Option<String>,
     preset_refresh_counter: u32,
     gr_peak_hold_ticks: u32,
+    /// Bumped every tick; params_gen fires every 10 ticks so host param
+    /// changes propagate to slider/knob Bindings within ~330ms.
+    params_refresh_counter: u32,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -496,7 +499,9 @@ fn tick(shared: &SharedState, params: &MeridianParams, accum: &Arc<Mutex<TickAcc
     }
 
     acc.preset_refresh_counter = acc.preset_refresh_counter.wrapping_add(1);
+    acc.params_refresh_counter = acc.params_refresh_counter.wrapping_add(1);
     let refresh_presets = acc.preset_refresh_counter.is_multiple_of(150);
+    let refresh_params = acc.params_refresh_counter.is_multiple_of(10);
     if refresh_presets {
         acc.presets = list_meridian_presets(acc.vault_path.as_deref());
     }
@@ -514,7 +519,7 @@ fn tick(shared: &SharedState, params: &MeridianParams, accum: &Arc<Mutex<TickAcc
     // set_value() is an atomic store only (no UI notify) - bump params_gen
     // so the Output Gain knob's Binding re-reads it (Auto Loud moves this
     // param from outside any knob drag).
-    if auto_loud_applied || refresh_presets {
+    if auto_loud_applied || refresh_presets || refresh_params {
         params_gen.update(|g| *g = g.wrapping_add(1));
     }
 
@@ -685,6 +690,7 @@ pub fn build(cx: &mut Context, lens: ParamLens<MeridianParams>, shared: Arc<Shar
         vault_path: config.vault_path,
         preset_refresh_counter: 0,
         gr_peak_hold_ticks: 0,
+        params_refresh_counter: 0,
     }));
 
     Ticker::new(cx, shared.clone(), params.clone(), accum.clone(), telemetry, params_gen).width(Pixels(1.0)).height(Pixels(1.0));
@@ -721,7 +727,7 @@ pub fn build(cx: &mut Context, lens: ParamLens<MeridianParams>, shared: Arc<Shar
         })
         .width(Auto)
         .height(Auto)
-        .horizontal_gap(Pixels(10.0))
+        .horizontal_gap(Pixels(4.0))
         .alignment(Alignment::Center);
     })
     .width(Stretch(1.0))
@@ -1362,7 +1368,6 @@ fn build_right_sidebar(cx: &mut Context, telemetry: Signal<Telemetry>, lens: Par
                         Label::new(cx, Memo::new(move |_| if telemetry.get().auto_loud_measuring { "MEASURING..." } else { "AUTO LOUD" })).font_size(10.0)
                     })
                     .on_press(move |_cx| shared_press.auto_loud_trigger.store(true, Ordering::Release))
-                    .width(Stretch(1.0))
                     .height(Pixels(shared_ui::BUTTON_HEIGHT))
                     .background_color(Memo::new(move |_| {
                         let t = telemetry.get();
@@ -1382,7 +1387,7 @@ fn build_right_sidebar(cx: &mut Context, telemetry: Signal<Telemetry>, lens: Par
         let shared_reset = shared.clone();
         Binding::new(cx, telemetry, move |cx| {
             let t = telemetry.get();
-            StereoMeterView::new(cx, t.peak_l, t.peak_r, t.peak_hold_l, t.peak_hold_r, t.balance).width(Stretch(1.0)).height(Pixels(230.0));
+            StereoMeterView::new(cx, t.peak_l, t.peak_r, t.peak_hold_l, t.peak_hold_r, t.balance).width(Stretch(1.0)).height(Pixels(shared_ui::STEREO_METER_HEIGHT));
 
             let shared_l = shared_reset.clone();
             let shared_r = shared_reset.clone();
@@ -1435,84 +1440,85 @@ fn build_footer(
     params_gen: Signal<u32>,
 ) {
     HStack::new(cx, move |cx| {
-        // Compressor
+        // Compressor: knobs in a row, GR envelope below
         VStack::new(cx, {
             let lens = lens.clone();
             let params = params.clone();
             move |cx| {
                 Label::new(cx, "COMPRESSOR").font_size(10.0).color(rgb(1.0, 0.55, 0.15));
+                // 6 knobs horizontal
+                Binding::new(cx, params_gen, {
+                    let lens = lens.clone();
+                    let params = params.clone();
+                    move |cx| {
                 HStack::new(cx, {
                     let lens = lens.clone();
                     let params = params.clone();
                     move |cx| {
-                        Binding::new(cx, params_gen, {
-                            let lens = lens.clone();
-                            let params = params.clone();
-                            move |cx| {
-                        for (label, id, field, min, max) in [
-                            ("THRESH", K::CompThreshold, (|p: &MeridianParams| &p.comp_threshold) as FloatField, -30.0f32, 0.0f32),
-                            ("MIX", K::CompMix, (|p: &MeridianParams| &p.comp_mix) as FloatField, 0.0, 100.0),
-                            ("ATTACK", K::CompAttack, (|p: &MeridianParams| &p.comp_attack) as FloatField, 5.0, 50.0),
-                            ("RELEASE", K::CompRelease, (|p: &MeridianParams| &p.comp_release) as FloatField, 50.0, 300.0),
-                            ("RATIO", K::CompCharacter, (|p: &MeridianParams| &p.comp_character) as FloatField, 1.5, 4.0),
-                            ("MAKEUP", K::CompMakeup, (|p: &MeridianParams| &p.comp_makeup) as FloatField, 0.0, 12.0),
-                        ] {
-                            let lens = lens.clone();
-                            let params = params.clone();
-                            let value = lens.get_plain(id);
-                            let display = Signal::new(value);
-                            let norm = ((value - min) / (max - min)).clamp(0.0, 1.0);
-                            VStack::new(cx, move |cx| {
-                                KnobView::new(cx, norm, 0.0, min, max, false, move |_cx, g| match g {
-                                    Gesture::Start => lens.begin_edit(id),
-                                    Gesture::Change(v) => {
-                                        lens.set(id, field(&params).info.range.normalize(v as f64));
-                                        display.set(v);
-                                    }
-                                    Gesture::End => lens.end_edit(id),
-                                })
-                                .width(Pixels(40.0))
-                                .height(Pixels(40.0));
-                                Label::new(cx, Memo::new(move |_| format_knob_value(display.get(), max))).font_size(9.0).color(rgb(1.0, 0.65, 0.3));
-                                Label::new(cx, label).font_size(9.0).color(col(0.75, 0.75, 0.75, 1.0));
-                            })
-                            .alignment(Alignment::Center)
-                            .width(Auto);
-                        }
+                for (label, id, field, min, max) in [
+                    ("THRESH", K::CompThreshold, (|p: &MeridianParams| &p.comp_threshold) as FloatField, -30.0f32, 0.0f32),
+                    ("MIX", K::CompMix, (|p: &MeridianParams| &p.comp_mix) as FloatField, 0.0, 100.0),
+                    ("ATTACK", K::CompAttack, (|p: &MeridianParams| &p.comp_attack) as FloatField, 5.0, 50.0),
+                    ("RELEASE", K::CompRelease, (|p: &MeridianParams| &p.comp_release) as FloatField, 50.0, 300.0),
+                    ("RATIO", K::CompCharacter, (|p: &MeridianParams| &p.comp_character) as FloatField, 1.5, 4.0),
+                    ("MAKEUP", K::CompMakeup, (|p: &MeridianParams| &p.comp_makeup) as FloatField, 0.0, 12.0),
+                ] {
+                    let lens = lens.clone();
+                    let params = params.clone();
+                    let value = lens.get_plain(id);
+                    let display = Signal::new(value);
+                    let norm = ((value - min) / (max - min)).clamp(0.0, 1.0);
+                    VStack::new(cx, move |cx| {
+                        KnobView::new(cx, norm, 0.0, min, max, false, move |_cx, g| match g {
+                            Gesture::Start => lens.begin_edit(id),
+                            Gesture::Change(v) => {
+                                lens.set(id, field(&params).info.range.normalize(v as f64));
+                                display.set(v);
                             }
-                        });
-
-                        Binding::new(cx, telemetry, move |cx| {
-                            let t = telemetry.get();
-                            HStack::new(cx, move |cx| {
-                                CompressorEnvelopeView::new(cx, CompressorEnvelopeView {
-                                    history: t.gr_history.clone(),
-                                    current: t.gain_reduction,
-                                    peak_hold: t.gr_peak_hold,
-                                })
-                                .width(Pixels(110.0))
-                                .height(Pixels(60.0));
-                                VStack::new(cx, move |cx| {
-                                    Label::new(cx, format!("PK: {:.1}", t.gr_peak_hold)).font_size(12.0).color(rgb(1.0, 0.6, 0.2));
-                                    Label::new(cx, format!("GR: {:.1}", t.gain_reduction)).font_size(10.0).color(rgb(1.0, 0.3, 0.3));
-                                })
-                                .alignment(Alignment::Center)
-                                .width(Auto);
-                            })
-                            .horizontal_gap(Pixels(6.0))
-                            .alignment(Alignment::Center)
-                            .width(Auto)
-                            .height(Auto);
-                        });
+                            Gesture::End => lens.end_edit(id),
+                        })
+                        .width(Pixels(34.0))
+                        .height(Pixels(34.0));
+                        Label::new(cx, Memo::new(move |_| format_knob_value(display.get(), max))).font_size(8.0).color(rgb(1.0, 0.65, 0.3));
+                        Label::new(cx, label).font_size(8.0).color(col(0.75, 0.75, 0.75, 1.0));
+                    })
+                    .alignment(Alignment::Center)
+                    .width(Auto);
+                }
                     }
                 })
-                .horizontal_gap(Pixels(14.0))
+                .horizontal_gap(Pixels(8.0))
                 .alignment(Alignment::Center)
                 .height(Auto);
+                    }
+                });
+                // GR envelope display below the knobs
+                Binding::new(cx, telemetry, move |cx| {
+                    let t = telemetry.get();
+                    HStack::new(cx, move |cx| {
+                        CompressorEnvelopeView::new(cx, CompressorEnvelopeView {
+                            history: t.gr_history.clone(),
+                            current: t.gain_reduction,
+                            peak_hold: t.gr_peak_hold,
+                        })
+                        .width(Pixels(110.0))
+                        .height(Pixels(24.0));
+                        VStack::new(cx, move |cx| {
+                            Label::new(cx, format!("PK: {:.1}", t.gr_peak_hold)).font_size(9.0).color(rgb(1.0, 0.6, 0.2));
+                            Label::new(cx, format!("GR: {:.1}", t.gain_reduction)).font_size(8.0).color(rgb(1.0, 0.3, 0.3));
+                        })
+                        .alignment(Alignment::Center)
+                        .width(Auto);
+                    })
+                    .horizontal_gap(Pixels(4.0))
+                    .alignment(Alignment::Center)
+                    .width(Auto)
+                    .height(Auto);
+                });
             }
         })
-        .padding(Pixels(10.0))
-        .vertical_gap(Pixels(6.0))
+        .padding(Pixels(4.0))
+        .vertical_gap(Pixels(4.0))
         .alignment(Alignment::Center)
         .width(Auto);
 
@@ -1567,8 +1573,6 @@ fn build_footer(
         .alignment(Alignment::Center)
         .width(Auto);
 
-        Element::new(cx).width(Stretch(1.0));
-
         vsep(cx);
 
         // Stereo / Routing
@@ -1611,7 +1615,7 @@ fn build_footer(
 
         vsep(cx);
 
-        shared_ui::danger_button(cx, "RESET", move |_cx| reset_all(&lens, &params, &shared, &accum, params_gen));
+        shared_ui::danger_button_big(cx, "RESET", move |_cx| reset_all(&lens, &params, &shared, &accum, params_gen));
     })
     .width(Stretch(1.0))
     .height(Pixels(110.0))

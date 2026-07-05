@@ -75,17 +75,17 @@ pub struct AetherParams {
     #[param(name = "EQ5 Type", default = 3, range = "discrete(0, 3)")]
     pub eq5_type: IntParam,
 
-    #[param(name = "Blend", default = 100.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)")]
+    #[param(name = "Blend", default = 100.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)", group = "Aether")]
     pub blend: FloatParam,
 
-    #[param(name = "Crossfeed Angle", default = 60.0, range = "linear(30.0, 75.0)", unit = "deg", smooth = "linear(20)")]
+    #[param(name = "Crossfeed Angle", default = 60.0, range = "linear(30.0, 75.0)", unit = "deg", smooth = "linear(20)", group = "Aether")]
     pub cf_angle:  FloatParam,
-    #[param(name = "Crossfeed Amount", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)")]
+    #[param(name = "Crossfeed Amount", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)", group = "Aether")]
     pub cf_amount: FloatParam,
-    #[param(name = "Crossfeed Realism", default = 0, range = "discrete(0, 2)")]
+    #[param(name = "Crossfeed Realism", default = 0, range = "discrete(0, 2)", group = "Aether")]
     pub cf_realism: IntParam,
 
-    #[param(name = "Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(name = "Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "Aether")]
     pub gain: FloatParam,
 
     #[param(name = "Bypass", default = 0)]

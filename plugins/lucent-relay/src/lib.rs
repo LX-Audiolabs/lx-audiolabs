@@ -138,10 +138,15 @@ impl LucentRelay {
                     let now = shared_analysis::shm::now_ms();
                     let lucents = hub.read_consumers(now);
                     let sel = handle.target();
-                    let resolved: Option<String> = if lucents.len() == 1 {
-                        Some(lucents[0].clone())
+                    // Broadcast (empty target) always stays alive. Explicit
+                    // target only if that consumer exists. Auto-target
+                    // (single Lucent) as last-resort fallback.
+                    let resolved: Option<String> = if sel.is_empty() {
+                        Some(String::new())
                     } else if lucents.contains(&sel) {
                         Some(sel)
+                    } else if lucents.len() == 1 {
+                        Some(lucents[0].clone())
                     } else {
                         None
                     };
@@ -163,13 +168,19 @@ impl LucentRelay {
         let Some(slot) = self.claimed_slot else { return };
         let Some(hub) = relay_hub() else { return };
         let label: &str = if self.cached_name.is_empty() { &self.fallback_label } else { &self.cached_name };
-        let resolved: Option<&str> = if !self.cached_target.is_empty()
-            && hub.consumer_exists(&self.cached_target, now_ms)
-        {
+        // Resolve target: broadcast (empty) always publishes to all Lucents.
+        // Specific target only publishes if that consumer still exists.
+        let resolved: Option<&str> = if self.cached_target.is_empty() {
+            // Broadcast: emit to every Lucent. No consumer-existence check
+            // needed — read_active() on the consumer side already filters by
+            // heartbeat freshness, so stale targets are naturally ignored.
+            Some("")
+        } else if hub.consumer_exists(&self.cached_target, now_ms) {
             Some(self.cached_target.as_str())
-        } else if let Some(n) = hub.single_consumer_name(now_ms, &mut self.target_buf) {
-            std::str::from_utf8(&self.target_buf[..n]).ok()
         } else {
+            // Explicit target, but consumer is gone (plugin closed). Don't
+            // publish until the user picks a new target or switches to
+            // broadcast — avoids spamming stale-target writes.
             None
         };
         if let Some(target) = resolved {

@@ -165,8 +165,13 @@ fn tick(
     let phase_correlation = shared.phase_correlation.load(Ordering::Relaxed);
     let balance = shared.balance.load(Ordering::Relaxed);
     let snap_now = shared.snap_active.load(Ordering::Relaxed);
+    // Sync host param state → telemetry (for Resonance/Masking Bitwig page toggles)
+    let resonance_active = lens.get(LucentParamsParamId::ResonanceActive) > 0.5;
+    let masking_active = lens.get(LucentParamsParamId::MaskingActive) > 0.5;
 
     telemetry.update(|t| {
+        t.show_resonance = resonance_active;
+        t.show_masking = masking_active;
         t.own_spectrum = acc.ui.own_spectrum.clone();
         t.relays = acc.ui.relays.clone();
         t.resonance_cache_own = lists.own;
@@ -367,8 +372,8 @@ pub fn build(cx: &mut Context, lens: ParamLens<LucentParams>, shared: Arc<Shared
         masking_cache: Vec::new(),
         resonance_text: "No resonances detected".to_string(),
         masking_text: "No masking detected".to_string(),
-        show_resonance: false,
-        show_masking: false,
+        show_resonance: true,
+        show_masking: true,
         snap_blink: 0,
         peak_l: -90.0,
         peak_r: -90.0,
@@ -432,7 +437,7 @@ pub fn build(cx: &mut Context, lens: ParamLens<LucentParams>, shared: Arc<Shared
                 }
                 name_signal.set(text);
             })
-            .width(Pixels(130.0));
+            .width(Pixels(170.0));
 
         Element::new(cx).width(Stretch(1.0));
 
@@ -649,7 +654,7 @@ fn build_main_panel(
                         let active = relay.active;
                         let name = relay.name.clone();
                         let telemetry_press = telemetry;
-                        Button::new(cx, move |cx| Label::new(cx, name.clone()).font_size(11.0))
+                        Button::new(cx, move |cx| Label::new(cx, name.clone()).font_size(9.0))
                             .on_press(move |_cx| {
                                 telemetry_press.update(|t| {
                                     if let Some(r) = t.relays.get_mut(idx) {
@@ -657,17 +662,17 @@ fn build_main_panel(
                                     }
                                 });
                             })
-                            .height(Pixels(shared_ui::BUTTON_HEIGHT))
+                            .height(Pixels(shared_ui::BUTTON_HEIGHT_SMALL))
                             .background_color(if active { shared_ui::AMBER } else { shared_ui::IDLE_BG });
                     }
                 }
             })
             .width(Stretch(1.0))
-            .height(Pixels(48.0))
+            .height(Pixels(40.0))
             .padding(Pixels(8.0))
             .horizontal_gap(Pixels(6.0))
             .alignment(Alignment::Left)
-            .background_color(rgb(0.09, 0.09, 0.09));
+            .background_color(rgb(0.06, 0.06, 0.06));
         }
 
         let curves = if t.relays.is_empty() || mode == 0 {
@@ -745,14 +750,20 @@ fn build_main_panel(
                     .color(col(0.8, 0.8, 0.8, 1.0));
             })
             .width(Stretch(1.0));
-            Button::new(cx, move |cx| {
-                Label::new(cx, Memo::new(move |_| if telemetry.get().show_resonance { "ON" } else { "OFF" }))
-            })
-            .on_press(move |_cx| telemetry.update(|t| t.show_resonance = !t.show_resonance))
-            .height(Pixels(shared_ui::BUTTON_HEIGHT))
-            .background_color(Memo::new(move |_| {
-                if telemetry.get().show_resonance { shared_ui::AMBER } else { shared_ui::IDLE_BG }
-            }));
+            {
+                let sig = lens.value_signal(LucentParamsParamId::ResonanceActive);
+                let lens_r = lens.clone();
+                Binding::new(cx, sig, move |cx| {
+                    let active = lens_r.get(LucentParamsParamId::ResonanceActive) > 0.5;
+                    let lens_r = lens_r.clone();
+                    shared_ui::toggle_button_small(cx, if active { "ON" } else { "OFF" }, active, move |_cx| {
+                        let now = lens_r.get(LucentParamsParamId::ResonanceActive) <= 0.5;
+                        let norm = if now { 1.0 } else { 0.0 };
+                        lens_r.automate(LucentParamsParamId::ResonanceActive, norm);
+                        sig.set(norm as f32);
+                    });
+                });
+            }
         })
         .width(Stretch(1.0))
         .height(Pixels(88.0))
@@ -770,13 +781,18 @@ fn build_main_panel(
             if mode == 0 {
                 Label::new(cx, "OFF").color(col(0.35, 0.35, 0.35, 1.0));
             } else {
-                Button::new(cx, move |cx| {
-                    Label::new(cx, Memo::new(move |_| if telemetry.get().show_masking { "ON" } else { "OFF" }))
-                })
-                .on_press(move |_cx| telemetry.update(|t| t.show_masking = !t.show_masking))
-                .background_color(Memo::new(move |_| {
-                    if telemetry.get().show_masking { rgb(0.95, 0.22, 0.18) } else { col(0.15, 0.15, 0.15, 1.0) }
-                }));
+                let sig = lens.value_signal(LucentParamsParamId::MaskingActive);
+                let lens_m = lens.clone();
+                Binding::new(cx, sig, move |cx| {
+                    let active = lens_m.get(LucentParamsParamId::MaskingActive) > 0.5;
+                    let lens_m = lens_m.clone();
+                    shared_ui::toggle_button_small(cx, if active { "ON" } else { "OFF" }, active, move |_cx| {
+                        let now = lens_m.get(LucentParamsParamId::MaskingActive) <= 0.5;
+                        let norm = if now { 1.0 } else { 0.0 };
+                        lens_m.automate(LucentParamsParamId::MaskingActive, norm);
+                        sig.set(norm as f32);
+                    });
+                });
             }
         })
         .width(Stretch(1.0))

@@ -132,6 +132,10 @@ struct TickAccum {
     presets: Vec<(String, Option<PathBuf>, EqPreset)>,
     vault_path: Option<String>,
     preset_refresh_counter: u32,
+    /// Bumped every tick; params_gen fires every 10 ticks so host param
+    /// changes (Bitwig pages, automation) propagate to slider/knob Bindings
+    /// within ~330ms instead of only on Reset/SelectPreset (~2s).
+    params_refresh_counter: u32,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -164,7 +168,9 @@ fn tick(shared: &SharedState, params: &EquilibriumParams, accum: &Arc<Mutex<Tick
     let balance = shared.balance.load(Ordering::Acquire);
 
     acc.preset_refresh_counter = acc.preset_refresh_counter.wrapping_add(1);
+    acc.params_refresh_counter = acc.params_refresh_counter.wrapping_add(1);
     let refresh_presets = acc.preset_refresh_counter.is_multiple_of(60);
+    let refresh_params = acc.params_refresh_counter.is_multiple_of(10);
     if refresh_presets {
         acc.presets = load_presets(acc.vault_path.as_deref());
     }
@@ -201,6 +207,14 @@ fn tick(shared: &SharedState, params: &EquilibriumParams, accum: &Arc<Mutex<Tick
     // param from outside any knob drag). Placed after `drop(acc)` for the
     // same self-deadlock reason as the preset-refresh bump above.
     if auto_loud_applied && !refresh_presets {
+        params_gen.update(|g| *g = g.wrapping_add(1));
+    }
+    // Periodic params_gen bump: host param changes (Bitwig pages, DAW
+    // automation) write atomics directly without notifying the UI.
+    // Sliders/knobs are bound to `params_gen` — bumping it every ~330ms
+    // lets them re-read the atomic values without the full rebuild cost
+    // of binding to `telemetry` (which fires every 33ms unconditionally).
+    if refresh_params && !refresh_presets && !auto_loud_applied {
         params_gen.update(|g| *g = g.wrapping_add(1));
     }
 
@@ -387,6 +401,7 @@ pub fn build(cx: &mut Context, lens: ParamLens<EquilibriumParams>, shared: Arc<S
         presets,
         vault_path: config.vault_path,
         preset_refresh_counter: 0,
+        params_refresh_counter: 0,
     }));
 
     Ticker::new(cx, shared.clone(), params.clone(), accum.clone(), telemetry, params_gen).width(Pixels(1.0)).height(Pixels(1.0));
@@ -818,22 +833,46 @@ fn build_right_sidebar(cx: &mut Context, telemetry: Signal<Telemetry>, lens: Par
                     let lens_knob = lens_hs.clone();
                     let out_gain_display = Signal::new(out_gain);
                     let norm = ((out_gain + 12.0) / 24.0).clamp(0.0, 1.0);
-                    KnobView::new(cx, norm, 0.5, -12.0, 12.0, true, move |_cx, g| match g {
-                        Gesture::Start => lens_knob.begin_edit(K::OutputGain),
-                        Gesture::Change(v) => {
-                            let n = ((v as f64) + 12.0) / 24.0;
-                            lens_knob.set(K::OutputGain, n.clamp(0.0, 1.0));
-                            out_gain_display.set(v);
-                        }
-                        Gesture::End => lens_knob.end_edit(K::OutputGain),
+                    VStack::new(cx, move |cx| {
+                        KnobView::new(cx, norm, 0.5, -12.0, 12.0, true, move |_cx, g| match g {
+                            Gesture::Start => lens_knob.begin_edit(K::OutputGain),
+                            Gesture::Change(v) => {
+                                let n = ((v as f64) + 12.0) / 24.0;
+                                lens_knob.set(K::OutputGain, n.clamp(0.0, 1.0));
+                                out_gain_display.set(v);
+                            }
+                            Gesture::End => lens_knob.end_edit(K::OutputGain),
+                        })
+                        .width(Pixels(40.0))
+                        .height(Pixels(40.0));
+                        Label::new(cx, Memo::new(move |_| format!("{:.1} dB", out_gain_display.get())))
+                            .font_size(10.0)
+                            .color(rgb(1.0, 0.65, 0.3));
+                        Label::new(cx, "OUT GAIN")
+                            .font_size(9.0)
+                            .color(col(0.75, 0.75, 0.75, 1.0));
                     })
-                    .width(Pixels(40.0))
-                    .height(Pixels(40.0));
+                    .alignment(Alignment::Center)
+                    .width(Auto);
                 }
             });
 
             VStack::new(cx, move |cx| {
-                styled_toggle(cx, lens_hs.clone(), K::PreMasterActive, "PRE-MASTER");
+                // PRE-MASTER: small toggle for tight right-sidebar layout
+                {
+                    let sig = lens_hs.value_signal(K::PreMasterActive);
+                    let lens_pm = lens_hs.clone();
+                    Binding::new(cx, sig, move |cx| {
+                        let active = lens_pm.get(K::PreMasterActive) > 0.5;
+                        let lens_pm = lens_pm.clone();
+                        shared_ui::toggle_button_small(cx, "PRE-MASTER", active, move |_cx| {
+                            let now = lens_pm.get(K::PreMasterActive) <= 0.5;
+                            let norm = if now { 1.0 } else { 0.0 };
+                            lens_pm.automate(K::PreMasterActive, norm);
+                            sig.set(norm as f32);
+                        });
+                    });
+                }
                 // PreMasterTargetDb can move from outside a slider drag
                 // (RESET ALL), which bumps `params_gen` for exactly this
                 // reason - re-read the plain value on every bump so the
@@ -908,7 +947,7 @@ fn build_right_sidebar(cx: &mut Context, telemetry: Signal<Telemetry>, lens: Par
         let shared_reset = shared.clone();
         Binding::new(cx, telemetry, move |cx| {
             let t = telemetry.get();
-            StereoMeterView::new(cx, t.peak_l, t.peak_r, t.peak_hold_l, t.peak_hold_r, t.balance).width(Stretch(1.0)).height(Pixels(155.0));
+            StereoMeterView::new(cx, t.peak_l, t.peak_r, t.peak_hold_l, t.peak_hold_r, t.balance).width(Stretch(1.0)).height(Pixels(shared_ui::STEREO_METER_HEIGHT));
 
             let shared_l = shared_reset.clone();
             let shared_r = shared_reset.clone();
@@ -966,40 +1005,55 @@ fn build_footer(
         VStack::new(cx, move |cx| {
             Label::new(cx, "ANALYZE").font_size(10.0).color(rgb(1.0, 0.55, 0.15));
             HStack::new(cx, move |cx| {
-                styled_toggle_dyn(cx, lens_analyze.clone(), K::ListenActive, "LISTEN", "LISTEN ON");
+                // LISTEN: big toggle, amber text always (even when inactive)
+                {
+                    let sig = lens_analyze.value_signal(K::ListenActive);
+                    let lens_listen = lens_analyze.clone();
+                    Binding::new(cx, sig, move |cx| {
+                        let active = lens_listen.get(K::ListenActive) > 0.5;
+                        let lens_listen = lens_listen.clone();
+                        shared_ui::toggle_button_big_amber_text(
+                            cx,
+                            if active { "LISTEN ON" } else { "LISTEN" },
+                            active,
+                            move |_cx| {
+                                let now = lens_listen.get(K::ListenActive) <= 0.5;
+                                let norm = if now { 1.0 } else { 0.0 };
+                                lens_listen.automate(K::ListenActive, norm);
+                                sig.set(norm as f32);
+                            },
+                        );
+                    });
+                }
 
                 let shared_apply = shared_analyze.clone();
                 let lens_apply = lens_analyze.clone();
-                Button::new(cx, |cx| Label::new(cx, "APPLY ANALYSIS").font_size(12.0))
-                    .on_press(move |_cx| {
-                        if lens_apply.get(K::ListenActive) <= 0.5 {
-                            return;
+                shared_ui::push_button_big(cx, "APPLY ANALYSIS", move |_cx| {
+                    if lens_apply.get(K::ListenActive) <= 0.5 {
+                        return;
+                    }
+                    let t = telemetry.get();
+                    if t.listen_samples > 100.0 {
+                        for b in 0..5 {
+                            shared_apply.target_levels[b].store(t.listen_levels[b], Ordering::Release);
+                            shared_apply.target_tolerances[b].store(t.listen_tolerances[b], Ordering::Release);
                         }
-                        let t = telemetry.get();
-                        if t.listen_samples > 100.0 {
-                            for b in 0..5 {
-                                shared_apply.target_levels[b].store(t.listen_levels[b], Ordering::Release);
-                                shared_apply.target_tolerances[b].store(t.listen_tolerances[b], Ordering::Release);
-                            }
-                        }
-                    })
-                    .background_color(col(0.15, 0.15, 0.15, 1.0));
+                    }
+                });
 
                 let shared_ra = shared_analyze.clone();
                 let lens_ra = lens_analyze.clone();
-                Button::new(cx, |cx| Label::new(cx, "RESET ANALYSIS").font_size(12.0))
-                    .on_press(move |_cx| {
-                        if lens_ra.get(K::ListenActive) <= 0.5 {
-                            return;
-                        }
-                        shared_ra.reset_analysis.store(true, Ordering::Release);
-                        shared_ra.listen_samples.store(0.0, Ordering::Release);
-                        for b in 0..5 {
-                            shared_ra.listen_levels[b].store(-90.0, Ordering::Release);
-                            shared_ra.listen_tolerances[b].store(0.0, Ordering::Release);
-                        }
-                    })
-                    .background_color(col(0.15, 0.15, 0.15, 1.0));
+                shared_ui::push_button_big(cx, "RESET ANALYSIS", move |_cx| {
+                    if lens_ra.get(K::ListenActive) <= 0.5 {
+                        return;
+                    }
+                    shared_ra.reset_analysis.store(true, Ordering::Release);
+                    shared_ra.listen_samples.store(0.0, Ordering::Release);
+                    for b in 0..5 {
+                        shared_ra.listen_levels[b].store(-90.0, Ordering::Release);
+                        shared_ra.listen_tolerances[b].store(0.0, Ordering::Release);
+                    }
+                });
             })
             .horizontal_gap(Pixels(12.0))
             .alignment(Alignment::Center)
@@ -1043,11 +1097,11 @@ fn build_footer(
         .width(Auto)
         .padding(Pixels(5.0));
 
-        shared_ui::danger_button(cx, "RESET", move |_cx| reset_all(&lens, &shared, &accum, selected_preset, params_gen));
+        shared_ui::danger_button_big(cx, "RESET", move |_cx| reset_all(&lens, &shared, &accum, selected_preset, params_gen));
     })
     .width(Stretch(1.0))
     .height(Pixels(110.0))
-    .padding_left(Pixels(170.0))
+    .padding_left(Pixels(130.0))
     .padding_right(Pixels(8.0))
     .padding_top(Pixels(8.0))
     .padding_bottom(Pixels(8.0))

@@ -13,8 +13,10 @@ use vizia::prelude::*;
 
 pub const BUTTON_HEIGHT: f32 = 22.0;
 pub const BUTTON_HEIGHT_SMALL: f32 = 18.0;
+pub const BUTTON_HEIGHT_BIG: f32 = 30.0;
 pub const KNOB_SIZE: f32 = 40.0;
 pub const SLIDER_HEIGHT: f32 = 20.0;
+pub const STEREO_METER_HEIGHT: f32 = 180.0;
 
 pub const AMBER: Color = Color::rgb(255, 115, 26);
 pub const IDLE_BG: Color = Color::rgb(38, 38, 38);
@@ -57,5 +59,56 @@ pub fn danger_button<'a>(
     Button::new(cx, move |cx| Label::new(cx, label).font_size(11.0).color(DANGER_TEXT))
         .on_press(on_press)
         .height(Pixels(BUTTON_HEIGHT))
+        .background_color(DANGER_BG)
+}
+
+/// Big amber-when-active toggle — LISTEN, SOLO (footer / main panel).
+pub fn toggle_button_big<'a>(
+    cx: &'a mut Context,
+    label: &'static str,
+    active: bool,
+    on_press: impl Fn(&mut EventContext) + 'static + Send + Sync,
+) -> Handle<'a, impl View> {
+    Button::new(cx, move |cx| Label::new(cx, label).font_size(12.0))
+        .on_press(on_press)
+        .height(Pixels(BUTTON_HEIGHT_BIG))
+        .background_color(if active { AMBER } else { IDLE_BG })
+}
+
+/// Big amber-text-always toggle — LISTEN in footer: text stays amber even
+/// when inactive so it's visually distinct from the other analysis buttons.
+pub fn toggle_button_big_amber_text<'a>(
+    cx: &'a mut Context,
+    label: &'static str,
+    active: bool,
+    on_press: impl Fn(&mut EventContext) + 'static + Send + Sync,
+) -> Handle<'a, impl View> {
+    Button::new(cx, move |cx| Label::new(cx, label).font_size(12.0).color(AMBER))
+        .on_press(on_press)
+        .height(Pixels(BUTTON_HEIGHT_BIG))
+        .background_color(if active { AMBER } else { IDLE_BG })
+}
+
+/// Big plain push-button — APPLY ANALYSIS, RESET ANALYSIS, SAVE, VAULT SETUP.
+pub fn push_button_big<'a>(
+    cx: &'a mut Context,
+    label: &'static str,
+    on_press: impl Fn(&mut EventContext) + 'static + Send + Sync,
+) -> Handle<'a, impl View> {
+    Button::new(cx, |cx| Label::new(cx, label).font_size(12.0))
+        .on_press(on_press)
+        .height(Pixels(BUTTON_HEIGHT_BIG))
+        .background_color(IDLE_BG)
+}
+
+/// Big dark-red danger button — RESET in footer.
+pub fn danger_button_big<'a>(
+    cx: &'a mut Context,
+    label: &'static str,
+    on_press: impl Fn(&mut EventContext) + 'static + Send + Sync,
+) -> Handle<'a, impl View> {
+    Button::new(cx, move |cx| Label::new(cx, label).font_size(12.0).color(DANGER_TEXT))
+        .on_press(on_press)
+        .height(Pixels(BUTTON_HEIGHT_BIG))
         .background_color(DANGER_BG)
 }

@@ -21,7 +21,7 @@ use shared_dsp::Biquad;
 use truce_vizia::ParamLens;
 
 use crate::aether_canvas::EqCurveView;
-use shared_ui::{Gesture, KnobView};
+use shared_ui::{Gesture, KnobView, format_knob_value};
 use crate::{AetherParams, AetherParamsParamId};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -286,6 +286,7 @@ impl View for Ticker {
 
 // ─── UI ─────────────────────────────────────────────────────────────────────
 
+/// Small push button used by the SETUP form only (CANCEL).
 fn small_button(cx: &mut Context, label: &'static str, on_press: impl Fn(&mut EventContext) + 'static + Send + Sync) {
     Button::new(cx, move |cx| Label::new(cx, label).font_size(11.0))
         .on_press(on_press).width(Pixels(60.0)).height(Pixels(26.0));
@@ -327,15 +328,27 @@ pub fn build(cx: &mut Context, lens: ParamLens<AetherParams>, params: Arc<Aether
         // ── HEADER ──────────────────────────────────────────────────────────
         HStack::new(cx, move |cx| {
             HStack::new(cx, |cx| {
-                Label::new(cx, "LX").font_size(18.0).color(rgb(1.0, 0.45, 0.1));
-                Label::new(cx, "AUDIOLABS").font_size(18.0).color(Color::white());
-                Element::new(cx).width(Pixels(4.0));
-                Label::new(cx, format!("Aether {VERSION}")).font_size(9.0).color(col(0.55,0.55,0.55,1.0));
-            }).width(Auto).alignment(Alignment::Center);
+                Label::new(cx, "LX").font_size(20.0).color(rgb(1.0, 0.45, 0.1));
+                Label::new(cx, "AUDIOLABS").font_size(20.0).color(Color::white());
+                Element::new(cx).width(Pixels(14.0));
+                Element::new(cx).width(Pixels(1.0)).height(Pixels(28.0)).background_color(col(0.18, 0.22, 0.22, 1.0));
+                Element::new(cx).width(Pixels(14.0));
+                VStack::new(cx, |cx| {
+                    Label::new(cx, "AETHER").font_size(13.0).color(rgb(1.0, 0.65, 0.3));
+                    Label::new(cx, format!("v{VERSION}")).font_size(10.0).color(col(0.5, 0.5, 0.5, 1.0));
+                })
+                .width(Auto)
+                .height(Auto)
+                .vertical_gap(Pixels(2.0));
+            })
+            .width(Auto)
+            .height(Auto)
+            .horizontal_gap(Pixels(6.0))
+            .alignment(Alignment::Center);
 
             Element::new(cx).width(Stretch(1.0));
 
-            // Preset ComboBox
+            // Preset ComboBox + Textbox
             let preset_opts = Signal::new(preset_names_init);
             let sel_idx = Signal::new(selected_index);
             let lens_preset = lens.clone();
@@ -353,24 +366,24 @@ pub fn build(cx: &mut Context, lens: ParamLens<AetherParams>, params: Arc<Aether
                         save_last_preset(&vp_p.get(), &name);
                     }
                 })
-                .width(Pixels(170.0))
-                .height(Pixels(20.0))
+                .width(Pixels(140.0))
+                .height(Pixels(shared_ui::BUTTON_HEIGHT))
                 .font_size(11.0);
 
-            // Preset name
-            Textbox::new(cx, preset_name_signal).width(Pixels(170.0)).height(Pixels(20.0)).font_size(11.0);
+            Textbox::new(cx, preset_name_signal)
+                .width(Pixels(120.0))
+                .height(Pixels(shared_ui::BUTTON_HEIGHT))
+                .font_size(11.0);
 
-            // Save
+            Element::new(cx).width(Pixels(6.0));
+
+            // Buttons: SAVE, SETUP, BYPASS — all from shared-ui
             let params_save = params.clone();
             let vp_save = vault_path_signal;
-            small_button(cx, "SAVE", move |_cx| {
+            shared_ui::push_button_big(cx, "SAVE", move |_cx| {
                 let name = preset_name_signal.get();
                 if !name.is_empty() {
                     let md = build_profile_md(&params_save);
-                    // Fall back to the plugin's own data dir when no vault
-                    // path is configured yet - matches Meridian/Equilibrium,
-                    // so SAVE always writes something instead of silently
-                    // no-op'ing.
                     let dir = match vp_save.get() {
                         Some(vp) if !vp.is_empty() => std::path::PathBuf::from(vp),
                         _ => shared_analysis::get_plugin_dir("Aether").join("presets"),
@@ -389,30 +402,25 @@ pub fn build(cx: &mut Context, lens: ParamLens<AetherParams>, params: Arc<Aether
                 }
             });
 
-            small_button(cx, "SETUP", move |_cx| { show_setup.update(|v| *v = !*v); });
+            shared_ui::push_button_big(cx, "SETUP", move |_cx| { show_setup.update(|v| *v = !*v); });
 
-            Element::new(cx).width(Pixels(8.0));
-
-            // Bypass
-            let bypass_signal = Signal::new(params.bypass.value());
-            let lens_bypass = lens.clone();
-            let params_bypass = params.clone();
-            Button::new(cx, move |cx| {
-                Label::new(cx, Memo::new(move |_| {
-                    if bypass_signal.get() { "BYPASS".to_string() } else { "ACTIVE".to_string() }
-                })).font_size(10.0)
-            })
-            .on_press(move |_cx| {
-                let v = !params_bypass.bypass.value();
-                lens_bypass.automate(AetherParamsParamId::Bypass, if v {1.0} else {0.0});
-                bypass_signal.set(v);
-            })
-            .width(Pixels(70.0)).height(Pixels(shared_ui::BUTTON_HEIGHT))
-            .background_color(Memo::new(move |_| {
-                if bypass_signal.get() { shared_ui::AMBER } else { shared_ui::IDLE_BG }
-            }));
+            // BYPASS — standard shared-ui toggle, amber when active
+            {
+                let sig = lens.value_signal(AetherParamsParamId::Bypass);
+                let lens_bypass = lens.clone();
+                Binding::new(cx, sig, move |cx| {
+                    let active = lens_bypass.get(AetherParamsParamId::Bypass) > 0.5;
+                    let lens_bypass = lens_bypass.clone();
+                    shared_ui::toggle_button_big(cx, "BYPASS", active, move |_cx| {
+                        let now = lens_bypass.get(AetherParamsParamId::Bypass) <= 0.5;
+                        let norm = if now { 1.0 } else { 0.0 };
+                        lens_bypass.automate(AetherParamsParamId::Bypass, norm);
+                        sig.set(norm as f32);
+                    });
+                });
+            }
         })
-        .width(Stretch(1.0)).height(Pixels(44.0)).padding(Pixels(8.0))
+        .width(Stretch(1.0)).height(Pixels(50.0)).padding(Pixels(10.0))
         .alignment(Alignment::Center).background_color(rgb(0.08,0.08,0.08)).horizontal_gap(Pixels(4.0));
 
         // Setup or main

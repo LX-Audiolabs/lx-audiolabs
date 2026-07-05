@@ -24,7 +24,7 @@ mod editor;
 mod vizia_canvas;
 
 const WINDOW_W: u32 = 990;
-const WINDOW_H: u32 = 760;
+const WINDOW_H: u32 = 660;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
