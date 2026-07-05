@@ -132,10 +132,6 @@ struct TickAccum {
     presets: Vec<(String, Option<PathBuf>, EqPreset)>,
     vault_path: Option<String>,
     preset_refresh_counter: u32,
-    /// Bumped every tick; params_gen fires every 10 ticks so host param
-    /// changes (Bitwig pages, automation) propagate to slider/knob Bindings
-    /// within ~330ms instead of only on Reset/SelectPreset (~2s).
-    params_refresh_counter: u32,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -168,9 +164,7 @@ fn tick(shared: &SharedState, params: &EquilibriumParams, accum: &Arc<Mutex<Tick
     let balance = shared.balance.load(Ordering::Acquire);
 
     acc.preset_refresh_counter = acc.preset_refresh_counter.wrapping_add(1);
-    acc.params_refresh_counter = acc.params_refresh_counter.wrapping_add(1);
     let refresh_presets = acc.preset_refresh_counter.is_multiple_of(60);
-    let refresh_params = acc.params_refresh_counter.is_multiple_of(10);
     if refresh_presets {
         acc.presets = load_presets(acc.vault_path.as_deref());
     }
@@ -209,14 +203,13 @@ fn tick(shared: &SharedState, params: &EquilibriumParams, accum: &Arc<Mutex<Tick
     if auto_loud_applied && !refresh_presets {
         params_gen.update(|g| *g = g.wrapping_add(1));
     }
-    // Periodic params_gen bump: host param changes (Bitwig pages, DAW
-    // automation) write atomics directly without notifying the UI.
-    // Sliders/knobs are bound to `params_gen` — bumping it every ~330ms
-    // lets them re-read the atomic values without the full rebuild cost
-    // of binding to `telemetry` (which fires every 33ms unconditionally).
-    if refresh_params && !refresh_presets && !auto_loud_applied {
-        params_gen.update(|g| *g = g.wrapping_add(1));
-    }
+    // params_gen is intentionally NOT bumped on a timer. Slider/knob
+    // widgets live inside `Binding::new(cx, params_gen, ...)` so they
+    // rebuild on discrete actions (ResetAll, SelectPreset, SavePreset,
+    // vault-path save, Auto Loud) to pick up new values. A periodic bump
+    // here (~330ms) made the widgets rebuild while the user was dragging,
+    // which reset their internal drag state and caused stuttering /
+    // dropped drags.
 
     telemetry.update(move |t| {
         t.band_levels = band_levels;
@@ -401,7 +394,6 @@ pub fn build(cx: &mut Context, lens: ParamLens<EquilibriumParams>, shared: Arc<S
         presets,
         vault_path: config.vault_path,
         preset_refresh_counter: 0,
-        params_refresh_counter: 0,
     }));
 
     Ticker::new(cx, shared.clone(), params.clone(), accum.clone(), telemetry, params_gen).width(Pixels(1.0)).height(Pixels(1.0));

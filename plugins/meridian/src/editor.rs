@@ -448,9 +448,12 @@ struct TickAccum {
     vault_path: Option<String>,
     preset_refresh_counter: u32,
     gr_peak_hold_ticks: u32,
-    /// Bumped every tick; params_gen fires every 10 ticks so host param
-    /// changes propagate to slider/knob Bindings within ~330ms.
-    params_refresh_counter: u32,
+    /// params_gen is only bumped on discrete user actions (preset load/save,
+    /// RESET ALL, Auto Loud, vault-path save) so slider/knob Bindings rebuild
+    /// only when necessary. A periodic timer bump caused widgets to rebuild
+    /// mid-drag, resetting their internal drag state and making interaction
+    /// stutter.
+    _reserved: u32,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -499,9 +502,7 @@ fn tick(shared: &SharedState, params: &MeridianParams, accum: &Arc<Mutex<TickAcc
     }
 
     acc.preset_refresh_counter = acc.preset_refresh_counter.wrapping_add(1);
-    acc.params_refresh_counter = acc.params_refresh_counter.wrapping_add(1);
     let refresh_presets = acc.preset_refresh_counter.is_multiple_of(150);
-    let refresh_params = acc.params_refresh_counter.is_multiple_of(10);
     if refresh_presets {
         acc.presets = list_meridian_presets(acc.vault_path.as_deref());
     }
@@ -516,10 +517,12 @@ fn tick(shared: &SharedState, params: &MeridianParams, accum: &Arc<Mutex<TickAcc
     // Mutex.
     drop(acc);
 
-    // set_value() is an atomic store only (no UI notify) - bump params_gen
-    // so the Output Gain knob's Binding re-reads it (Auto Loud moves this
-    // param from outside any knob drag).
-    if auto_loud_applied || refresh_presets || refresh_params {
+    // Bump params_gen only on discrete events. Sliders/knobs live inside
+    // `Binding::new(cx, params_gen, ...)` so they rebuild and re-read fresh
+    // values on ResetAll / SelectPreset / SavePreset / vault-path save /
+    // Auto Loud. A periodic bump here made them rebuild during a drag and
+    // stutter.
+    if auto_loud_applied || refresh_presets {
         params_gen.update(|g| *g = g.wrapping_add(1));
     }
 
@@ -690,7 +693,7 @@ pub fn build(cx: &mut Context, lens: ParamLens<MeridianParams>, shared: Arc<Shar
         vault_path: config.vault_path,
         preset_refresh_counter: 0,
         gr_peak_hold_ticks: 0,
-        params_refresh_counter: 0,
+        _reserved: 0,
     }));
 
     Ticker::new(cx, shared.clone(), params.clone(), accum.clone(), telemetry, params_gen).width(Pixels(1.0)).height(Pixels(1.0));
@@ -1067,7 +1070,7 @@ fn build_main_panel(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamL
                             Label::new(cx, "LOW CUT").font_size(9.0).color(col(0.75, 0.75, 0.75, 1.0));
                         })
                         .alignment(Alignment::Center)
-                        .width(Auto);
+                        .width(Pixels(40.0));
 
                         slope_selector(cx, lens.clone(), params.clone(), |p| &p.cut_slope, K::CutSlope, 2);
 
@@ -1090,7 +1093,7 @@ fn build_main_panel(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamL
                             Label::new(cx, "HIGH CUT").font_size(9.0).color(col(0.75, 0.75, 0.75, 1.0));
                         })
                         .alignment(Alignment::Center)
-                        .width(Auto);
+                        .width(Pixels(40.0));
                     })
                     .horizontal_gap(Pixels(15.0))
                     .alignment(Alignment::Center)
@@ -1099,14 +1102,15 @@ fn build_main_panel(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamL
             })
             .vertical_gap(Pixels(4.0))
             .alignment(Alignment::Center)
-            .width(Auto);
+            .width(Pixels(185.0));
 
             vsep(cx);
 
             linear_knob_group(cx, &lens, &params, "WARMTH", &[
                 ("DRIVE", K::WarmthDrive, (|p: &MeridianParams| &p.warmth_drive) as FloatField, 0.0, 12.0),
                 ("W/MIX", K::WarmthMix, (|p: &MeridianParams| &p.warmth_mix) as FloatField, 0.0, 100.0),
-            ]);
+            ])
+            .width(Pixels(110.0));
 
             vsep(cx);
 
@@ -1114,7 +1118,8 @@ fn build_main_panel(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamL
                 ("AMT", K::ExciteAmount, (|p: &MeridianParams| &p.excite_amount) as FloatField, 0.0, 30.0),
                 ("BLEND", K::ExciteBlend, (|p: &MeridianParams| &p.excite_blend) as FloatField, 0.0, 100.0),
                 ("FREQ", K::ExciteFreq, (|p: &MeridianParams| &p.excite_freq) as FloatField, 6000.0, 12000.0),
-            ]);
+            ])
+            .width(Pixels(160.0));
 
             vsep(cx);
 
@@ -1128,7 +1133,7 @@ fn build_main_panel(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamL
             })
             .vertical_gap(Pixels(4.0))
             .alignment(Alignment::Center)
-            .width(Auto);
+            .width(Pixels(70.0));
         }
     })
     .width(Stretch(1.0))
@@ -1248,7 +1253,7 @@ fn vsep(cx: &mut Context) {
 
 /// A labelled group of plain (unipolar) knobs sharing one strip label -
 /// FILTER/WARMTH/EXCITER's shape in the top strip.
-fn linear_knob_group(cx: &mut Context, lens: &ParamLens<MeridianParams>, params: &Arc<MeridianParams>, title: &'static str, knobs: &[(&'static str, K, FloatField, f32, f32)]) {
+fn linear_knob_group<'a>(cx: &'a mut Context, lens: &ParamLens<MeridianParams>, params: &Arc<MeridianParams>, title: &'static str, knobs: &[(&'static str, K, FloatField, f32, f32)]) -> Handle<'a, impl View> {
     let lens = lens.clone();
     let params = params.clone();
     let knobs: Vec<(&'static str, K, FloatField, f32, f32)> = knobs.to_vec();
@@ -1276,7 +1281,7 @@ fn linear_knob_group(cx: &mut Context, lens: &ParamLens<MeridianParams>, params:
                     Label::new(cx, label).font_size(9.0).color(col(0.75, 0.75, 0.75, 1.0));
                 })
                 .alignment(Alignment::Center)
-                .width(Auto);
+                .width(Pixels(40.0));
             }
         })
         .horizontal_gap(Pixels(15.0))
@@ -1285,7 +1290,7 @@ fn linear_knob_group(cx: &mut Context, lens: &ParamLens<MeridianParams>, params:
     })
     .vertical_gap(Pixels(4.0))
     .alignment(Alignment::Center)
-    .width(Auto);
+    .width(Auto)
 }
 
 /// A single unipolar knob (Inflate Effect) - same shape as one
@@ -1327,7 +1332,7 @@ fn bipolar_knob(cx: &mut Context, lens: &ParamLens<MeridianParams>, params: &Arc
     })
     .width(Pixels(40.0))
     .height(Pixels(40.0));
-    Label::new(cx, Memo::new(move |_| format_knob_value(display.get(), max.abs().max(min.abs())))).font_size(10.0).color(rgb(1.0, 0.65, 0.3));
+    Label::new(cx, Memo::new(move |_| format_knob_value(display.get(), max.abs().max(min.abs())))).font_size(9.0).color(rgb(1.0, 0.65, 0.3));
     Label::new(cx, label).font_size(9.0).color(col(0.75, 0.75, 0.75, 1.0));
 }
 
@@ -1477,17 +1482,17 @@ fn build_footer(
                             }
                             Gesture::End => lens.end_edit(id),
                         })
-                        .width(Pixels(34.0))
-                        .height(Pixels(34.0));
-                        Label::new(cx, Memo::new(move |_| format_knob_value(display.get(), max))).font_size(8.0).color(rgb(1.0, 0.65, 0.3));
-                        Label::new(cx, label).font_size(8.0).color(col(0.75, 0.75, 0.75, 1.0));
+                        .width(Pixels(40.0))
+                        .height(Pixels(40.0));
+                        Label::new(cx, Memo::new(move |_| format_knob_value(display.get(), max))).font_size(9.0).color(rgb(1.0, 0.65, 0.3));
+                        Label::new(cx, label).font_size(9.0).color(col(0.75, 0.75, 0.75, 1.0));
                     })
                     .alignment(Alignment::Center)
-                    .width(Auto);
+                    .width(Pixels(40.0));
                 }
                     }
                 })
-                .horizontal_gap(Pixels(8.0))
+                .horizontal_gap(Pixels(16.0))
                 .alignment(Alignment::Center)
                 .height(Auto);
                     }
@@ -1520,7 +1525,7 @@ fn build_footer(
         .padding(Pixels(4.0))
         .vertical_gap(Pixels(4.0))
         .alignment(Alignment::Center)
-        .width(Auto);
+        .width(Pixels(440.0));
 
         vsep(cx);
 
@@ -1541,7 +1546,7 @@ fn build_footer(
                         move |cx| { plain_knob(cx, &lens, &params, K::InflateEffect, |p| &p.inflate_effect, 0.0, 100.0, "EFFECT"); }
                     })
                     .alignment(Alignment::Center)
-                    .width(Auto);
+                    .width(Pixels(40.0));
 
                     VStack::new(cx, {
                         let lens = lens.clone();
@@ -1549,7 +1554,7 @@ fn build_footer(
                         move |cx| { bipolar_knob(cx, &lens, &params, K::InflateCurve, |p| &p.inflate_curve, -50.0, 50.0, 0.0, "CURVE"); }
                     })
                     .alignment(Alignment::Center)
-                    .width(Auto);
+                    .width(Pixels(40.0));
                         }
                     });
 
@@ -1563,7 +1568,7 @@ fn build_footer(
                     .vertical_gap(Pixels(6.0))
                     .width(Auto);
                 })
-                .horizontal_gap(Pixels(14.0))
+                .horizontal_gap(Pixels(20.0))
                 .alignment(Alignment::Center)
                 .height(Auto);
             }
@@ -1571,7 +1576,7 @@ fn build_footer(
         .padding(Pixels(10.0))
         .vertical_gap(Pixels(6.0))
         .alignment(Alignment::Center)
-        .width(Auto);
+        .width(Pixels(220.0));
 
         vsep(cx);
 
@@ -1592,18 +1597,18 @@ fn build_footer(
                         move |cx| { bipolar_knob(cx, &lens, &params, K::Pan, |p| &p.pan, -1.0, 1.0, 0.0, "PAN"); }
                     })
                     .alignment(Alignment::Center)
-                    .width(Auto);
+                    .width(Pixels(40.0));
                     VStack::new(cx, {
                         let lens = lens.clone();
                         let params = params.clone();
                         move |cx| { bipolar_knob(cx, &lens, &params, K::StereoWidth, |p| &p.stereo_width, 0.0, 200.0, 100.0, "WIDTH"); }
                     })
                     .alignment(Alignment::Center)
-                    .width(Auto);
+                    .width(Pixels(40.0));
                         }
                     });
                 })
-                .horizontal_gap(Pixels(14.0))
+                .horizontal_gap(Pixels(20.0))
                 .alignment(Alignment::Center)
                 .height(Auto);
             }
@@ -1611,11 +1616,12 @@ fn build_footer(
         .padding(Pixels(10.0))
         .vertical_gap(Pixels(6.0))
         .alignment(Alignment::Center)
-        .width(Auto);
+        .width(Pixels(185.0));
 
         vsep(cx);
 
-        shared_ui::danger_button_big(cx, "RESET", move |_cx| reset_all(&lens, &params, &shared, &accum, params_gen));
+        shared_ui::danger_button_big(cx, "RESET", move |_cx| reset_all(&lens, &params, &shared, &accum, params_gen))
+            .width(Pixels(70.0));
     })
     .width(Stretch(1.0))
     .height(Pixels(110.0))

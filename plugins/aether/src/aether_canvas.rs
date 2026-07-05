@@ -39,32 +39,46 @@ impl View for EqCurveView {
 
         // Grid lines
         let db_range = self.db_max - self.db_min;
-        for db in [-12, -9, -6, -3, 0, 3, 6, 9] {
-            let y = h - h * (db as f32 - self.db_min + 12.0) / (db_range + 12.0);
+        let db_to_y = |db: f32| -> f32 {
+            let norm = ((db - self.db_min) / db_range).clamp(0.0, 1.0);
+            h - norm * h
+        };
+
+        for db in [-12, -9, -6, -3, 0, 3, 6, 9, 12] {
+            let y = db_to_y(db as f32);
             let alpha = if db == 0 { 0.25 } else { 0.10 };
             let grid = stroke_paint(col(1.0, 1.0, 1.0, alpha), 0.6);
             canvas.draw_line((0.0, y), (w, y), &grid);
 
-            fill_text(canvas, &format!("{db:+}"), 2.0, y - 2.0, 9.0, col(1.0, 1.0, 1.0, 0.35));
+            // Keep the top label inside the canvas; for all others baseline sits just above the grid line.
+            let label_y = if db == 12 { 8.0 } else { y - 2.0 };
+            fill_text(canvas, &format!("{db:+}"), 2.0, label_y, 9.0, col(1.0, 1.0, 1.0, 0.35));
         }
 
         // Frequency labels
-        for (freq, label) in [(0.0, "20"), (0.33, "200"), (0.67, "2k"), (1.0, "20k")] {
-            let x = freq * w;
-            fill_text(canvas, &format!("{label}Hz"), x - 10.0, h - 3.0, 8.0, col(1.0, 1.0, 1.0, 0.35));
+        for (frac, label) in [(0.0, "20"), (0.33, "200"), (0.67, "2k"), (1.0, "20k")] {
+            let x = frac * w;
+            let text_x = if frac == 0.0 {
+                x + 2.0
+            } else if frac == 1.0 {
+                (x - 22.0).max(0.0)
+            } else {
+                x - 8.0
+            };
+            fill_text(canvas, &format!("{label}Hz"), text_x, h - 3.0, 8.0, col(1.0, 1.0, 1.0, 0.35));
         }
 
         // Zero-db line
-        let zero_y = h - h * (-self.db_min + 12.0) / (db_range + 12.0);
+        let zero_y = db_to_y(0.0);
         canvas.draw_line((0.0, zero_y), (w, zero_y), &stroke_paint(col(1.0, 1.0, 1.0, 0.18), 0.8));
 
         // Curve line
         let mut line_path = vg::PathBuilder::new();
-        let first_y = h - h * (self.points[0].1 - self.db_min + 12.0) / (db_range + 12.0);
+        let first_y = db_to_y(self.points[0].1);
         line_path.move_to((0.0, first_y));
         for (xn, db) in &self.points {
             let x = xn * w;
-            let y = h - h * (db - self.db_min + 12.0) / (db_range + 12.0);
+            let y = db_to_y(*db);
             line_path.line_to((x, y));
         }
         canvas.draw_path(&line_path.detach(), &stroke_paint(col(1.0, 0.45, 0.1, 1.0), 1.5));
