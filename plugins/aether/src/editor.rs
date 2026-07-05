@@ -367,13 +367,13 @@ pub fn build(cx: &mut Context, lens: ParamLens<AetherParams>, params: Arc<Aether
                     }
                 })
                 .width(Pixels(140.0))
-                .height(Pixels(shared_ui::BUTTON_HEIGHT))
+                .height(Pixels(20.0))
                 .padding(Pixels(0.0))
                 .font_size(11.0);
 
             Textbox::new(cx, preset_name_signal)
                 .width(Pixels(120.0))
-                .height(Pixels(shared_ui::BUTTON_HEIGHT))
+                .height(Pixels(20.0))
                 .padding(Pixels(0.0))
                 .font_size(11.0);
 
