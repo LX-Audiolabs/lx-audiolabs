@@ -1,24 +1,35 @@
+//! Vizia port of the Iced editor. Lucent-Relay has no custom canvas,
+//! spectrum, or knobs — pure form widgets: name Textbox, target PickList,
+//! connection status Label. Uses same Ticker pattern as Lucent's editor.rs
+//! (NOT cx.add_timer — known vizia_core 0.4.0 infinite-loop bug).
+
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
-use truce_iced::iced::widget::{column, container, pick_list, row, text, text_input, Space};
-use truce_iced::iced::{Alignment, Border, Color, Element, Length, Subscription};
-use truce_iced::{IcedPlugin, Message, ParamCache};
-use truce_core::editor::PluginContext;
+use vizia::prelude::*;
+use vizia::vg;
 
 use shared_analysis::relay_hub;
-use shared_ui::{bold_font, header_brand};
 use crate::{LucentRelayParams, RelayHandle};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Registry so `RelayUi::new()` can reach the handle belonging to the same
-/// plugin instance without changing the `IcedPlugin::new(params)` trait
-/// signature. Keyed by `Arc::as_ptr(&params)` — that Arc is the same
-/// allocation the plugin constructor and the editor constructor both see,
-/// so the key is unique per instance regardless of how many Lucent-Relay
-/// instances share the process (was: single `OnceLock`, so every instance
-/// after the first read/wrote the first instance's handle).
+fn col(r: f32, g: f32, b: f32, a: f32) -> Color {
+    Color::rgba(
+        (r.clamp(0.0, 1.0) * 255.0) as u8,
+        (g.clamp(0.0, 1.0) * 255.0) as u8,
+        (b.clamp(0.0, 1.0) * 255.0) as u8,
+        (a.clamp(0.0, 1.0) * 255.0) as u8,
+    )
+}
+fn rgb(r: f32, g: f32, b: f32) -> Color {
+    col(r, g, b, 1.0)
+}
+
+// ─── Registry (same keyed-by-Arc-ptr pattern as Iced version) ──────────────
+
 static RELAY_HANDLES: OnceLock<Mutex<HashMap<usize, RelayHandle>>> = OnceLock::new();
 
 fn params_key(params: &Arc<LucentRelayParams>) -> usize {
@@ -33,227 +44,248 @@ pub fn set_relay_handle(key: usize, h: RelayHandle) {
 }
 
 pub fn remove_relay_handle(key: usize) {
-    if let Some(map) = RELAY_HANDLES.get() {
-        if let Ok(mut m) = map.lock() {
+    if let Some(map) = RELAY_HANDLES.get()
+        && let Ok(mut m) = map.lock() {
             m.remove(&key);
         }
-    }
 }
 
 fn take_relay_handle(key: usize) -> Option<RelayHandle> {
     RELAY_HANDLES.get()?.lock().ok()?.get(&key).cloned()
 }
 
-#[derive(Debug, Clone)]
-pub enum RelayMsg {
-    Tick,
-    NameChanged(String),
-    TargetSelected(String),
-}
+// ─── Telemetry snapshot (updated by Ticker) ────────────────────────────────
 
-pub struct RelayUi {
-    handle: RelayHandle,
-    name_buf: String,
+#[derive(Clone)]
+struct RelayTelemetry {
     lucent_list: Vec<String>,
-    selected_target: String,
     connected: bool,
-    /// Wall-clock ms of the last Tick where `connected` was true. Used to show
-    /// "ms since last seen" when disconnected — shm-hub only exposes a live/
-    /// dead bool (`consumer_exists`), not the underlying heartbeat timestamp,
-    /// so this is tracked client-side instead of adding a new shm-hub API.
     last_connected_ms: Option<u64>,
     now_ms: u64,
 }
 
-impl IcedPlugin<LucentRelayParams> for RelayUi {
-    type Message = RelayMsg;
+// ─── Ticker — polls relay_hub every ~500ms ─────────────────────────────────
 
-    fn new(params: Arc<LucentRelayParams>) -> Self {
-        let handle = take_relay_handle(params_key(&params)).unwrap_or_default();
-        let name_buf = handle.name();
-        let target = handle.target();
-        Self {
-            handle,
-            name_buf,
-            lucent_list: Vec::new(),
-            selected_target: target,
-            connected: false,
-            last_connected_ms: None,
-            now_ms: 0,
-        }
-    }
+struct Ticker {
+    handle: RelayHandle,
+    telemetry: Signal<RelayTelemetry>,
+    last_tick: RefCell<Instant>,
+    selected_target: Signal<String>,
+    target_options: Signal<Vec<String>>,
+    selected_index: Signal<usize>,
+}
 
-    fn subscription(&self) -> Subscription<Message<RelayMsg>> {
-        truce_iced::iced::event::listen_raw(|event, _status, _window| {
-            use truce_iced::iced::{Event, window::Event as WinEvent};
-            match event {
-                Event::Window(WinEvent::RedrawRequested(_)) => {
-                    Some(Message::Plugin(RelayMsg::Tick))
-                }
-                _ => None,
-            }
-        })
-    }
-
-    fn update(
-        &mut self,
-        message: Message<RelayMsg>,
-        _params: &ParamCache<LucentRelayParams>,
-        _ctx: &PluginContext<LucentRelayParams>,
-    ) -> truce_iced::iced::Task<Message<RelayMsg>> {
-        let Message::Plugin(msg) = message else { return truce_iced::iced::Task::none(); };
-
-        match msg {
-            RelayMsg::Tick => {
-                let now = shared_analysis::shm::now_ms();
-                self.now_ms = now;
-                self.lucent_list = relay_hub()
-                    .map(|hub| hub.read_consumers(now))
-                    .unwrap_or_default();
-                self.connected = relay_hub()
-                    .map(|hub| {
-                        let t = self.handle.target();
-                        if t.is_empty() {
-                            !hub.read_consumers(now).is_empty()
-                        } else {
-                            hub.consumer_exists(&t, now)
-                        }
-                    })
-                    .unwrap_or(false);
-                if self.connected {
-                    self.last_connected_ms = Some(now);
-                }
-                // Keep selected target if still valid, else clear.
-                let t = self.handle.target();
-                if !t.is_empty() && self.lucent_list.iter().any(|l| *l == t) {
-                    self.selected_target = t;
-                }
-            }
-            RelayMsg::NameChanged(name) => {
-                self.name_buf = name.clone();
-                if let Ok(mut g) = self.handle.0.lock() {
-                    g.name = name;
-                }
-            }
-            RelayMsg::TargetSelected(target) => {
-                self.selected_target = target.clone();
-                if let Ok(mut g) = self.handle.0.lock() {
-                    g.target = target;
-                }
-            }
-        }
-
-        truce_iced::iced::Task::none()
-    }
-
-    fn needs_redraw(&self) -> bool {
-        true // always repaint — SHM slot/heartbeat can change without params or UI input
-    }
-
-    fn view<'a>(
-        &'a self,
-        _params: &'a ParamCache<LucentRelayParams>,
-    ) -> Element<'a, Message<RelayMsg>> {
-        // ── HEADER ──────────────────────────────────────────────────────────
-        let header = container(
-            row![
-                header_brand("Lucent-Relay", VERSION),
-                Space::new().width(Length::Fill),
-            ]
-            .align_y(Alignment::Center)
-            .padding(8),
-        )
-        .width(Length::Fill)
-        .style(|_| container::Style {
-            background: Some(Color::from_rgb(0.08, 0.08, 0.10).into()),
-            border: Border {
-                color: Color::from_rgb(0.15, 0.15, 0.15),
-                width: 1.0,
-                ..Default::default()
-            },
-            ..Default::default()
-        });
-
-        // ── NAME INPUT ──────────────────────────────────────────────────────
-        let name_row = row![
-            text("Name").size(10).font(bold_font()).color(Color::from_rgb(0.55, 0.55, 0.55)),
-            Space::new().width(Length::Fixed(8.0)),
-            text_input("Relay name", &self.name_buf)
-                .on_input(|s| Message::Plugin(RelayMsg::NameChanged(s)))
-                .padding(4)
-                .size(11)
-                .width(Length::Fill),
-        ]
-        .align_y(Alignment::Center)
-        .padding([4.0, 12.0]);
-
-        // ── TARGET DROPDOWN ─────────────────────────────────────────────────
-        let target_label = text("Target Lucent")
-            .size(10)
-            .font(bold_font())
-            .color(Color::from_rgb(0.55, 0.55, 0.55));
-
-        let target_options: Vec<String> = {
-            let mut opts = vec![String::from("(broadcast)")];
-            opts.extend(self.lucent_list.clone());
-            opts
-        };
-        let current_target = if self.selected_target.is_empty() {
-            String::from("(broadcast)")
-        } else {
-            self.selected_target.clone()
-        };
-
-        let target_dropdown = pick_list(
-            target_options,
-            Some(current_target),
-            |selected| {
-                let val = if selected == "(broadcast)" {
-                    String::new()
-                } else {
-                    selected
-                };
-                Message::Plugin(RelayMsg::TargetSelected(val))
-            },
-        )
-        .padding(4)
-        .text_size(11);
-
-        let target_row = row![
-            target_label,
-            Space::new().width(Length::Fixed(8.0)),
-            target_dropdown,
-        ]
-        .align_y(Alignment::Center)
-        .padding([4.0, 12.0]);
-
-        // ── CONNECTION STATUS ──────────────────────────────────────────────
-        let (conn_color, conn_text) = if self.connected {
-            (Color::from_rgb(0.2, 0.9, 0.3), "● Connected".to_string())
-        } else {
-            match self.last_connected_ms {
-                Some(last) => {
-                    let elapsed = self.now_ms.saturating_sub(last);
-                    let ago = if elapsed < 1000 {
-                        format!("{elapsed} ms ago")
-                    } else {
-                        format!("{:.1} s ago", elapsed as f32 / 1000.0)
-                    };
-                    (Color::from_rgb(0.9, 0.2, 0.2), format!("● No Lucent (last seen {ago})"))
-                }
-                None => (Color::from_rgb(0.9, 0.2, 0.2), "● No Lucent".to_string()),
-            }
-        };
-
-        let conn_indicator = row![
-            text(conn_text).size(10).font(bold_font()).color(conn_color),
-            Space::new().width(Length::Fill),
-        ]
-        .padding([2.0, 12.0])
-        .align_y(Alignment::Center);
-
-        column![header, name_row, target_row, conn_indicator]
-            .spacing(4)
-            .into()
+impl Ticker {
+    fn new(
+        cx: &mut Context,
+        handle: RelayHandle,
+        telemetry: Signal<RelayTelemetry>,
+        selected_target: Signal<String>,
+        target_options: Signal<Vec<String>>,
+        selected_index: Signal<usize>,
+    ) -> Handle<'_, Self> {
+        Self { handle, telemetry, last_tick: RefCell::new(Instant::now()), selected_target, target_options, selected_index }
+            .build(cx, |_| {})
     }
 }
+
+const TICK_INTERVAL: Duration = Duration::from_millis(500);
+
+impl View for Ticker {
+    fn element(&self) -> Option<&'static str> {
+        Some("ticker")
+    }
+
+    fn draw(&self, cx: &mut DrawContext, _canvas: &vg::Canvas) {
+        let now = Instant::now();
+        let due = {
+            let mut last = self.last_tick.borrow_mut();
+            if now.duration_since(*last) >= TICK_INTERVAL {
+                *last = now;
+                true
+            } else {
+                false
+            }
+        };
+        if due {
+            let now_ms = shared_analysis::shm::now_ms();
+            let lucent_list = relay_hub()
+                .map(|hub| hub.read_consumers(now_ms))
+                .unwrap_or_default();
+            let connected = relay_hub()
+                .map(|hub| {
+                    let t = self.handle.target();
+                    if t.is_empty() {
+                        !hub.read_consumers(now_ms).is_empty()
+                    } else {
+                        hub.consumer_exists(&t, now_ms)
+                    }
+                })
+                .unwrap_or(false);
+
+            // Build options list: (broadcast) + discovered consumers
+            let mut opts = vec!["(broadcast)".to_string()];
+            opts.extend(lucent_list.clone());
+            self.target_options.set(opts);
+
+            // Map selected_target to index
+            let tgt = self.selected_target.get();
+            let idx = if tgt.is_empty() {
+                0 // (broadcast)
+            } else {
+                lucent_list.iter().position(|l| *l == tgt).map(|i| i + 1).unwrap_or(0)
+            };
+            // ponytail: only set if different, else ComboBox fires spurious on_select
+            if self.selected_index.get() != idx {
+                self.selected_index.set(idx);
+            }
+
+            // Keep selected target if still valid, else clear.
+            let target = self.handle.target();
+            if !target.is_empty() && !lucent_list.contains(&target) {
+                self.selected_target.set(String::new());
+            }
+
+            let mut t = self.telemetry.get();
+            t.lucent_list = lucent_list;
+            t.now_ms = now_ms;
+            t.connected = connected;
+            if connected {
+                t.last_connected_ms = Some(now_ms);
+            }
+            self.telemetry.update(|tt| *tt = t);
+        }
+        cx.needs_redraw();
+    }
+}
+
+// ─── UI ────────────────────────────────────────────────────────────────────
+
+pub fn build(cx: &mut Context, params: Arc<LucentRelayParams>) {
+    let handle = take_relay_handle(params_key(&params)).unwrap_or_default();
+    let initial_name = handle.name();
+    let initial_target = handle.target();
+
+    let name_signal = Signal::new(initial_name);
+    let selected_target = Signal::new(initial_target.clone());
+    let telemetry = Signal::new(RelayTelemetry {
+        lucent_list: Vec::new(),
+        connected: false,
+        last_connected_ms: None,
+        now_ms: 0,
+    });
+    // ComboBox needs a Signal, not Memo — Ticker updates this each cycle.
+    let target_options = Signal::new(vec!["(broadcast)".to_string()]);
+    let selected_index = Signal::new(
+        if initial_target.is_empty() { 0usize } else { 0 }
+    );
+
+    // Ticker: polls relay_hub every ~500ms, updates telemetry + options + selected_index
+    Ticker::new(cx, handle.clone(), telemetry, selected_target, target_options, selected_index)
+        .width(Pixels(1.0))
+        .height(Pixels(1.0));
+
+    VStack::new(cx, move |cx| {
+        // ── HEADER ──────────────────────────────────────────────────────
+        HStack::new(cx, |cx| {
+            Label::new(cx, "LX").font_size(16.0).color(rgb(1.0, 0.45, 0.1));
+            Label::new(cx, "AUDIOLABS").font_size(16.0).color(Color::white());
+            Element::new(cx).width(Stretch(1.0));
+            Label::new(cx, format!("Lucent-Relay {VERSION}")).font_size(10.0).color(col(0.55, 0.55, 0.55, 1.0));
+        })
+        .width(Stretch(1.0))
+        .height(Pixels(36.0))
+        .padding(Pixels(8.0))
+        .alignment(Alignment::Center)
+        .background_color(rgb(0.08, 0.08, 0.10));
+
+        // ── NAME INPUT ──────────────────────────────────────────────────
+        let handle_for_name1 = handle.clone();
+        HStack::new(cx, move |cx| {
+            Label::new(cx, "Name").font_size(11.0).color(col(0.55, 0.55, 0.55, 1.0));
+            let handle_for_name = handle_for_name1;
+            Textbox::new(cx, name_signal)
+                .on_edit(move |_cx, text| {
+                    name_signal.set(text.clone());
+                    if let Ok(mut g) = handle_for_name.0.lock() {
+                        g.name = text;
+                    }
+                })
+                .width(Stretch(1.0))
+                .height(Pixels(20.0))
+                .font_size(11.0);
+        })
+        .width(Stretch(1.0))
+        .height(Pixels(32.0))
+        .padding(Pixels(8.0))
+        .alignment(Alignment::Center)
+        .horizontal_gap(Pixels(8.0));
+
+        // ── TARGET DROPDOWN (ComboBox) ──────────────────────────────────
+        let handle_for_target = handle.clone();
+        HStack::new(cx, move |cx| {
+            Label::new(cx, "Target").font_size(11.0).color(col(0.55, 0.55, 0.55, 1.0));
+
+            let handle_for_target = handle_for_target;
+            let target_opts = target_options;
+            ComboBox::new(cx, target_opts, selected_index)
+                .on_select(move |_cx, index| {
+                    let opts = target_opts.get();
+                    let val = if index == 0 || index >= opts.len() {
+                        String::new()
+                    } else {
+                        opts[index].clone()
+                    };
+                    selected_target.set(val.clone());
+                    if let Ok(mut g) = handle_for_target.0.lock() {
+                        g.target = val;
+                    }
+                })
+                .width(Stretch(1.0))
+                .height(Pixels(20.0))
+                .font_size(11.0);
+        })
+        .width(Stretch(1.0))
+        .height(Pixels(32.0))
+        .padding(Pixels(8.0))
+        .alignment(Alignment::Center)
+        .horizontal_gap(Pixels(8.0));
+
+        // ── CONNECTION STATUS ───────────────────────────────────────────
+        HStack::new(cx, move |cx| {
+            Label::new(cx, Memo::new(move |_| {
+                let t = telemetry.get();
+                if t.connected {
+                    String::from("● Connected")
+                } else {
+                    match t.last_connected_ms {
+                        Some(last) => {
+                            let elapsed = t.now_ms.saturating_sub(last);
+                            if elapsed < 1000 {
+                                format!("● No Lucent ({elapsed} ms ago)")
+                            } else {
+                                format!("● No Lucent (last seen {:.1} s ago)", elapsed as f32 / 1000.0)
+                            }
+                        }
+                        None => String::from("● No Lucent"),
+                    }
+                }
+            }))
+            .font_size(11.0)
+            .color(Memo::new(move |_| {
+                if telemetry.get().connected {
+                    rgb(0.2, 0.9, 0.3)
+                } else {
+                    rgb(0.9, 0.2, 0.2)
+                }
+            }));
+        })
+        .width(Stretch(1.0))
+        .padding(Pixels(8.0));
+    })
+    .width(Pixels(260.0))
+    .height(Pixels(160.0))
+    .vertical_gap(Pixels(4.0))
+    .background_color(rgb(0.09, 0.09, 0.09));
+}
+

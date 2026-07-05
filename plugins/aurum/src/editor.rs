@@ -1,384 +1,203 @@
-// Aurum editor — Meridian/Equilibrium layout pattern (truce port).
-// Layout: Left sidebar (Presets/SNAP/Vault) | Main (tabs + horizontal strips) | Right bar (Goniometer/Output) | Footer (AT/Stereo/Gain/Reset)
-
-use truce_iced::iced::widget::{button, canvas, column, container, row, Space, Text};
-use truce_iced::iced::{Alignment, Border, Color, Element, Length, Subscription};
-use truce_iced::{IcedPlugin, Message, ParamCache};
-use truce_core::editor::PluginContext;
+//! Vizia port of Aurum's Iced editor — 60+ params, 3 tabs, goniometer, meters.
+use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-
+use std::time::{Duration, Instant};
+use vizia::prelude::*;
+use vizia::vg;
 use shared_analysis::SharedState;
-use shared_ui::{
-    bold_font, header_brand, toggle_button, knob_gesture, knob_gesture_bipolar,
-    output_tools_strip, output_level_block, at_block, vault_setup_box,
-    GoniometerCanvas,
-    Gesture,
-};
-
-use crate::{AurumParams, AurumParamsParamId};
+use truce_vizia::ParamLens;
+use shared_ui::{GoniometerView, StereoMeterView, Gesture, KnobView};
+use crate::{AurumParams, AurumParamsParamId as P};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const AMBER: Color = Color { r: 1.0, g: 0.55, b: 0.1, a: 1.0 };
+fn rgb(r: f32, g: f32, b: f32) -> Color { Color::rgba((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8, 255) }
+fn col(r: f32, g: f32, b: f32, a: f32) -> Color { Color::rgba((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8, (a * 255.0) as u8) }
 
-#[derive(Debug, Clone)]
-pub enum AurumMsg {
-    Tick, SelectTab(usize), ResetPeak, ResetAll,
-    SideToggled, MonoToggled, DeltaToggled, BypassToggled,
-    AtToggled, AtAmountGesture(Gesture), OutputGainGesture(Gesture),
-    StereoWidthGesture(Gesture), MonoFloorGesture(Gesture),
-    ClipCeilGesture(Gesture), ClipSoftGesture(Gesture), ClipMsToggled,
-    EqMLoShG(Gesture), EqMLoMiG(Gesture), EqMHiMiG(Gesture), EqMHiShG(Gesture),
-    EqSLoShG(Gesture), EqSLoMiG(Gesture), EqSHiMiG(Gesture), EqSHiShG(Gesture),
-    CompSplitG(Gesture), CompLinkToggled, CompThrLoG(Gesture), CompThrHiG(Gesture),
-    CompRatioG(Gesture), CompAtkG(Gesture), CompRelG(Gesture), CompMixG(Gesture),
-    SweetHpfG(Gesture), SweetLpfG(Gesture), SweetLoG(Gesture), SweetHiG(Gesture),
-    SatMsToggled, SatDrvStG(Gesture), SatDrvMiG(Gesture), SatDrvSiG(Gesture),
-    SatMixG(Gesture), SatHarmCycled,
-    MbXoverG(Gesture), MbThrLoG(Gesture), MbThrHiG(Gesture), MbThrSiG(Gesture),
-    MbGainLoG(Gesture), MbGainHiG(Gesture), MbGainSiG(Gesture),
-    MbAtkLoG(Gesture), MbAtkHiG(Gesture), MbAtkSiG(Gesture),
-    MbRelLoG(Gesture), MbRelHiG(Gesture), MbRelSiG(Gesture),
-    MbLinkToggled, MbGainGG(Gesture), MbThrOffG(Gesture), MbModeToggled,
-    LimCeilG(Gesture), LimRelG(Gesture),
-    SnapPressed,
-    SetupToggled, VaultPathChanged(String), SaveVaultPath,
-}
+#[derive(Clone)] struct Tel { peak_l: f32, peak_r: f32, peak_hl: f32, peak_hr: f32, peak_h: f32, phase_c: f32, bal: f32, in_peak: f32, gr: f32 }
 
-pub struct AurumEditor {
-    params: Arc<AurumParams>,
-    shared_state: Arc<SharedState>,
-    selected_tab: usize,
-    output_peak: f32, peak_hold: f32, peak_l: f32, peak_r: f32,
-    peak_hold_l: f32, peak_hold_r: f32, phase_correlation: f32, balance: f32,
-    vault_path: Option<String>, show_setup: bool, vault_path_input: String,
-    snap_blink: u32,
-}
-
-impl AurumEditor {
-    fn gesture(&self, id: AurumParamsParamId, g: Gesture, ctx: &PluginContext<AurumParams>) {
-        match g { Gesture::Start => ctx.begin_edit(id), Gesture::Change(v) => { ctx.set_param(id, v as f64); } Gesture::End => ctx.end_edit(id) }
-    }
-
-    fn strip_label(text: &str) -> Element<'_, Message<AurumMsg>> {
-        Text::new(text).size(10).font(bold_font()).color(Color::from_rgb(1.0, 0.55, 0.15)).into()
-    }
-
-    fn knob<'a>(label: &'a str, val: f32, min: f32, max: f32, def: f32, msg: impl Fn(Gesture) -> AurumMsg + 'a) -> Element<'a, Message<AurumMsg>> {
-        let rng = max - min;
-        knob_gesture(label, val, min, max, def, move |g| {
-            let ng = match g { Gesture::Change(v) => Gesture::Change(if rng > 0.0 { (v - min) / rng } else { 0.0 }), other => other };
-            Message::Plugin(msg(ng))
-        })
-    }
-
-    fn tab_btn<'a>(label: &'a str, idx: usize, selected: usize) -> Element<'a, Message<AurumMsg>> {
-        let active = idx == selected;
-        button(Text::new(label).size(12).font(bold_font()))
-            .on_press(Message::Plugin(AurumMsg::SelectTab(idx))).padding([6, 16])
-            .style(move |_t, _s| {
-                let bg = if active { Color::from_rgb(0.25, 0.15, 0.05) } else { Color::from_rgb(0.12, 0.12, 0.12) };
-                button::Style { background: Some(bg.into()), text_color: if active { AMBER } else { Color::from_rgb(0.6, 0.6, 0.6) },
-                    border: Border { color: if active { AMBER } else { Color::from_rgb(0.2, 0.2, 0.2) }, width: 2.0, radius: 3.0.into() }, ..Default::default() }
-            }).into()
-    }
-}
-
-impl IcedPlugin<AurumParams> for AurumEditor {
-    type Message = AurumMsg;
-
-    fn new(params: Arc<AurumParams>) -> Self {
-        let shared = params.shared.clone();
-        let cfg = shared_analysis::load_config("Aurum");
-        #[cfg(test)]
-        let selected_tab = params.test_initial_tab.load(Ordering::Relaxed);
-        #[cfg(not(test))]
-        let selected_tab = 0;
-        Self { params, shared_state: shared, selected_tab,
-            output_peak: -90.0, peak_hold: -90.0, peak_l: -90.0, peak_r: -90.0,
-            peak_hold_l: -90.0, peak_hold_r: -90.0, phase_correlation: 1.0, balance: 0.0,
-            vault_path: cfg.vault_path.clone(), show_setup: false,
-            vault_path_input: cfg.vault_path.unwrap_or_default(),
-            snap_blink: 0 }
-    }
-
-    fn subscription(&self) -> Subscription<Message<AurumMsg>> {
-        truce_iced::iced::event::listen_raw(|event, _status, _window| {
-            use truce_iced::iced::{Event, window::Event as WinEvent};
-            match event { Event::Window(WinEvent::RedrawRequested(_)) => Some(Message::Plugin(AurumMsg::Tick)), _ => None }
-        })
-    }
-
-    fn needs_redraw(&self) -> bool { true }
-
-    fn update(&mut self, message: Message<AurumMsg>, _p: &ParamCache<AurumParams>, ctx: &PluginContext<AurumParams>) -> truce_iced::iced::Task<Message<AurumMsg>> {
-        let Message::Plugin(msg) = message else { return truce_iced::iced::Task::none(); };
-        let p = &self.params;
-        let toggle = |id: AurumParamsParamId, v: bool| { ctx.begin_edit(id); ctx.set_param(id, if v { 1.0 } else { 0.0 }); ctx.end_edit(id); };
-        match msg {
-            AurumMsg::Tick => {
-                self.output_peak = self.shared_state.output_peak.load(Ordering::Relaxed);
-                self.peak_hold = self.shared_state.peak_hold.load(Ordering::Relaxed);
-                self.peak_l = self.shared_state.output_peak_l.load(Ordering::Relaxed);
-                self.peak_r = self.shared_state.output_peak_r.load(Ordering::Relaxed);
-                self.peak_hold_l = self.shared_state.peak_hold_l.load(Ordering::Relaxed);
-                self.peak_hold_r = self.shared_state.peak_hold_r.load(Ordering::Relaxed);
-                self.phase_correlation = self.shared_state.phase_correlation.load(Ordering::Relaxed);
-                self.balance = self.shared_state.balance.load(Ordering::Relaxed);
-                if self.snap_blink > 0 { self.snap_blink -= 1; }
-            }
-            AurumMsg::SelectTab(t) => self.selected_tab = t,
-            AurumMsg::ResetPeak => { self.shared_state.reset_peak.store(true, Ordering::Relaxed); }
-            AurumMsg::ResetAll => {
-                self.shared_state.reset_peak.store(true, Ordering::Relaxed);
-                ctx.begin_edit(AurumParamsParamId::ClipCeiling); ctx.set_param(AurumParamsParamId::ClipCeiling, 0.8167); ctx.end_edit(AurumParamsParamId::ClipCeiling);
-                ctx.begin_edit(AurumParamsParamId::OutputGain); ctx.set_param(AurumParamsParamId::OutputGain, 0.5); ctx.end_edit(AurumParamsParamId::OutputGain);
-                ctx.begin_edit(AurumParamsParamId::StereoWidth); ctx.set_param(AurumParamsParamId::StereoWidth, 0.5); ctx.end_edit(AurumParamsParamId::StereoWidth);
-            }
-            AurumMsg::SideToggled => toggle(AurumParamsParamId::SideActive, !p.side_active.value()),
-            AurumMsg::MonoToggled => toggle(AurumParamsParamId::MonoActive, !p.mono_active.value()),
-            AurumMsg::DeltaToggled => toggle(AurumParamsParamId::DeltaActive, !p.delta_active.value()),
-            AurumMsg::BypassToggled => toggle(AurumParamsParamId::BypassActive, !p.bypass_active.value()),
-            AurumMsg::AtToggled => toggle(AurumParamsParamId::AtActive, !p.at_active.value()),
-            AurumMsg::AtAmountGesture(g) => self.gesture(AurumParamsParamId::AtAmount, g, ctx),
-            AurumMsg::OutputGainGesture(g) => self.gesture(AurumParamsParamId::OutputGain, g, ctx),
-            AurumMsg::StereoWidthGesture(g) => self.gesture(AurumParamsParamId::StereoWidth, g, ctx),
-            AurumMsg::MonoFloorGesture(g) => self.gesture(AurumParamsParamId::MonoFloor, g, ctx),
-            AurumMsg::ClipCeilGesture(g) => self.gesture(AurumParamsParamId::ClipCeiling, g, ctx),
-            AurumMsg::ClipSoftGesture(g) => self.gesture(AurumParamsParamId::ClipSoftness, g, ctx),
-            AurumMsg::ClipMsToggled => toggle(AurumParamsParamId::ClipMsMode, !p.clip_ms_mode.value()),
-            AurumMsg::EqMLoShG(g) => self.gesture(AurumParamsParamId::EqMLoShelf, g, ctx),
-            AurumMsg::EqMLoMiG(g) => self.gesture(AurumParamsParamId::EqMLoMid, g, ctx),
-            AurumMsg::EqMHiMiG(g) => self.gesture(AurumParamsParamId::EqMHiMid, g, ctx),
-            AurumMsg::EqMHiShG(g) => self.gesture(AurumParamsParamId::EqMHiShelf, g, ctx),
-            AurumMsg::EqSLoShG(g) => self.gesture(AurumParamsParamId::EqSLoShelf, g, ctx),
-            AurumMsg::EqSLoMiG(g) => self.gesture(AurumParamsParamId::EqSLoMid, g, ctx),
-            AurumMsg::EqSHiMiG(g) => self.gesture(AurumParamsParamId::EqSHiMid, g, ctx),
-            AurumMsg::EqSHiShG(g) => self.gesture(AurumParamsParamId::EqSHiShelf, g, ctx),
-            AurumMsg::CompSplitG(g) => self.gesture(AurumParamsParamId::CompSplit, g, ctx),
-            AurumMsg::CompLinkToggled => toggle(AurumParamsParamId::CompLink, !p.comp_link.value()),
-            AurumMsg::CompThrLoG(g) => self.gesture(AurumParamsParamId::CompThreshLo, g, ctx),
-            AurumMsg::CompThrHiG(g) => self.gesture(AurumParamsParamId::CompThreshHi, g, ctx),
-            AurumMsg::CompRatioG(g) => self.gesture(AurumParamsParamId::CompRatio, g, ctx),
-            AurumMsg::CompAtkG(g) => self.gesture(AurumParamsParamId::CompAttack, g, ctx),
-            AurumMsg::CompRelG(g) => self.gesture(AurumParamsParamId::CompRelease, g, ctx),
-            AurumMsg::CompMixG(g) => self.gesture(AurumParamsParamId::CompMix, g, ctx),
-            AurumMsg::SweetHpfG(g) => self.gesture(AurumParamsParamId::SweetHpf, g, ctx),
-            AurumMsg::SweetLpfG(g) => self.gesture(AurumParamsParamId::SweetLpf, g, ctx),
-            AurumMsg::SweetLoG(g) => self.gesture(AurumParamsParamId::SweetLoShelf, g, ctx),
-            AurumMsg::SweetHiG(g) => self.gesture(AurumParamsParamId::SweetHiShelf, g, ctx),
-            AurumMsg::SatMsToggled => toggle(AurumParamsParamId::SatMsMode, !p.sat_ms_mode.value()),
-            AurumMsg::SatDrvStG(g) => self.gesture(AurumParamsParamId::SatDriveStereo, g, ctx),
-            AurumMsg::SatDrvMiG(g) => self.gesture(AurumParamsParamId::SatDriveMid, g, ctx),
-            AurumMsg::SatDrvSiG(g) => self.gesture(AurumParamsParamId::SatDriveSide, g, ctx),
-            AurumMsg::SatMixG(g) => self.gesture(AurumParamsParamId::SatMix, g, ctx),
-            AurumMsg::SatHarmCycled => {
-                let n = (p.sat_harmonics.value_i32() + 1) % 3;
-                ctx.begin_edit(AurumParamsParamId::SatHarmonics); ctx.set_param(AurumParamsParamId::SatHarmonics, n as f64 / 2.0); ctx.end_edit(AurumParamsParamId::SatHarmonics);
-            }
-            AurumMsg::MbXoverG(g) => self.gesture(AurumParamsParamId::MbCrossover, g, ctx),
-            AurumMsg::MbThrLoG(g) => self.gesture(AurumParamsParamId::MbThreshMidLo, g, ctx),
-            AurumMsg::MbThrHiG(g) => self.gesture(AurumParamsParamId::MbThreshMidHi, g, ctx),
-            AurumMsg::MbThrSiG(g) => self.gesture(AurumParamsParamId::MbThreshSide, g, ctx),
-            AurumMsg::MbGainLoG(g) => self.gesture(AurumParamsParamId::MbGainMidLo, g, ctx),
-            AurumMsg::MbGainHiG(g) => self.gesture(AurumParamsParamId::MbGainMidHi, g, ctx),
-            AurumMsg::MbGainSiG(g) => self.gesture(AurumParamsParamId::MbGainSide, g, ctx),
-            AurumMsg::MbAtkLoG(g) => self.gesture(AurumParamsParamId::MbAttackMidLo, g, ctx),
-            AurumMsg::MbAtkHiG(g) => self.gesture(AurumParamsParamId::MbAttackMidHi, g, ctx),
-            AurumMsg::MbAtkSiG(g) => self.gesture(AurumParamsParamId::MbAttackSide, g, ctx),
-            AurumMsg::MbRelLoG(g) => self.gesture(AurumParamsParamId::MbReleaseMidLo, g, ctx),
-            AurumMsg::MbRelHiG(g) => self.gesture(AurumParamsParamId::MbReleaseMidHi, g, ctx),
-            AurumMsg::MbRelSiG(g) => self.gesture(AurumParamsParamId::MbReleaseSide, g, ctx),
-            AurumMsg::MbLinkToggled => toggle(AurumParamsParamId::MbFaderLink, !p.mb_fader_link.value()),
-            AurumMsg::MbGainGG(g) => self.gesture(AurumParamsParamId::MbGlobalGain, g, ctx),
-            AurumMsg::MbThrOffG(g) => self.gesture(AurumParamsParamId::MbGlobalThresh, g, ctx),
-            AurumMsg::MbModeToggled => toggle(AurumParamsParamId::MbMode, !p.mb_mode.value()),
-            AurumMsg::LimCeilG(g) => self.gesture(AurumParamsParamId::LimCeiling, g, ctx),
-            AurumMsg::LimRelG(g) => self.gesture(AurumParamsParamId::LimRelease, g, ctx),
-            AurumMsg::SnapPressed => { self.snap_blink = 72; self.shared_state.snap_active.store(true, Ordering::Relaxed); }
-            AurumMsg::SetupToggled => { self.show_setup = !self.show_setup; if self.show_setup { self.vault_path_input = self.vault_path.clone().unwrap_or_default(); } }
-            AurumMsg::VaultPathChanged(p) => self.vault_path_input = p,
-            AurumMsg::SaveVaultPath => {
-                let np = if self.vault_path_input.trim().is_empty() { None } else { Some(self.vault_path_input.trim().to_string()) };
-                self.vault_path = np;
-                let mut cfg = shared_analysis::load_config("Aurum"); cfg.vault_path = self.vault_path.clone();
-                let _ = shared_analysis::save_config("Aurum", &cfg); self.show_setup = false;
-            }
+struct Ticker { shared: Arc<SharedState>, tel: Signal<Tel>, snap: Signal<u32>, lt: RefCell<Instant> }
+impl Ticker { fn new(cx: &mut Context, s: Arc<SharedState>, tel: Signal<Tel>, snap: Signal<u32>) -> Handle<'_, Self> { Self { shared: s, tel, snap, lt: RefCell::new(Instant::now()) }.build(cx, |_| {}) } }
+impl View for Ticker {
+    fn element(&self) -> Option<&'static str> { Some("ticker") }
+    fn draw(&self, cx: &mut DrawContext, _: &vg::Canvas) {
+        let due = { let mut l = self.lt.borrow_mut(); if Instant::now().duration_since(*l) >= Duration::from_millis(33) { *l = Instant::now(); true } else { false } };
+        if due {
+            let mut s = self.snap.get(); if s > 0 { s -= 1; self.snap.set(s); }
+            self.tel.update(|t| *t = Tel { peak_l: self.shared.output_peak_l.load(Ordering::Relaxed), peak_r: self.shared.output_peak_r.load(Ordering::Relaxed), peak_hl: self.shared.peak_hold_l.load(Ordering::Relaxed), peak_hr: self.shared.peak_hold_r.load(Ordering::Relaxed), peak_h: self.shared.peak_hold.load(Ordering::Relaxed), phase_c: self.shared.phase_correlation.load(Ordering::Relaxed), bal: self.shared.balance.load(Ordering::Relaxed), in_peak: self.shared.input_peak.load(Ordering::Relaxed), gr: self.shared.gain_reduction.load(Ordering::Relaxed) });
         }
-        truce_iced::iced::Task::none()
+        cx.needs_redraw();
     }
+}
 
-    fn view<'a>(&'a self, _params: &'a ParamCache<AurumParams>) -> Element<'a, Message<AurumMsg>> {
-        let p = &self.params;
+fn kn<'a>(cx: &'a mut Context, lbl: &'static str, norm: f32, def: f32, min: f32, max: f32, bip: bool, on: impl Fn(&mut EventContext, Gesture) + 'static) -> Handle<'a, impl View> { VStack::new(cx, move |cx| { Label::new(cx, lbl).font_size(8.0).color(col(0.55, 0.55, 0.55, 1.0)); KnobView::new(cx, norm, def, min, max, bip, on).width(Pixels(30.0)).height(Pixels(30.0)); }).width(Auto).vertical_gap(Pixels(2.0)).alignment(Alignment::Center) }
+fn tog<'a>(cx: &'a mut Context, lbl: &'static str, act: bool, on: impl Fn(&mut EventContext) + 'static + Send + Sync) -> Handle<'a, impl View> { let s = Signal::new(act); Button::new(cx, move |cx| Label::new(cx, lbl).font_size(9.0)).on_press(move |cx| { s.update(|v| *v = !*v); on(cx); }).width(Pixels(52.0)).height(Pixels(22.0)).background_color(Memo::new(move |_| if s.get() { col(0.25, 0.12, 0.05, 1.0) } else { col(0.14, 0.14, 0.14, 1.0) })) }
+fn cyc<'a>(cx: &'a mut Context, lbls: &'static [&'static str], cur: usize, on: impl Fn(&mut EventContext) + 'static + Send + Sync) -> Handle<'a, impl View> { Button::new(cx, move |cx| Label::new(cx, lbls[cur % lbls.len()]).font_size(9.0)).on_press(on).width(Pixels(64.0)).height(Pixels(22.0)).background_color(col(0.2, 0.12, 0.05, 1.0)) }
+fn strip(cx: &mut Context, t: &'static str) { Label::new(cx, t).font_size(10.0).color(Color::rgb(255, 140, 26)); }
+fn norm(v: f32, min: f32, max: f32) -> f32 { ((v - min) / (max - min)).clamp(0.0, 1.0) }
+fn bip(v: f32, min: f32, max: f32) -> f32 { let m = (min + max) * 0.5; ((v - m) / (max - m) * 0.5 + 0.5).clamp(0.0, 1.0) }
+fn set(l: &ParamLens<AurumParams>, id: P, n: f32) { l.automate(id, n as f64); }
+fn tgl(l: &ParamLens<AurumParams>, id: P) { set(l, id, if l.get_plain(id) != 0.0 { 0.0 } else { 1.0 }); }
 
+pub fn build(cx: &mut Context, lens: ParamLens<AurumParams>, params: Arc<AurumParams>, shared: Arc<SharedState>) {
+    let cfg = shared_analysis::load_config("Aurum"); let vp = Signal::new(cfg.vault_path.clone()); let show = Signal::new(false); let vpi = Signal::new(cfg.vault_path.unwrap_or_default()); let tab = Signal::new(0usize);
+    let tel = Signal::new(Tel { peak_l: -90.0, peak_r: -90.0, peak_hl: -90.0, peak_hr: -90.0, peak_h: -90.0, phase_c: 1.0, bal: 0.0, in_peak: -90.0, gr: 0.0 }); let snap_sig = Signal::new(0u32);
+    Ticker::new(cx, shared.clone(), tel, snap_sig).width(Pixels(1.0)).height(Pixels(1.0));
+    let lh = lens.clone(); let ph = params.clone();
+    let _lb = lens.clone(); let _pb = params.clone(); let sb = shared.clone();
+    let lr = lens.clone(); let pr = params.clone(); let sr = shared.clone();
+    let lf = lens.clone(); let pf = params.clone(); let sf = shared.clone();
+    let lt = lens.clone(); let pt = params.clone();
+    VStack::new(cx, move |cx| {
         // HEADER
-        let header = container(row![
-            container(header_brand("Aurum", VERSION)).width(Length::Shrink),
-            Space::new().width(Length::Fill),
-            row![Self::tab_btn("SHAPE", 0, self.selected_tab), Self::tab_btn("COLOR", 1, self.selected_tab), Self::tab_btn("LIMIT", 2, self.selected_tab)].spacing(4),
-            Space::new().width(Length::Fill),
-            row![
-                toggle_button("SIDE", p.side_active.value(), Message::Plugin(AurumMsg::SideToggled)),
-                toggle_button("MONO", p.mono_active.value(), Message::Plugin(AurumMsg::MonoToggled)),
-                toggle_button("Δ", p.delta_active.value(), Message::Plugin(AurumMsg::DeltaToggled)),
-                toggle_button("BYPASS", p.bypass_active.value(), Message::Plugin(AurumMsg::BypassToggled)),
-            ].spacing(6),
-        ].align_y(Alignment::Center).spacing(8).padding(8))
-        .width(Length::Fill).height(Length::Fixed(50.0))
-        .style(|_t| container::Style { background: Some(Color::from_rgb(0.08, 0.08, 0.08).into()), border: Border { color: Color::from_rgb(0.15, 0.15, 0.15), width: 1.0, ..Default::default() }, ..Default::default() });
-
-        // LEFT SIDEBAR
-        let snap_label = if self.snap_blink > 0 { "ANALYZING..." } else { "SNAP" };
-        let sidebar = container(column![
-            Text::new("LX AUDIOLABS").font(bold_font()).size(14).color(Color::WHITE),
-            button(Text::new(snap_label).font(bold_font()).size(12).width(Length::Fill).align_x(Alignment::Center))
-                .on_press(Message::Plugin(AurumMsg::SnapPressed)).width(Length::Fill).padding([7, 1])
-                .style(move |_t, _s| {
-                    let bg = if self.snap_blink > 0 { Color::from_rgb(0.55, 0.38, 0.05) } else { Color::from_rgb(0.18, 0.18, 0.18) };
-                    button::Style { background: Some(bg.into()), text_color: if self.snap_blink > 0 { Color::from_rgb(1.0, 0.85, 0.3) } else { AMBER },
-                        border: Border { color: Color::from_rgb(0.3, 0.3, 0.3), width: 1.0, radius: 3.0.into() }, ..Default::default() }
-                }),
-            button(Text::new("VAULT SETUP").font(bold_font()).size(12).width(Length::Fill).align_x(Alignment::Center))
-                .on_press(Message::Plugin(AurumMsg::SetupToggled)).width(Length::Fill).padding([7, 1])
-                .style(|_t, s| {
-                    let bg = if s == button::Status::Hovered { Color::from_rgb(0.25, 0.25, 0.25) } else { Color::from_rgb(0.18, 0.18, 0.18) };
-                    button::Style { background: Some(bg.into()), text_color: Color::WHITE, border: Border { color: Color::from_rgb(0.3, 0.3, 0.3), width: 1.0, radius: 3.0.into() }, ..Default::default() }
-                }),
-        ].spacing(10))
-        .width(Length::Fixed(180.0)).height(Length::Fill).padding(10)
-        .style(|_t| container::Style { background: Some(Color::from_rgb(0.09, 0.09, 0.09).into()), border: Border { color: Color::from_rgb(0.15, 0.15, 0.15), width: 1.0, ..Default::default() }, ..Default::default() });
-
-        // MAIN
-        let main = if self.show_setup {
-            container(vault_setup_box("Aurum", &self.vault_path_input, |s| Message::Plugin(AurumMsg::VaultPathChanged(s)), Message::Plugin(AurumMsg::SaveVaultPath), Message::Plugin(AurumMsg::SetupToggled)))
-                .width(Length::Fill).height(Length::Fill).center_x(Length::Fill).center_y(Length::Fill)
-        } else {
-              container(match self.selected_tab { 0 => self.shape_tab(), 1 => self.color_tab(), _ => self.limit_tab() }).width(Length::Fill).height(Length::Fill)
-        };
-
-        // RIGHT BAR: OUT GAIN → Peak Meters (fill) → Goniometer
-        let scope_pos = self.shared_state.scope_write_pos.load(Ordering::Acquire);
-        let right_bar = container(column![
-            knob_gesture_bipolar("OUT GAIN", p.output_gain.raw_target() as f32, -12.0, 12.0, 0.0, |g| Message::Plugin(AurumMsg::OutputGainGesture(g))),
-            output_level_block(self.peak_l, self.peak_r, self.peak_hold_l, self.peak_hold_r, self.peak_hold, Message::Plugin(AurumMsg::ResetPeak), self.balance, Length::Fill),
-            Space::new().height(Length::Fixed(4.0)),
-            canvas(GoniometerCanvas { samples: self.shared_state.scope_samples.clone(), write_pos: scope_pos, correlation: self.phase_correlation })
-                .width(Length::Fill).height(Length::Fixed(180.0)),
-        ].spacing(4).padding(6).align_x(Alignment::Center))
-        .width(Length::Fixed(200.0)).height(Length::Fill)
-        .style(|_t| container::Style { background: Some(Color::from_rgb(0.07, 0.07, 0.07).into()), border: Border { color: Color::from_rgb(0.15, 0.15, 0.15), width: 1.0, ..Default::default() }, ..Default::default() });
-
-        // FOOTER: Space | AT center | Space | STEREO/ROUTING + RESET right
-        let footer = container(row![
-            Space::new().width(Length::Fill),
-            at_block(p.at_active.value(), p.at_amount.raw_target() as f32, Message::Plugin(AurumMsg::AtToggled), |v| Message::Plugin(AurumMsg::AtAmountGesture(Gesture::Change(v)))),
-            Space::new().width(Length::Fill),
-            column![
-                Text::new("STEREO/ROUTING").size(10).font(bold_font()).color(Color::from_rgb(0.6, 0.6, 0.6)),
-                row![
-                    knob_gesture_bipolar("WIDTH", p.stereo_width.raw_target() as f32, 0.0, 2.0, 1.0, |g| Message::Plugin(AurumMsg::StereoWidthGesture(g))),
-                    Self::knob("M.FLOOR", p.mono_floor.raw_target() as f32, 0.0, 300.0, 0.0, AurumMsg::MonoFloorGesture),
-                    output_tools_strip(Message::Plugin(AurumMsg::ResetAll)),
-                ].spacing(8).align_y(Alignment::Center),
-            ].spacing(2).align_x(Alignment::Center),
-        ].spacing(8).align_y(Alignment::Center).padding([4, 12]))
-        .width(Length::Fill).height(Length::Fixed(70.0))
-        .style(|_t| container::Style { background: Some(Color::from_rgb(0.1, 0.1, 0.1).into()), border: Border { color: Color::from_rgb(0.15, 0.15, 0.15), width: 1.0, ..Default::default() }, ..Default::default() });
-
-        let body = container(row![sidebar, main, right_bar].spacing(0))
-            .width(Length::Fill).height(Length::Fill)
-            .style(|_t| container::Style { background: Some(Color::from_rgb(0.09, 0.09, 0.09).into()), ..Default::default() });
-
-        column![header, body, footer].into()
-    }
+        HStack::new(cx, move |cx| {
+            HStack::new(cx, |cx| { Label::new(cx, "LX").font_size(18.0).color(rgb(1.0, 0.45, 0.1)); Label::new(cx, "AUDIOLABS").font_size(18.0).color(Color::white()); Label::new(cx, format!("Aurum {VERSION}")).font_size(9.0).color(col(0.55, 0.55, 0.55, 1.0)); }).width(Auto).alignment(Alignment::Center);
+            Element::new(cx).width(Stretch(1.0));
+            for (i, lb) in ["SHAPE", "COLOR", "LIMIT"].iter().enumerate() { let ts = tab; Button::new(cx, move |cx| Label::new(cx, *lb).font_size(12.0)).on_press(move |_cx| ts.set(i)).width(Pixels(70.0)).height(Pixels(28.0)).background_color(Memo::new(move |_| if tab.get() == i { col(0.25, 0.15, 0.05, 1.0) } else { col(0.12, 0.12, 0.12, 1.0) })); }
+            Element::new(cx).width(Stretch(1.0));
+            let lc = lh.clone(); tog(cx, "SIDE", ph.side_active.value(), move |_cx| tgl(&lc, P::SideActive));
+            let lc = lh.clone(); tog(cx, "MONO", ph.mono_active.value(), move |_cx| tgl(&lc, P::MonoActive));
+            let lc = lh.clone(); tog(cx, "Δ", ph.delta_active.value(), move |_cx| tgl(&lc, P::DeltaActive));
+            let lc = lh.clone(); tog(cx, "BYPASS", ph.bypass_active.value(), move |_cx| tgl(&lc, P::BypassActive));
+        }).width(Stretch(1.0)).height(Pixels(44.0)).padding(Pixels(8.0)).alignment(Alignment::Center).background_color(rgb(0.08, 0.08, 0.08)).horizontal_gap(Pixels(4.0));
+        // BODY
+        HStack::new(cx, move |cx| {
+            VStack::new(cx, move |cx| {
+                Label::new(cx, "LX AUDIOLABS").font_size(14.0).color(Color::white());
+                let sn = snap_sig;
+                Button::new(cx, move |cx| { Label::new(cx, Memo::new(move |_| if sn.get() > 0 { "ANALYZING..." } else { "SNAP" })).font_size(12.0) })
+                    .on_press(move |_cx| { sn.set(72); sb.snap_active.store(true, Ordering::Relaxed); }).width(Stretch(1.0)).height(Pixels(34.0))
+                    .background_color(Memo::new(move |_| if sn.get() > 0 { col(0.55, 0.38, 0.05, 1.0) } else { col(0.18, 0.18, 0.18, 1.0) }));
+                Button::new(cx, |cx| Label::new(cx, "VAULT SETUP").font_size(12.0)).on_press(move |_cx| show.update(|v| *v = !*v)).width(Stretch(1.0)).height(Pixels(34.0));
+            }).width(Pixels(180.0)).height(Stretch(1.0)).padding(Pixels(10.0)).vertical_gap(Pixels(10.0)).background_color(rgb(0.09, 0.09, 0.09));
+            Binding::new(cx, show, move |cx| {
+                if show.get() { vault_form(cx, vpi, vp, show); }
+                else {
+                    let lt2 = lt.clone(); let pt2 = pt.clone();
+                    VStack::new(cx, move |cx| { Binding::new(cx, tab, move |cx| { let tp = tab.get(); match tp { 0 => shape(cx, lt2.clone(), pt2.clone(), tel), 1 => color(cx, lt2.clone(), pt2.clone(), tel), _ => limit(cx, lt2.clone(), pt2.clone(), tel) } }); }).width(Stretch(1.0)).height(Stretch(1.0)).background_color(rgb(0.08, 0.08, 0.08));
+                }
+            });
+            VStack::new(cx, move |cx| {
+                let lc = lr.clone(); kn(cx, "OUT GAIN", bip(pr.output_gain.raw_target() as f32, -12.0, 12.0), 0.5, -12.0, 12.0, true, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::OutputGain, ((v + 12.0) / 24.0).clamp(0.0, 1.0)); } });
+                Binding::new(cx, tel, move |cx| { let t = tel.get(); StereoMeterView::new(cx, t.peak_l, t.peak_r, t.peak_hl, t.peak_hr, t.bal).width(Pixels(180.0)).height(Pixels(220.0)); Label::new(cx, Memo::new(move |_| if tel.get().peak_h <= -90.0 { "--".to_string() } else { format!("{:.1} dB", tel.get().peak_h) })).font_size(9.0).color(col(0.6, 0.6, 0.6, 1.0)); });
+                let sg = sr.clone(); Binding::new(cx, tel, move |cx| { let t = tel.get(); GoniometerView::new(cx, sg.scope_samples.clone(), sg.scope_write_pos.load(Ordering::Acquire), t.phase_c).width(Stretch(1.0)).height(Pixels(155.0)); });
+                let sr2 = sr.clone(); Button::new(cx, |cx| Label::new(cx, "RESET PEAK").font_size(9.0)).on_press(move |_cx| sr2.reset_peak.store(true, Ordering::Relaxed)).width(Stretch(1.0)).height(Pixels(24.0));
+            }).width(Pixels(200.0)).height(Stretch(1.0)).padding(Pixels(6.0)).vertical_gap(Pixels(4.0)).alignment(Alignment::Center).background_color(rgb(0.07, 0.07, 0.07));
+        }).width(Stretch(1.0)).height(Stretch(1.0));
+        // FOOTER — lf/pf pre-cloned inside HStack for AT + STEREO sections
+        HStack::new(cx, move |cx| {
+            let lfa = lf.clone(); let lfs = lf.clone();
+            let pfa = pf.clone(); let pfs = pf.clone();
+            Element::new(cx).width(Stretch(1.0));
+            VStack::new(cx, move |cx| {
+                let lc = lfa.clone(); tog(cx, "AT", pfa.at_active.value(), move |_cx| tgl(&lc, P::AtActive));
+                let ld = lfa.clone(); kn(cx, "AMOUNT", pfa.at_amount.raw_target() as f32 / 100.0, 0.5, 0.0, 100.0, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&ld, P::AtAmount, (v / 100.0).clamp(0.0, 1.0)); } });
+            }).width(Auto).vertical_gap(Pixels(2.0)).alignment(Alignment::Center);
+            Element::new(cx).width(Stretch(1.0));
+            VStack::new(cx, move |cx| {
+                Label::new(cx, "STEREO/ROUTING").font_size(10.0).color(col(0.6, 0.6, 0.6, 1.0));
+                HStack::new(cx, move |cx| {
+                    let lc = lfs.clone(); kn(cx, "WIDTH", pfs.stereo_width.raw_target() as f32 / 2.0, 0.5, 0.0, 2.0, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::StereoWidth, (v / 2.0).clamp(0.0, 1.0)); } });
+                    let ld = lfs.clone(); kn(cx, "M.FLOOR", pfs.mono_floor.raw_target() as f32 / 300.0, 0.0, 0.0, 300.0, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&ld, P::MonoFloor, (v / 300.0).clamp(0.0, 1.0)); } });
+                    let le = lfs.clone(); let se = sf.clone();
+                    Button::new(cx, |cx| Label::new(cx, "RESET").font_size(11.0)).on_press(move |_cx| { se.reset_peak.store(true, Ordering::Relaxed); set(&le, P::ClipCeiling, 0.8167); set(&le, P::OutputGain, 0.5); set(&le, P::StereoWidth, 0.5); }).width(Pixels(60.0)).height(Pixels(26.0));
+                }).horizontal_gap(Pixels(8.0)).alignment(Alignment::Center);
+            }).vertical_gap(Pixels(2.0)).alignment(Alignment::Center).width(Auto);
+        }).width(Stretch(1.0)).height(Pixels(60.0)).padding(Pixels(8.0)).alignment(Alignment::Center).background_color(rgb(0.1, 0.1, 0.1));
+    }).width(Pixels(1100.0)).height(Pixels(660.0)).background_color(rgb(0.09, 0.09, 0.09));
 }
 
-// ─── Tab Builders ──────────────────────────────────────────────────────────
+fn vault_form(cx: &mut Context, vpi: Signal<String>, vp: Signal<Option<String>>, show: Signal<bool>) { VStack::new(cx, move |cx| { Element::new(cx).height(Stretch(1.0)); HStack::new(cx, move |cx| { Element::new(cx).width(Stretch(1.0)); VStack::new(cx, move |cx| { Label::new(cx, "Vault Path").font_size(14.0).color(Color::white()); Textbox::new(cx, vpi).width(Pixels(350.0)); HStack::new(cx, move |cx| { Button::new(cx, |cx| Label::new(cx, "SAVE").font_size(11.0)).on_press(move |_cx| { let p = vpi.get().trim().to_string(); let n = if p.is_empty() { None } else { Some(p) }; vp.set(n.clone()); let mut c = shared_analysis::load_config("Aurum"); c.vault_path = n; let _ = shared_analysis::save_config("Aurum", &c); show.set(false); }).width(Pixels(60.0)).height(Pixels(26.0)); Button::new(cx, |cx| Label::new(cx, "CANCEL").font_size(11.0)).on_press(move |_cx| show.set(false)).width(Pixels(60.0)).height(Pixels(26.0)); }).width(Auto).horizontal_gap(Pixels(8.0)); }).width(Auto).vertical_gap(Pixels(8.0)); Element::new(cx).width(Stretch(1.0)); }).width(Stretch(1.0)).height(Stretch(1.0)).alignment(Alignment::Center); Element::new(cx).height(Stretch(1.0)); }).width(Stretch(1.0)).height(Stretch(1.0)).background_color(rgb(0.08, 0.08, 0.08)); }
 
-impl AurumEditor {
-    fn shape_tab(&self) -> Element<'_, Message<AurumMsg>> {
-        let p = &self.params;
-        let in_db = self.shared_state.input_peak.load(Ordering::Relaxed);
-        let inp = if in_db <= -90.0 { "--".to_string() } else { format!("{in_db:.1} dB") };
+fn shape(cx: &mut Context, l: ParamLens<AurumParams>, p: Arc<AurumParams>, tel: Signal<Tel>) { VStack::new(cx, move |cx| {
+    HStack::new(cx, move |cx| { strip(cx, "INPUT"); Element::new(cx).width(Pixels(12.0)); Binding::new(cx, tel, move |cx| { let t = tel.get(); Label::new(cx, if t.in_peak <= -90.0 { "--".to_string() } else { format!("{:.1} dB", t.in_peak) }).font_size(14.0).color(Color::rgb(255, 140, 26)); }); }).width(Stretch(1.0)).padding(Pixels(8.0));
+    let ls = l.clone(); let ps = p.clone();
+    HStack::new(cx, move |cx| { strip(cx, "CLIPPER"); Element::new(cx).width(Pixels(12.0));
+        let lc = ls.clone(); kn(cx, "CEIL dBTP", norm(ps.clip_ceiling.raw_target() as f32, -6.0, -0.1), 0.847, -6.0, -0.1, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::ClipCeiling, ((v + 6.0) / 5.9).clamp(0.0, 1.0)); } });
+        let lc = ls.clone(); kn(cx, "SOFT %", ps.clip_softness.raw_target() as f32 / 100.0, 0.5, 0.0, 100.0, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::ClipSoftness, (v / 100.0).clamp(0.0, 1.0)); } });
+        let lc = ls.clone(); tog(cx, "M/S", ps.clip_ms_mode.value(), move |_cx| tgl(&lc, P::ClipMsMode));
+    }).width(Stretch(1.0)).padding(Pixels(8.0)).background_color(col(0.11, 0.11, 0.11, 1.0)).horizontal_gap(Pixels(4.0)).alignment(Alignment::Center);
+    let lm = l.clone(); let pm = p.clone();
+    HStack::new(cx, move |cx| { strip(cx, "M/S EQ"); Element::new(cx).width(Pixels(12.0));
+        let ld = lm.clone(); let pd = pm.clone();
+        VStack::new(cx, move |cx| { Label::new(cx, "MID").font_size(9.0).color(col(0.6, 0.6, 0.6, 1.0)); HStack::new(cx, move |cx| {
+            let lc = lm.clone(); kn(cx, "LO SH", bip(pm.eq_m_lo_shelf.raw_target() as f32, -6.0, 6.0), 0.5, -6.0, 6.0, true, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::EqMLoShelf, ((v + 6.0) / 12.0).clamp(0.0, 1.0)); } });
+            let lc = lm.clone(); kn(cx, "LO-MI", bip(pm.eq_m_lo_mid.raw_target() as f32, -6.0, 6.0), 0.5, -6.0, 6.0, true, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::EqMLoMid, ((v + 6.0) / 12.0).clamp(0.0, 1.0)); } });
+            let lc = lm.clone(); kn(cx, "HI-MI", bip(pm.eq_m_hi_mid.raw_target() as f32, -6.0, 6.0), 0.5, -6.0, 6.0, true, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::EqMHiMid, ((v + 6.0) / 12.0).clamp(0.0, 1.0)); } });
+            let lc = lm.clone(); kn(cx, "HI SH", bip(pm.eq_m_hi_shelf.raw_target() as f32, -6.0, 6.0), 0.5, -6.0, 6.0, true, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::EqMHiShelf, ((v + 6.0) / 12.0).clamp(0.0, 1.0)); } });
+        }).horizontal_gap(Pixels(4.0)); }).vertical_gap(Pixels(2.0)).alignment(Alignment::Center);
+        Element::new(cx).width(Pixels(16.0));
+        VStack::new(cx, move |cx| { Label::new(cx, "SIDE").font_size(9.0).color(col(0.6, 0.6, 0.6, 1.0)); HStack::new(cx, move |cx| {
+            let lc = ld.clone(); kn(cx, "LO SH", bip(pd.eq_s_lo_shelf.raw_target() as f32, -6.0, 6.0), 0.5, -6.0, 6.0, true, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::EqSLoShelf, ((v + 6.0) / 12.0).clamp(0.0, 1.0)); } });
+            let lc = ld.clone(); kn(cx, "LO-MI", bip(pd.eq_s_lo_mid.raw_target() as f32, -6.0, 6.0), 0.5, -6.0, 6.0, true, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::EqSLoMid, ((v + 6.0) / 12.0).clamp(0.0, 1.0)); } });
+            let lc = ld.clone(); kn(cx, "HI-MI", bip(pd.eq_s_hi_mid.raw_target() as f32, -6.0, 6.0), 0.5, -6.0, 6.0, true, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::EqSHiMid, ((v + 6.0) / 12.0).clamp(0.0, 1.0)); } });
+            let lc = ld.clone(); kn(cx, "HI SH", bip(pd.eq_s_hi_shelf.raw_target() as f32, -6.0, 6.0), 0.5, -6.0, 6.0, true, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::EqSHiShelf, ((v + 6.0) / 12.0).clamp(0.0, 1.0)); } });
+        }).horizontal_gap(Pixels(4.0)); }).vertical_gap(Pixels(2.0)).alignment(Alignment::Center);
+    }).width(Stretch(1.0)).padding(Pixels(8.0)).background_color(col(0.1, 0.1, 0.1, 1.0)).horizontal_gap(Pixels(4.0)).alignment(Alignment::Center);
+}).width(Stretch(1.0)).vertical_gap(Pixels(2.0)); }
 
-        container(column![
-            container(row![Self::strip_label("INPUT"), Space::new().width(Length::Fixed(12.0)), Text::new(inp).size(14).font(bold_font()).color(AMBER)].align_y(Alignment::Center).spacing(4).padding([4, 12])).width(Length::Fill),
-            container(row![Self::strip_label("CLIPPER"), Space::new().width(Length::Fixed(12.0)),
-                Self::knob("CEIL dBTP", p.clip_ceiling.raw_target() as f32, -6.0, -0.1, -1.0, AurumMsg::ClipCeilGesture), Space::new().width(Length::Fixed(6.0)),
-                Self::knob("SOFT %", p.clip_softness.raw_target() as f32, 0.0, 100.0, 50.0, AurumMsg::ClipSoftGesture), Space::new().width(Length::Fixed(6.0)),
-                toggle_button("M/S", p.clip_ms_mode.value(), Message::Plugin(AurumMsg::ClipMsToggled)),
-            ].align_y(Alignment::Center).spacing(4).padding([4, 12])).width(Length::Fill).style(|_t| container::Style { background: Some(Color::from_rgb(0.11, 0.11, 0.11).into()), ..Default::default() }),
-            container(row![Self::strip_label("M/S EQ"), Space::new().width(Length::Fixed(12.0)),
-                column![Text::new("MID").size(9).font(bold_font()).color(Color::from_rgb(0.6, 0.6, 0.6)),
-                    row![Self::knob("LO SH", p.eq_m_lo_shelf.raw_target() as f32, -6.0, 6.0, 0.0, AurumMsg::EqMLoShG), Self::knob("LO-MI", p.eq_m_lo_mid.raw_target() as f32, -6.0, 6.0, 0.0, AurumMsg::EqMLoMiG), Self::knob("HI-MI", p.eq_m_hi_mid.raw_target() as f32, -6.0, 6.0, 0.0, AurumMsg::EqMHiMiG), Self::knob("HI SH", p.eq_m_hi_shelf.raw_target() as f32, -6.0, 6.0, 0.0, AurumMsg::EqMHiShG)].spacing(4),
-                ].spacing(2).align_x(Alignment::Center),
-                Space::new().width(Length::Fixed(16.0)),
-                column![Text::new("SIDE").size(9).font(bold_font()).color(Color::from_rgb(0.6, 0.6, 0.6)),
-                    row![Self::knob("LO SH", p.eq_s_lo_shelf.raw_target() as f32, -6.0, 6.0, 0.0, AurumMsg::EqSLoShG), Self::knob("LO-MI", p.eq_s_lo_mid.raw_target() as f32, -6.0, 6.0, 0.0, AurumMsg::EqSLoMiG), Self::knob("HI-MI", p.eq_s_hi_mid.raw_target() as f32, -6.0, 6.0, 0.0, AurumMsg::EqSHiMiG), Self::knob("HI SH", p.eq_s_hi_shelf.raw_target() as f32, -6.0, 6.0, 0.0, AurumMsg::EqSHiShG)].spacing(4),
-                ].spacing(2).align_x(Alignment::Center),
-            ].align_y(Alignment::Center).spacing(4).padding([4, 12])).width(Length::Fill).style(|_t| container::Style { background: Some(Color::from_rgb(0.1, 0.1, 0.1).into()), ..Default::default() }),
-        ].spacing(2)).width(Length::Fill).into()
-    }
+fn color(cx: &mut Context, l: ParamLens<AurumParams>, p: Arc<AurumParams>, _tel: Signal<Tel>) { VStack::new(cx, move |cx| {
+    let lb2 = l.clone(); let pb2 = p.clone();
+    HStack::new(cx, move |cx| { strip(cx, "2-BAND COMP"); Element::new(cx).width(Pixels(12.0));
+        let lc = lb2.clone(); kn(cx, "SPLIT Hz", norm(pb2.comp_split.raw_target() as f32, 80.0, 500.0), 0.286, 80.0, 500.0, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::CompSplit, ((v - 80.0) / 420.0).clamp(0.0, 1.0)); } });
+        let lc = lb2.clone(); tog(cx, "LINK", pb2.comp_link.value(), move |_cx| tgl(&lc, P::CompLink));
+        let lc = lb2.clone(); kn(cx, "THR LO", norm(pb2.comp_thresh_lo.raw_target() as f32, -30.0, 0.0), 0.4, -30.0, 0.0, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::CompThreshLo, ((v + 30.0) / 30.0).clamp(0.0, 1.0)); } });
+        let lc = lb2.clone(); kn(cx, "THR HI", norm(pb2.comp_thresh_hi.raw_target() as f32, -30.0, 0.0), 0.4, -30.0, 0.0, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::CompThreshHi, ((v + 30.0) / 30.0).clamp(0.0, 1.0)); } });
+        let lc = lb2.clone(); kn(cx, "RATIO", norm(pb2.comp_ratio.raw_target() as f32, 1.2, 3.0), 0.167, 1.2, 3.0, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::CompRatio, ((v - 1.2) / 1.8).clamp(0.0, 1.0)); } });
+        let lc = lb2.clone(); kn(cx, "ATK ms", norm(pb2.comp_attack.raw_target() as f32, 10.0, 100.0), 0.222, 10.0, 100.0, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::CompAttack, ((v - 10.0) / 90.0).clamp(0.0, 1.0)); } });
+        let lc = lb2.clone(); kn(cx, "REL ms", norm(pb2.comp_release.raw_target() as f32, 50.0, 500.0), 0.222, 50.0, 500.0, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::CompRelease, ((v - 50.0) / 450.0).clamp(0.0, 1.0)); } });
+        let lc = lb2.clone(); kn(cx, "MIX %", pb2.comp_mix.raw_target() as f32 / 100.0, 0.5, 0.0, 100.0, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::CompMix, (v / 100.0).clamp(0.0, 1.0)); } });
+    }).width(Stretch(1.0)).padding(Pixels(8.0)).background_color(col(0.11, 0.11, 0.11, 1.0)).horizontal_gap(Pixels(4.0)).alignment(Alignment::Center);
+    let ls2 = l.clone(); let ps2 = p.clone();
+    HStack::new(cx, move |cx| { strip(cx, "SWEETENING"); Element::new(cx).width(Pixels(12.0));
+        let lc = ls2.clone(); kn(cx, "HPF Hz", norm(ps2.sweet_hpf.raw_target() as f32, 10.0, 60.0), 0.28, 10.0, 60.0, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::SweetHpf, ((v - 10.0) / 50.0).clamp(0.0, 1.0)); } });
+        let lc = ls2.clone(); kn(cx, "LPF Hz", norm(ps2.sweet_lpf.raw_target() as f32, 18000.0, 40000.0), 0.773, 18000.0, 40000.0, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::SweetLpf, ((v - 18000.0) / 22000.0).clamp(0.0, 1.0)); } });
+        let lc = ls2.clone(); kn(cx, "LO SH", bip(ps2.sweet_lo_shelf.raw_target() as f32, -4.0, 4.0), 0.5, -4.0, 4.0, true, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::SweetLoShelf, ((v + 4.0) / 8.0).clamp(0.0, 1.0)); } });
+        let lc = ls2.clone(); kn(cx, "HI SH", bip(ps2.sweet_hi_shelf.raw_target() as f32, -4.0, 4.0), 0.5, -4.0, 4.0, true, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::SweetHiShelf, ((v + 4.0) / 8.0).clamp(0.0, 1.0)); } });
+    }).width(Stretch(1.0)).padding(Pixels(8.0)).background_color(col(0.1, 0.1, 0.1, 1.0)).horizontal_gap(Pixels(4.0)).alignment(Alignment::Center);
+    let lt2 = l.clone(); let pt2 = p.clone();
+    HStack::new(cx, move |cx| { strip(cx, "SATURATOR"); Element::new(cx).width(Pixels(12.0));
+        let lc = lt2.clone(); tog(cx, "M/S", pt2.sat_ms_mode.value(), move |_cx| tgl(&lc, P::SatMsMode));
+        let lc = lt2.clone(); kn(cx, "DRV ST", pt2.sat_drive_stereo.raw_target() as f32 / 12.0, 0.0, 0.0, 12.0, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::SatDriveStereo, (v / 12.0).clamp(0.0, 1.0)); } });
+        let lc = lt2.clone(); kn(cx, "DRV MI", pt2.sat_drive_mid.raw_target() as f32 / 12.0, 0.0, 0.0, 12.0, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::SatDriveMid, (v / 12.0).clamp(0.0, 1.0)); } });
+        let lc = lt2.clone(); kn(cx, "DRV SI", pt2.sat_drive_side.raw_target() as f32 / 12.0, 0.0, 0.0, 12.0, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::SatDriveSide, (v / 12.0).clamp(0.0, 1.0)); } });
+        let lc = lt2.clone(); kn(cx, "MIX %", pt2.sat_mix.raw_target() as f32 / 60.0, 0.333, 0.0, 60.0, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::SatMix, (v / 60.0).clamp(0.0, 1.0)); } });
+        let ld = lt2.clone(); let pd = pt2.clone(); let h = pd.sat_harmonics.value_i32() as usize % 3; cyc(cx, &["EVEN", "ODD", "MIXED"], h, move |_cx| { let n = (pd.sat_harmonics.value_i32() + 1) % 3; set(&ld, P::SatHarmonics, n as f32 / 2.0); });
+    }).width(Stretch(1.0)).padding(Pixels(8.0)).background_color(col(0.11, 0.11, 0.11, 1.0)).horizontal_gap(Pixels(4.0)).alignment(Alignment::Center);
+}).width(Stretch(1.0)).vertical_gap(Pixels(2.0)); }
 
-    fn color_tab(&self) -> Element<'_, Message<AurumMsg>> {
-        let p = &self.params;
-        container(column![
-            container(row![Self::strip_label("2-BAND COMP"), Space::new().width(Length::Fixed(12.0)),
-                Self::knob("SPLIT Hz", p.comp_split.raw_target() as f32, 80.0, 500.0, 200.0, AurumMsg::CompSplitG), Space::new().width(Length::Fixed(4.0)),
-                toggle_button("LINK", p.comp_link.value(), Message::Plugin(AurumMsg::CompLinkToggled)), Space::new().width(Length::Fixed(4.0)),
-                Self::knob("THR LO", p.comp_thresh_lo.raw_target() as f32, -30.0, 0.0, -12.0, AurumMsg::CompThrLoG), Self::knob("THR HI", p.comp_thresh_hi.raw_target() as f32, -30.0, 0.0, -12.0, AurumMsg::CompThrHiG),
-                Self::knob("RATIO", p.comp_ratio.raw_target() as f32, 1.2, 3.0, 1.5, AurumMsg::CompRatioG), Self::knob("ATK ms", p.comp_attack.raw_target() as f32, 10.0, 100.0, 30.0, AurumMsg::CompAtkG),
-                Self::knob("REL ms", p.comp_release.raw_target() as f32, 50.0, 500.0, 150.0, AurumMsg::CompRelG), Self::knob("MIX %", p.comp_mix.raw_target() as f32, 0.0, 100.0, 50.0, AurumMsg::CompMixG),
-            ].align_y(Alignment::Center).spacing(4).padding([4, 12])).width(Length::Fill).style(|_t| container::Style { background: Some(Color::from_rgb(0.11, 0.11, 0.11).into()), ..Default::default() }),
-            container(row![Self::strip_label("SWEETENING"), Space::new().width(Length::Fixed(12.0)),
-                Self::knob("HPF Hz", p.sweet_hpf.raw_target() as f32, 10.0, 60.0, 24.0, AurumMsg::SweetHpfG), Self::knob("LPF Hz", p.sweet_lpf.raw_target() as f32, 18000.0, 40000.0, 35000.0, AurumMsg::SweetLpfG),
-                Self::knob("LO SH", p.sweet_lo_shelf.raw_target() as f32, -4.0, 4.0, 0.0, AurumMsg::SweetLoG), Self::knob("HI SH", p.sweet_hi_shelf.raw_target() as f32, -4.0, 4.0, 0.0, AurumMsg::SweetHiG),
-            ].align_y(Alignment::Center).spacing(4).padding([4, 12])).width(Length::Fill).style(|_t| container::Style { background: Some(Color::from_rgb(0.1, 0.1, 0.1).into()), ..Default::default() }),
-            container(row![Self::strip_label("SATURATOR"), Space::new().width(Length::Fixed(12.0)),
-                toggle_button("M/S", p.sat_ms_mode.value(), Message::Plugin(AurumMsg::SatMsToggled)), Space::new().width(Length::Fixed(4.0)),
-                Self::knob("DRV ST", p.sat_drive_stereo.raw_target() as f32, 0.0, 12.0, 0.0, AurumMsg::SatDrvStG), Self::knob("DRV MI", p.sat_drive_mid.raw_target() as f32, 0.0, 12.0, 0.0, AurumMsg::SatDrvMiG),
-                Self::knob("DRV SI", p.sat_drive_side.raw_target() as f32, 0.0, 12.0, 0.0, AurumMsg::SatDrvSiG), Self::knob("MIX %", p.sat_mix.raw_target() as f32, 0.0, 60.0, 20.0, AurumMsg::SatMixG),
-                { let h = ["EVEN","ODD","MIXED"][p.sat_harmonics.value_i32() as usize % 3]; toggle_button(h, true, Message::Plugin(AurumMsg::SatHarmCycled)) },
-            ].align_y(Alignment::Center).spacing(4).padding([4, 12])).width(Length::Fill).style(|_t| container::Style { background: Some(Color::from_rgb(0.11, 0.11, 0.11).into()), ..Default::default() }),
-        ].spacing(2)).width(Length::Fill).into()
-    }
+fn limit(cx: &mut Context, l: ParamLens<AurumParams>, p: Arc<AurumParams>, tel: Signal<Tel>) { VStack::new(cx, move |cx| {
+    let li = l.clone(); let pi = p.clone();
+    VStack::new(cx, move |cx| {
+        let li1 = li.clone(); let pi1 = pi.clone();
+        HStack::new(cx, move |cx| { strip(cx, "M/S MB LIMITER"); Element::new(cx).width(Pixels(8.0));
+            let lc = li1.clone(); kn(cx, "XOVER Hz", norm(pi1.mb_crossover.raw_target() as f32, 20.0, 500.0), 0.479, 20.0, 500.0, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::MbCrossover, ((v - 20.0) / 480.0).clamp(0.0, 1.0)); } });
+            let lc = li1.clone(); kn(cx, "G.THR dB", norm(pi1.mb_global_thresh.raw_target() as f32, -18.0, 0.0), 1.0, -18.0, 0.0, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::MbGlobalThresh, ((v + 18.0) / 18.0).clamp(0.0, 1.0)); } });
+            let lc = li1.clone(); kn(cx, "G.GAIN dB", bip(pi1.mb_global_gain.raw_target() as f32, -6.0, 6.0), 0.5, -6.0, 6.0, true, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::MbGlobalGain, ((v + 6.0) / 12.0).clamp(0.0, 1.0)); } });
+            let lc = li1.clone(); tog(cx, "LINK", pi1.mb_fader_link.value(), move |_cx| tgl(&lc, P::MbFaderLink));
+            let lc = li1.clone(); cyc(cx, &["MODERN", "CLASSIC"], if pi1.mb_mode.value() { 0 } else { 1 }, move |_cx| tgl(&lc, P::MbMode));
+        }).width(Stretch(1.0)).horizontal_gap(Pixels(4.0)).alignment(Alignment::Center);
+        Element::new(cx).height(Pixels(4.0));
+        let li2 = li.clone(); let pi2 = pi.clone();
+        HStack::new(cx, move |cx| {
+            bcol(cx, li2.clone(), "MID-LO", pi2.mb_thresh_mid_lo.raw_target() as f32, P::MbThreshMidLo, pi2.mb_attack_mid_lo.raw_target() as f32, P::MbAttackMidLo, pi2.mb_release_mid_lo.raw_target() as f32, P::MbReleaseMidLo, pi2.mb_gain_mid_lo.raw_target() as f32, P::MbGainMidLo);
+            Element::new(cx).width(Pixels(16.0));
+            bcol(cx, li2.clone(), "MID-HI", pi2.mb_thresh_mid_hi.raw_target() as f32, P::MbThreshMidHi, pi2.mb_attack_mid_hi.raw_target() as f32, P::MbAttackMidHi, pi2.mb_release_mid_hi.raw_target() as f32, P::MbReleaseMidHi, pi2.mb_gain_mid_hi.raw_target() as f32, P::MbGainMidHi);
+            Element::new(cx).width(Pixels(16.0));
+            bcol(cx, li2.clone(), "SIDE", pi2.mb_thresh_side.raw_target() as f32, P::MbThreshSide, pi2.mb_attack_side.raw_target() as f32, P::MbAttackSide, pi2.mb_release_side.raw_target() as f32, P::MbReleaseSide, pi2.mb_gain_side.raw_target() as f32, P::MbGainSide);
+        }).horizontal_gap(Pixels(4.0));
+    }).width(Stretch(1.0)).padding(Pixels(8.0)).background_color(col(0.11, 0.11, 0.11, 1.0)).vertical_gap(Pixels(4.0));
+    let lt = l.clone(); let pt = p.clone();
+    HStack::new(cx, move |cx| { strip(cx, "TP LIMITER"); Element::new(cx).width(Pixels(12.0));
+        let lc = lt.clone(); kn(cx, "CEIL dBTP", norm(pt.lim_ceiling.raw_target() as f32, -6.0, -0.1), 0.847, -6.0, -0.1, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::LimCeiling, ((v + 6.0) / 5.9).clamp(0.0, 1.0)); } });
+        let lc = lt.clone(); kn(cx, "REL ms", norm(pt.lim_release.raw_target() as f32, 10.0, 500.0), 0.184, 10.0, 500.0, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, P::LimRelease, ((v - 10.0) / 490.0).clamp(0.0, 1.0)); } });
+        Element::new(cx).width(Pixels(20.0)); Binding::new(cx, tel, move |cx| { let t = tel.get(); let gr = if t.gr >= -0.01 { "0.0 dB".to_string() } else { format!("{:.1} dB", t.gr) }; Label::new(cx, format!("GR {gr} | L {:.1} R {:.1} dB", t.peak_l, t.peak_r)).font_size(11.0).color(Color::rgb(255, 140, 26)); });
+    }).width(Stretch(1.0)).padding(Pixels(8.0)).background_color(col(0.1, 0.1, 0.1, 1.0)).horizontal_gap(Pixels(4.0)).alignment(Alignment::Center);
+}).width(Stretch(1.0)).vertical_gap(Pixels(2.0)); }
 
-    fn limit_tab(&self) -> Element<'_, Message<AurumMsg>> {
-        let p = &self.params;
-        container(column![
-            container(column![
-                row![Self::strip_label("M/S MB LIMITER"), Space::new().width(Length::Fixed(8.0)),
-                    Self::knob("XOVER Hz", p.mb_crossover.raw_target() as f32, 20.0, 500.0, 250.0, AurumMsg::MbXoverG),
-                    Self::knob("G.THR dB", p.mb_global_thresh.raw_target() as f32, -18.0, 0.0, 0.0, AurumMsg::MbThrOffG),
-                    Self::knob("G.GAIN dB", p.mb_global_gain.raw_target() as f32, -6.0, 6.0, 0.0, AurumMsg::MbGainGG),
-                    toggle_button("LINK", p.mb_fader_link.value(), Message::Plugin(AurumMsg::MbLinkToggled)),
-                    { let m = if p.mb_mode.value() { "MODERN" } else { "CLASSIC" }; toggle_button(m, true, Message::Plugin(AurumMsg::MbModeToggled)) },
-                ].spacing(4).align_y(Alignment::Center),
-                Space::new().height(Length::Fixed(4.0)),
-                row![band_col("MID-LO", p.mb_thresh_mid_lo.raw_target() as f32, AurumMsg::MbThrLoG, p.mb_attack_mid_lo.raw_target() as f32, AurumMsg::MbAtkLoG, p.mb_release_mid_lo.raw_target() as f32, AurumMsg::MbRelLoG, p.mb_gain_mid_lo.raw_target() as f32, AurumMsg::MbGainLoG),
-                    Space::new().width(Length::Fixed(16.0)),
-                    band_col("MID-HI", p.mb_thresh_mid_hi.raw_target() as f32, AurumMsg::MbThrHiG, p.mb_attack_mid_hi.raw_target() as f32, AurumMsg::MbAtkHiG, p.mb_release_mid_hi.raw_target() as f32, AurumMsg::MbRelHiG, p.mb_gain_mid_hi.raw_target() as f32, AurumMsg::MbGainHiG),
-                    Space::new().width(Length::Fixed(16.0)),
-                    band_col("SIDE", p.mb_thresh_side.raw_target() as f32, AurumMsg::MbThrSiG, p.mb_attack_side.raw_target() as f32, AurumMsg::MbAtkSiG, p.mb_release_side.raw_target() as f32, AurumMsg::MbRelSiG, p.mb_gain_side.raw_target() as f32, AurumMsg::MbGainSiG),
-                ].spacing(4),
-            ].spacing(4).padding([4, 12])).width(Length::Fill).style(|_t| container::Style { background: Some(Color::from_rgb(0.11, 0.11, 0.11).into()), ..Default::default() }),
-            container(row![Self::strip_label("TP LIMITER"), Space::new().width(Length::Fixed(12.0)),
-                Self::knob("CEIL dBTP", p.lim_ceiling.raw_target() as f32, -6.0, -0.1, -1.0, AurumMsg::LimCeilG),
-                Self::knob("REL ms", p.lim_release.raw_target() as f32, 10.0, 500.0, 100.0, AurumMsg::LimRelG),
-                Space::new().width(Length::Fixed(20.0)),
-                {
-                    let gr = self.shared_state.gain_reduction.load(Ordering::Relaxed);
-                    let gr_s = if gr >= -0.01 { "0.0 dB".to_string() } else { format!("{gr:.1} dB") };
-                    column![Self::strip_label("OUTPUT"), Text::new(format!("GR {gr_s} | L {:.1} R {:.1} dB", self.peak_l, self.peak_r)).size(11).font(bold_font()).color(AMBER)].spacing(2)
-                },
-            ].align_y(Alignment::Center).spacing(4).padding([4, 12])).width(Length::Fill).style(|_t| container::Style { background: Some(Color::from_rgb(0.1, 0.1, 0.1).into()), ..Default::default() }),
-        ].spacing(2)).width(Length::Fill).into()
-    }
-}
-
-fn band_col(label: &str, thr: f32, thr_msg: impl Fn(Gesture) -> AurumMsg + 'static, atk: f32, atk_msg: impl Fn(Gesture) -> AurumMsg + 'static, rel: f32, rel_msg: impl Fn(Gesture) -> AurumMsg + 'static, gain: f32, gain_msg: impl Fn(Gesture) -> AurumMsg + 'static) -> Element<'_, Message<AurumMsg>> {
-    column![Text::new(label).size(9).font(bold_font()).color(Color::from_rgb(0.6, 0.6, 0.6)),
-        AurumEditor::knob("THR dB", thr, -18.0, 0.0, -3.0, thr_msg), AurumEditor::knob("ATK ms", atk, 0.1, 50.0, 5.0, atk_msg),
-        AurumEditor::knob("REL ms", rel, 10.0, 500.0, 100.0, rel_msg), AurumEditor::knob("GAIN dB", gain, -6.0, 6.0, 0.0, gain_msg),
-    ].spacing(2).align_x(Alignment::Center).into()
-}
+fn bcol(cx: &mut Context, l: ParamLens<AurumParams>, label: &'static str, thr: f32, thr_id: P, atk: f32, atk_id: P, rel: f32, rel_id: P, gain: f32, gain_id: P) { VStack::new(cx, move |cx| { Label::new(cx, label).font_size(9.0).color(col(0.6, 0.6, 0.6, 1.0));
+    let lc = l.clone(); kn(cx, "THR dB", norm(thr, -18.0, 0.0), 0.167, -18.0, 0.0, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, thr_id, ((v + 18.0) / 18.0).clamp(0.0, 1.0)); } });
+    let lc = l.clone(); kn(cx, "ATK ms", norm(atk, 0.1, 50.0), 0.098, 0.1, 50.0, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, atk_id, ((v - 0.1) / 49.9).clamp(0.0, 1.0)); } });
+    let lc = l.clone(); kn(cx, "REL ms", norm(rel, 10.0, 500.0), 0.184, 10.0, 500.0, false, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, rel_id, ((v - 10.0) / 490.0).clamp(0.0, 1.0)); } });
+    let lc = l.clone(); kn(cx, "GAIN dB", bip(gain, -6.0, 6.0), 0.5, -6.0, 6.0, true, move |_cx, g| { if let Gesture::Change(v) = g { set(&lc, gain_id, ((v + 6.0) / 12.0).clamp(0.0, 1.0)); } });
+}).vertical_gap(Pixels(2.0)).alignment(Alignment::Center).width(Auto); }

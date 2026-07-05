@@ -11,7 +11,7 @@
 use truce::prelude::*;
 use truce_core::editor::Editor;
 use truce_core::state::StateLoadError;
-use truce_iced::IcedEditor;
+use truce_vizia::ViziaEditor;
 use std::sync::Arc;
 use shared_dsp::state_migration;
 use std::f32::consts::FRAC_PI_4;
@@ -20,6 +20,7 @@ use shared_dsp::{Biquad, LR2Crossover, AutoLoudMeter, DBTP_CEILING};
 use shared_analysis::{SharedState, SCOPE_BUFFER_LEN, SnapFFT, SnapMode};
 
 mod editor;
+mod vizia_canvas;
 
 const BAND_COUNT: usize = 5;
 const WINDOW_W: u32 = 990;
@@ -428,25 +429,25 @@ impl PluginLogic for Equilibrium {
             let mut bands_r = [band1_r, band2_r, band3_r, band4_r, band5_r];
 
             let band_gains = [
-                db_to_gain(self.params.low_gain.value() as f32),
-                db_to_gain(self.params.bass_gain.value() as f32),
-                db_to_gain(self.params.mid_gain.value() as f32),
-                db_to_gain(self.params.high_mid_gain.value() as f32),
-                db_to_gain(self.params.high_gain.value() as f32),
+                db_to_gain(self.params.low_gain.value()),
+                db_to_gain(self.params.bass_gain.value()),
+                db_to_gain(self.params.mid_gain.value()),
+                db_to_gain(self.params.high_mid_gain.value()),
+                db_to_gain(self.params.high_gain.value()),
             ];
             let band_widths = [
-                self.params.low_width.value() as f32 / 100.0,
-                self.params.bass_width.value() as f32 / 100.0,
-                self.params.mid_width.value() as f32 / 100.0,
-                self.params.high_mid_width.value() as f32 / 100.0,
-                self.params.high_width.value() as f32 / 100.0,
+                self.params.low_width.value() / 100.0,
+                self.params.bass_width.value() / 100.0,
+                self.params.mid_width.value() / 100.0,
+                self.params.high_mid_width.value() / 100.0,
+                self.params.high_width.value() / 100.0,
             ];
             let band_pans = [
-                self.params.low_pan.value() as f32,
-                self.params.bass_pan.value() as f32,
-                self.params.mid_pan.value() as f32,
-                self.params.high_mid_pan.value() as f32,
-                self.params.high_pan.value() as f32,
+                self.params.low_pan.value(),
+                self.params.bass_pan.value(),
+                self.params.mid_pan.value(),
+                self.params.high_mid_pan.value(),
+                self.params.high_pan.value(),
             ];
             let band_solos = [s_low, s_bass, s_mid, s_high_mid, s_high];
 
@@ -528,7 +529,7 @@ impl PluginLogic for Equilibrium {
                 processed_r = out_r - cut_r;
             }
 
-            let out_gain = db_to_gain(self.params.output_gain.value() as f32);
+            let out_gain = db_to_gain(self.params.output_gain.value());
             processed_l *= out_gain;
             processed_r *= out_gain;
 
@@ -897,7 +898,19 @@ impl PluginLogic for Equilibrium {
     fn state_changed(&mut self) {}
 
     fn editor(&self) -> Box<dyn Editor> {
-        IcedEditor::<EquilibriumParams, editor::EquilibriumEditor>::new(self.params.clone(), (WINDOW_W, WINDOW_H)).into_editor()
+        // Vizia port (CLAP-vault features/2026-07-04-truce-2.0-upgrade-plan.md).
+        // `shared` is captured directly into the setup closure rather than
+        // read through `ParamLens` - the band meters/goniometer/preset data
+        // live in `EquilibriumParams::shared` (atomics + mutexes written by
+        // `process()`), not in the param store `ParamLens` binds to.
+        let shared = self.params.shared.clone();
+        let params = self.params.clone();
+        ViziaEditor::<EquilibriumParams>::new(
+            self.params.clone(),
+            (WINDOW_W, WINDOW_H),
+            move |cx, lens| editor::build(cx, lens, shared.clone(), params.clone()),
+        )
+        .into_editor()
     }
 }
 

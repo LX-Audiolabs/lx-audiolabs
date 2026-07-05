@@ -13,7 +13,6 @@ pub struct RelayData {
 pub struct LucentUiState {
     pub own_spectrum: Vec<f32>, // FFT bins in dB from this plugin's audio
     pub relays: Vec<RelayData>,
-    pub name: String,
 }
 
 impl LucentUiState {
@@ -21,13 +20,6 @@ impl LucentUiState {
         Self {
             own_spectrum: vec![],
             relays: vec![],
-            name: "Lucent".to_string(),
-        }
-    }
-
-    pub fn toggle_relay(&mut self, index: usize) {
-        if let Some(relay) = self.relays.get_mut(index) {
-            relay.active = !relay.active;
         }
     }
 
@@ -68,35 +60,6 @@ impl LucentUiState {
         self.relays = new_relays;
     }
 
-    pub fn active_relays(&self) -> Vec<&RelayData> {
-        self.relays.iter().filter(|r| r.active).collect()
-    }
-
-    #[allow(dead_code)]
-    pub fn sum_active_spectra(&self) -> Vec<f32> {
-        if self.relays.is_empty() {
-            return self.own_spectrum.clone();
-        }
-
-        let active = self.active_relays();
-        if active.is_empty() {
-            return self.own_spectrum.clone();
-        }
-
-        let len = active.iter().map(|r| r.spectrum.len()).max().unwrap_or(1024);
-        let mut sum = vec![f32::NEG_INFINITY; len];
-
-        for relay in &active {
-            for (i, &val) in relay.spectrum.iter().enumerate() {
-                if i < sum.len() {
-                    // Log-domain sum (max for energy)
-                    sum[i] = sum[i].max(val);
-                }
-            }
-        }
-
-        sum
-    }
 }
 
 impl Default for LucentUiState {

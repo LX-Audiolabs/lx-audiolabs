@@ -1,628 +1,697 @@
-use truce_iced::iced::widget::{button, canvas, column, container, row, text_input, Space, Text};
-use truce_iced::iced::{Alignment, Border, Color, Element, Length, Padding, Subscription};
-use truce_iced::{IcedPlugin, Message, ParamCache};
-use truce_core::editor::PluginContext;
+//! Vizia port of the old iced `editor.rs`. Architecture note (see CLAP-vault
+//! `features/2026-07-04-truce-2.0-upgrade-plan.md` for the "why"):
+//!
+//! Vizia is retained-mode + fine-grained reactive, not Elm/virtual-DOM like
+//! iced was. `Binding::new(cx, signal, |cx| {...})` fully tears down and
+//! rebuilds its subtree whenever `signal` changes - fine for stateless
+//! widgets (Label, Button, our custom draw-only Views), but destructive for
+//! *stateful* widgets (`Textbox` mid-edit, `KnobView` mid-drag): rebuilding
+//! those every tick would reset cursor/focus/drag state constantly.
+//!
+//! So telemetry (spectrum, resonance/masking text, meters, relay list,
+//! snap blink) lives in one `Signal<Telemetry>` updated every ~33ms by
+//! the `Ticker` View below (replaces the old `Message::Tick` /
+//! `RedrawRequested` subscription - NOT `cx.add_timer`/`cx.start_timer`,
+//! see `Ticker`'s doc comment for why), and only the passive display
+//! regions (right sidebar,
+//! center spectrum+relay-bar+analyzer text, SNAP button) are wrapped in
+//! `Binding`s keyed to it. The Name/Vault-path `Textbox`es and the
+//! Sensitivity `KnobView` are built once, outside any tick-driven Binding,
+//! so typing and dragging survive across ticks. The mode label/button gets
+//! its own tiny `Binding` keyed to the param's own `ParamLens` signal
+//! instead, so it updates on host automation too.
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::{Arc, atomic::Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+use vizia::prelude::*;
+use vizia::vg;
 
 use shared_analysis::{SharedState, SPECTRUM_BINS};
-use crate::{read_resonance, read_masking};
-use crate::LucentParamsParamId;
-use shared_ui::{
-    bold_font, header_brand, output_level_block, output_tools_strip,
-    toggle_button, vault_setup_box,
-    GoniometerCanvas, SpectrumCanvas, SpectrumCurve, SpectrumConfig,
-    Gesture, knob_gesture,
-};
-use crate::ui::LucentUiState;
+use truce_vizia::ParamLens;
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+use crate::ui::{LucentUiState, RelayData};
+use shared_ui::{GoniometerView, SpectrumConfig, SpectrumCurve, SpectrumView, StereoMeterView, fmt_db, Gesture, KnobView, format_knob_value, rgb as vg_rgb};
+use crate::{LucentParams, LucentParamsParamId, read_masking, read_resonance};
 
-#[derive(Debug, Clone)]
-pub enum LucentMsg {
-    Tick,
-    RelayToggled(usize),
-    SnapPressed,
-    CycleMode,
-    LucentNameChanged(String),
-    SetupToggled,
-    VaultPathChanged(String),
-    SaveVaultPath,
-    ResonanceToggled,
-    MaskingToggled,
-    ResetPeak,
-    ResetAll,
-    SensitivityGesture(Gesture),
+fn col(r: f32, g: f32, b: f32, a: f32) -> Color {
+    Color::rgba(
+        (r.clamp(0.0, 1.0) * 255.0) as u8,
+        (g.clamp(0.0, 1.0) * 255.0) as u8,
+        (b.clamp(0.0, 1.0) * 255.0) as u8,
+        (a.clamp(0.0, 1.0) * 255.0) as u8,
+    )
+}
+fn rgb(r: f32, g: f32, b: f32) -> Color {
+    col(r, g, b, 1.0)
 }
 
-pub struct LucentEditor {
-    params: Arc<crate::LucentParams>,
-    shared_state: Arc<SharedState>,
-    ui_state: LucentUiState,
-    instance_key: usize,
+// ─── Telemetry (tick-frequency display state) ───────────────────────────────
+
+#[derive(Clone)]
+struct Telemetry {
+    own_spectrum: Vec<f32>,
+    relays: Vec<RelayData>,
     resonance_cache_own: Vec<(usize, f32)>,
     resonance_cache_relay: Vec<(usize, f32, Vec<String>)>,
     masking_cache: Vec<f32>,
-    masking_top: Vec<(usize, f32, Vec<String>)>,
-    /// Display-side hold buffer: collects the strongest resonance/masking
-    /// readings seen over `DISPLAY_HOLD_MS`, so the RESONANCE/MASKING text
-    /// panels refresh a few times a second instead of every redraw (which
-    /// made the numbers unreadable — they were repainting at display
-    /// refresh rate, ~60Hz+).
-    resonance_acc_own: HashMap<usize, f32>,
-    resonance_acc_relay: HashMap<usize, (f32, Vec<String>)>,
-    masking_acc: HashMap<usize, (f32, Vec<String>)>,
     resonance_text: String,
     masking_text: String,
-    display_window_start: Instant,
     show_resonance: bool,
     show_masking: bool,
     snap_blink: u32,
-    vault_path: Option<String>,
-    show_setup: bool,
-    vault_path_input: String,
-    output_peak: f32,
-    peak_hold: f32,
     peak_l: f32,
     peak_r: f32,
     peak_hold_l: f32,
     peak_hold_r: f32,
+    peak_hold: f32,
     phase_correlation: f32,
     balance: f32,
 }
 
-impl IcedPlugin<crate::LucentParams> for LucentEditor {
-    type Message = LucentMsg;
+/// Bookkeeping that must persist across ticks but never touches the UI
+/// directly - the display-hold accumulator windows and the relay EMA state
+/// (`LucentUiState::sync_relays` needs the previous tick's list to smooth
+/// against).
+struct TickAccum {
+    ui: LucentUiState,
+    resonance_acc_own: HashMap<usize, f32>,
+    resonance_acc_relay: HashMap<usize, (f32, Vec<String>)>,
+    masking_acc: HashMap<usize, (f32, Vec<String>)>,
+    display_window_start: Instant,
+    vault_path: Option<String>,
+}
 
-    fn new(params: Arc<crate::LucentParams>) -> Self {
-        let config = shared_analysis::load_config("Lucent");
-        let mut ui_state = LucentUiState::new();
-        if let Ok(name) = params.name.read() {
-            if !name.is_empty() { ui_state.name = name.clone(); }
+const DISPLAY_HOLD_MS: u128 = 500;
+
+#[allow(clippy::too_many_arguments)]
+fn tick(
+    shared: &SharedState,
+    params: &LucentParams,
+    lens: &ParamLens<LucentParams>,
+    instance_key: usize,
+    accum: &Rc<RefCell<TickAccum>>,
+    telemetry: Signal<Telemetry>,
+) {
+    let mode = lens.get_plain(LucentParamsParamId::AnalyzeMode) as i64;
+    let mut acc = accum.borrow_mut();
+
+    // Non-blocking, matching `process()`'s own `try_lock()` pattern on these
+    // same mutexes (see lib.rs) - the GUI timer must never block waiting on
+    // the realtime audio thread. On contention, keep last tick's value
+    // (`acc.ui.own_spectrum` / `t.masking_cache` below) rather than flashing
+    // to empty; a skipped tick at 33ms is invisible, a blocked GUI thread is not.
+    let spectrum = shared.spectrum_avg.try_lock().ok().map(|s| s.to_vec());
+    let lists = read_resonance(instance_key);
+    let masking_cache = shared.masking_map.try_lock().ok().map(|m| m.to_vec());
+    let masking_top = read_masking(instance_key);
+
+    for &(bin, score) in &lists.own {
+        acc.resonance_acc_own
+            .entry(bin)
+            .and_modify(|s| if score > *s { *s = score })
+            .or_insert(score);
+    }
+    for (bin, score, names) in &lists.relay {
+        acc.resonance_acc_relay
+            .entry(*bin)
+            .and_modify(|(s, n)| if *score > *s { *s = *score; *n = names.clone(); })
+            .or_insert((*score, names.clone()));
+    }
+    for (bin, db, names) in &masking_top {
+        acc.masking_acc
+            .entry(*bin)
+            .and_modify(|(d, n)| if *db > *d { *d = *db; *n = names.clone(); })
+            .or_insert((*db, names.clone()));
+    }
+
+    let sample_rate = shared.sample_rate.load(Ordering::Relaxed).max(1.0);
+    let refresh_text = acc.display_window_start.elapsed().as_millis() >= DISPLAY_HOLD_MS;
+    let new_texts = if refresh_text {
+        let rt = format_resonance_text(&acc.resonance_acc_own, &acc.resonance_acc_relay, sample_rate);
+        let mt = format_masking_text(mode, &acc.masking_acc, acc.ui.relays.is_empty(), sample_rate);
+        acc.resonance_acc_own.clear();
+        acc.resonance_acc_relay.clear();
+        acc.masking_acc.clear();
+        acc.display_window_start = Instant::now();
+        Some((rt, mt))
+    } else {
+        None
+    };
+
+    if let Some(spectrum) = spectrum {
+        acc.ui.own_spectrum = spectrum;
+    }
+    if mode != 0 {
+        let now_ms = shared_analysis::shm::now_ms();
+        let slot = shared.shm_slot.load(Ordering::Acquire);
+        let raw = params.name.try_read().map(|n| n.clone()).unwrap_or_default();
+        let my_name = if slot >= 0 { shared_analysis::shm::display_name(&raw, slot as u8) } else { raw };
+        let feeds = shared_analysis::relay_hub()
+            .map(|hub| hub.read_active(&my_name, now_ms))
+            .unwrap_or_default();
+        acc.ui.sync_relays(feeds);
+    } else {
+        acc.ui.clear_relays();
+    }
+
+    let peak_l = shared.output_peak_l.load(Ordering::Relaxed);
+    let peak_r = shared.output_peak_r.load(Ordering::Relaxed);
+    let peak_hold_l = shared.peak_hold_l.load(Ordering::Relaxed);
+    let peak_hold_r = shared.peak_hold_r.load(Ordering::Relaxed);
+    let peak_hold = shared.peak_hold.load(Ordering::Relaxed);
+    let phase_correlation = shared.phase_correlation.load(Ordering::Relaxed);
+    let balance = shared.balance.load(Ordering::Relaxed);
+    let snap_now = shared.snap_active.load(Ordering::Relaxed);
+
+    telemetry.update(|t| {
+        t.own_spectrum = acc.ui.own_spectrum.clone();
+        t.relays = acc.ui.relays.clone();
+        t.resonance_cache_own = lists.own;
+        t.resonance_cache_relay = lists.relay;
+        if let Some(masking_cache) = masking_cache {
+            t.masking_cache = masking_cache;
         }
-        let shared_state = params.shared.clone();
-        let instance_key = Arc::as_ptr(&params) as usize;
-        Self {
-            params,
-            shared_state,
-            ui_state,
-            instance_key,
-            resonance_cache_own: Vec::new(),
-            resonance_cache_relay: Vec::new(),
-            masking_cache: Vec::new(),
-            masking_top: Vec::new(),
-            resonance_acc_own: HashMap::new(),
-            resonance_acc_relay: HashMap::new(),
-            masking_acc: HashMap::new(),
-            resonance_text: "No resonances detected".to_string(),
-            masking_text: "No masking detected".to_string(),
-            display_window_start: Instant::now(),
-            show_resonance: false,
-            show_masking: false,
-            snap_blink: 0,
-            vault_path: config.vault_path.clone(),
-            show_setup: false,
-            vault_path_input: config.vault_path.unwrap_or_default(),
-            output_peak: -90.0,
-            peak_hold: -90.0,
-            peak_l: -90.0,
-            peak_r: -90.0,
-            peak_hold_l: -90.0,
-            peak_hold_r: -90.0,
-            phase_correlation: 1.0,
-            balance: 0.0,
+        if let Some((rt, mt)) = new_texts {
+            t.resonance_text = rt;
+            t.masking_text = mt;
         }
-    }
+        t.peak_l = peak_l;
+        t.peak_r = peak_r;
+        t.peak_hold_l = peak_hold_l;
+        t.peak_hold_r = peak_hold_r;
+        t.peak_hold = peak_hold;
+        t.phase_correlation = phase_correlation;
+        t.balance = balance;
 
-    fn subscription(&self) -> Subscription<Message<LucentMsg>> {
-        truce_iced::iced::event::listen_raw(|event, _status, _window| {
-            use truce_iced::iced::{Event, window::Event as WinEvent};
-            match event {
-                Event::Window(WinEvent::RedrawRequested(_)) => {
-                    Some(Message::Plugin(LucentMsg::Tick))
+        if snap_now {
+            t.snap_blink = 72;
+        } else if t.snap_blink == 1
+            && let Some(ref vp) = acc.vault_path
+                && !vp.is_empty() {
+                    let stereo = shared.snap_stereo_snap.try_lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
+                    let mono = shared.snap_mono_snap.try_lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
+                    let delta = shared.snap_delta_snap.try_lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
+                    let sr = shared.sample_rate.load(Ordering::Relaxed);
+                    let md = snap_markdown(&stereo, &mono, &delta, &acc.ui.relays, phase_correlation, peak_l, peak_r, sr);
+                    let fname = snap_filename(vp);
+                    let _ = std::fs::write(std::path::Path::new(vp).join(&fname), &md);
                 }
-                _ => None,
-            }
-        })
-    }
-
-    /// Streaming editor: spectrum, masking, resonance, relay feeds, and
-    /// meters update continuously from the audio thread via lock-free
-    /// atomics and shared state. The idle gate would otherwise skip
-    /// frames when no UI input or param change fires.
-    fn needs_redraw(&self) -> bool {
-        true
-    }
-
-    fn update(
-        &mut self,
-        message: Message<LucentMsg>,
-        params: &ParamCache<crate::LucentParams>,
-        ctx: &PluginContext<crate::LucentParams>,
-    ) -> truce_iced::iced::Task<Message<LucentMsg>> {
-        let Message::Plugin(msg) = message else { return truce_iced::iced::Task::none(); };
-
-        match msg {
-            LucentMsg::Tick => {
-                if let Ok(spectrum) = self.shared_state.spectrum_avg.lock() {
-                    self.ui_state.own_spectrum = spectrum.to_vec();
-                }
-                let lists = read_resonance(self.instance_key);
-                self.resonance_cache_own = lists.own;
-                self.resonance_cache_relay = lists.relay;
-                if let Ok(mm) = self.shared_state.masking_map.lock() {
-                    self.masking_cache = mm.to_vec();
-                }
-                self.masking_top = read_masking(self.instance_key);
-                let mode = params.get_plain(LucentParamsParamId::AnalyzeMode) as i64;
-
-                for &(bin, score) in &self.resonance_cache_own {
-                    self.resonance_acc_own.entry(bin)
-                        .and_modify(|s| if score > *s { *s = score })
-                        .or_insert(score);
-                }
-                for (bin, score, names) in &self.resonance_cache_relay {
-                    self.resonance_acc_relay.entry(*bin)
-                        .and_modify(|(s, n)| if *score > *s { *s = *score; *n = names.clone(); })
-                        .or_insert((*score, names.clone()));
-                }
-                for (bin, db, names) in &self.masking_top {
-                    self.masking_acc.entry(*bin)
-                        .and_modify(|(d, n)| if *db > *d { *d = *db; *n = names.clone(); })
-                        .or_insert((*db, names.clone()));
-                }
-                const DISPLAY_HOLD_MS: u128 = 500;
-                if self.display_window_start.elapsed().as_millis() >= DISPLAY_HOLD_MS {
-                    self.resonance_text = self.format_resonance_text();
-                    self.masking_text = self.format_masking_text(mode);
-                    self.resonance_acc_own.clear();
-                    self.resonance_acc_relay.clear();
-                    self.masking_acc.clear();
-                    self.display_window_start = Instant::now();
-                }
-
-                if mode != 0 {
-                    let now_ms = shared_analysis::shm::now_ms();
-                    let slot = self.shared_state.shm_slot.load(Ordering::Acquire);
-                    let raw = self.params.name.try_read()
-                        .map(|n| n.clone())
-                        .unwrap_or_else(|_| self.ui_state.name.clone());
-                    let my_name = if slot >= 0 {
-                        shared_analysis::shm::display_name(&raw, slot as u8)
-                    } else {
-                        raw
-                    };
-                    let feeds = shared_analysis::relay_hub()
-                        .map(|hub| hub.read_active(&my_name, now_ms))
-                        .unwrap_or_default();
-                    self.ui_state.sync_relays(feeds);
-                } else {
-                    self.ui_state.clear_relays();
-                }
-                self.output_peak = self.shared_state.output_peak.load(Ordering::Relaxed);
-                self.peak_hold = self.shared_state.peak_hold.load(Ordering::Relaxed);
-                self.peak_l = self.shared_state.output_peak_l.load(Ordering::Relaxed);
-                self.peak_r = self.shared_state.output_peak_r.load(Ordering::Relaxed);
-                self.peak_hold_l = self.shared_state.peak_hold_l.load(Ordering::Relaxed);
-                self.peak_hold_r = self.shared_state.peak_hold_r.load(Ordering::Relaxed);
-                self.phase_correlation = self.shared_state.phase_correlation.load(Ordering::Relaxed);
-                self.balance = self.shared_state.balance.load(Ordering::Relaxed);
-                let snap_now = self.shared_state.snap_active.load(Ordering::Relaxed);
-                if snap_now { self.snap_blink = 72; }
-                else if self.snap_blink == 1 {
-                    // SNAP just completed — export to vault
-                    if let Some(ref vp) = self.vault_path {
-                        if !vp.is_empty() {
-                            let stereo = self.shared_state.snap_stereo_snap.lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
-                            let mono = self.shared_state.snap_mono_snap.lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
-                            let delta = self.shared_state.snap_delta_snap.lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
-                            let sr = self.shared_state.sample_rate.load(Ordering::Relaxed);
-                            let md = snap_markdown(&stereo, &mono, &delta, &self.ui_state.relays, self.phase_correlation, self.peak_l, self.peak_r, sr);
-                            let fname = snap_filename(vp);
-                            let _ = std::fs::write(std::path::Path::new(vp).join(&fname), &md);
-                        }
-                    }
-                }
-                if self.snap_blink > 0 { self.snap_blink -= 1; }
-            }
-            LucentMsg::RelayToggled(idx) => {
-                self.ui_state.toggle_relay(idx);
-            }
-            LucentMsg::SnapPressed => {
-                self.shared_state.snap_active.store(true, Ordering::Relaxed);
-                self.snap_blink = 72;
-            }
-            LucentMsg::CycleMode => {
-                let current = params.get_plain(LucentParamsParamId::AnalyzeMode) as i64;
-                let next: i64 = match current { 1 => 0, 0 => 2, _ => 1 };
-                ctx.begin_edit(LucentParamsParamId::AnalyzeMode);
-                ctx.set_param(LucentParamsParamId::AnalyzeMode, next as f64 / 2.0);
-                ctx.end_edit(LucentParamsParamId::AnalyzeMode);
-            }
-            LucentMsg::LucentNameChanged(name) => {
-                if let Ok(mut n) = self.params.name.write() { *n = name.clone(); }
-                self.ui_state.name = name;
-            }
-            LucentMsg::ResetPeak => {
-                self.shared_state.reset_peak.store(true, Ordering::Relaxed);
-                self.shared_state.peak_hold.store(-100.0, Ordering::Relaxed);
-                self.shared_state.peak_hold_l.store(-100.0, Ordering::Relaxed);
-                self.shared_state.peak_hold_r.store(-100.0, Ordering::Relaxed);
-            }
-            LucentMsg::SetupToggled => {
-                self.show_setup = !self.show_setup;
-                if self.show_setup {
-                    self.vault_path_input = self.vault_path.clone().unwrap_or_default();
-                }
-            }
-            LucentMsg::VaultPathChanged(path) => {
-                self.vault_path_input = path;
-            }
-            LucentMsg::SaveVaultPath => {
-                let new_path = if self.vault_path_input.trim().is_empty() {
-                    None
-                } else {
-                    Some(self.vault_path_input.trim().to_string())
-                };
-                self.vault_path = new_path.clone();
-                let config = shared_analysis::PluginConfig { vault_path: new_path, ..Default::default() };
-                let _ = shared_analysis::save_config("Lucent", &config);
-                self.show_setup = false;
-            }
-            LucentMsg::ResonanceToggled => {
-                self.show_resonance = !self.show_resonance;
-            }
-            LucentMsg::MaskingToggled => {
-                self.show_masking = !self.show_masking;
-            }
-            LucentMsg::ResetAll => {
-                self.shared_state.reset_peak.store(true, Ordering::Relaxed);
-                self.shared_state.peak_hold.store(-100.0, Ordering::Relaxed);
-                self.shared_state.peak_hold_l.store(-100.0, Ordering::Relaxed);
-                self.shared_state.peak_hold_r.store(-100.0, Ordering::Relaxed);
-            }
-            LucentMsg::SensitivityGesture(g) => {
-                let id = LucentParamsParamId::Sensitivity;
-                match g {
-                    Gesture::Start => ctx.begin_edit(id),
-                    Gesture::Change(v) => {
-                        let norm = (v / 100.0).clamp(0.0, 1.0);
-                        ctx.set_param(id, norm as f64);
-                    }
-                    Gesture::End => ctx.end_edit(id),
-                }
-            }
+        if t.snap_blink > 0 {
+            t.snap_blink -= 1;
         }
+    });
+}
 
-        truce_iced::iced::Task::none()
+fn format_resonance_text(
+    acc_own: &HashMap<usize, f32>,
+    acc_relay: &HashMap<usize, (f32, Vec<String>)>,
+    sample_rate: f32,
+) -> String {
+    if acc_own.is_empty() && acc_relay.is_empty() {
+        return "No resonances detected".to_string();
     }
+    let fft_size = (SPECTRUM_BINS * 2) as f32;
 
-    fn view<'a>(
-        &'a self,
-        params: &'a ParamCache<crate::LucentParams>,
-    ) -> Element<'a, Message<LucentMsg>> {
-        // ── HEADER ──────────────────────────────────────────────────────────────
-        let header = container(
-            row![
-                container(header_brand("Lucent", VERSION)).width(Length::Shrink),
-                Space::new().width(Length::Fill),
-                container(
-                    text_input("Name", &self.ui_state.name)
-                        .on_input(|s| Message::Plugin(LucentMsg::LucentNameChanged(s)))
-                        .padding(4)
-                        .size(11)
-                ).width(Length::Fixed(130.0)).center_y(Length::Fill),
-                Space::new().width(Length::Fill),
-                {
-                    let mode = params.get_plain(LucentParamsParamId::AnalyzeMode) as i64;
-                    let label = match mode { 0 => "STANDALONE", 2 => "RELAY", _ => "HYBRID" };
-                    container(
-                        row![
-                            button(
-                                Text::new(label).size(11).font(bold_font())
-                                    .width(Length::Fill).align_x(Alignment::Center)
-                            )
-                            .on_press(Message::Plugin(LucentMsg::CycleMode))
-                            .padding([5, 8])
-                            .width(Length::Fixed(110.0))
-                            .style(|_theme, status| {
-                                let bg = if status == button::Status::Hovered {
-                                    Color::from_rgb(0.25, 0.15, 0.05)
-                                } else {
-                                    Color::from_rgb(0.15, 0.1, 0.05)
-                                };
-                                button::Style {
-                                    background: Some(bg.into()),
-                                    text_color: Color::from_rgb(1.0, 0.55, 0.1),
-                                    border: Border { radius: 2.0.into(), ..Default::default() },
-                                    ..Default::default()
-                                }
-                            }),
-                            output_tools_strip(Message::Plugin(LucentMsg::ResetAll)),
-                        ].spacing(6).align_y(Alignment::Center)
-                    )
-                },
-            ]
-            .align_y(Alignment::Center)
-            .spacing(8)
-            .padding(8)
-        )
-        .width(Length::Fill)
-        .height(Length::Fixed(50.0))
-        .style(|_theme| container::Style {
-            background: Some(Color::from_rgb(0.08, 0.08, 0.08).into()),
-            border: Border { color: Color::from_rgb(0.15, 0.15, 0.15), width: 1.0, ..Default::default() },
-            ..Default::default()
-        });
+    let mut own: Vec<(usize, f32)> = acc_own.iter().map(|(&bin, &score)| (bin, score)).collect();
+    own.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        // ── LEFT SIDEBAR ─────────────────────────────────────────────────────────
-        let snap_blink = self.snap_blink > 0;
-        let snap_label = if snap_blink { "ANALYZING..." } else { "SNAP" };
+    let mut relay: Vec<(usize, f32, Vec<String>)> = acc_relay
+        .iter()
+        .map(|(&bin, (score, names))| (bin, *score, names.clone()))
+        .collect();
+    relay.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        let snap_btn_style = move |_theme: &truce_iced::iced::Theme, status: button::Status| {
-            let (bg, border_col) = if snap_blink {
-                (Color::from_rgb(0.55, 0.38, 0.05), Color::from_rgb(0.8, 0.55, 0.1))
-            } else if status == button::Status::Hovered {
-                (Color::from_rgb(0.25, 0.25, 0.25), Color::from_rgb(0.3, 0.3, 0.3))
-            } else {
-                (Color::from_rgb(0.18, 0.18, 0.18), Color::from_rgb(0.3, 0.3, 0.3))
-            };
-            button::Style {
-                background: Some(bg.into()),
-                text_color: if snap_blink { Color::from_rgb(1.0, 0.85, 0.3) } else { Color::from_rgb(1.0, 0.55, 0.1) },
-                border: Border { color: border_col, width: 1.0, radius: 3.0.into() },
-                ..Default::default()
-            }
-        };
-        let vault_btn_style = |_theme: &truce_iced::iced::Theme, status: button::Status| {
-            let bg = if status == button::Status::Hovered {
-                Color::from_rgb(0.25, 0.25, 0.25)
-            } else {
-                Color::from_rgb(0.18, 0.18, 0.18)
-            };
-            button::Style {
-                background: Some(bg.into()),
-                text_color: Color::WHITE,
-                border: Border { color: Color::from_rgb(0.3, 0.3, 0.3), width: 1.0, radius: 3.0.into() },
-                ..Default::default()
-            }
-        };
-        let btn_h = Length::Fixed(34.0);
-        let btn_pad = Padding { top: 7.0, bottom: 1.0, left: 0.0, right: 0.0 };
-
-        let sidebar: Element<Message<LucentMsg>> = container(
-            column![
-                Text::new("LX AUDIOLABS").font(bold_font()).size(14).color(Color::WHITE),
-                button(
-                    Text::new(snap_label).font(bold_font()).size(12)
-                        .width(Length::Fill).align_x(Alignment::Center)
-                )
-                .on_press(Message::Plugin(LucentMsg::SnapPressed))
-                .style(snap_btn_style).width(Length::Fill).height(btn_h).padding(btn_pad),
-                button(
-                    Text::new("VAULT SETUP").font(bold_font()).size(12)
-                        .width(Length::Fill).align_x(Alignment::Center)
-                )
-                .on_press(Message::Plugin(LucentMsg::SetupToggled))
-                .style(vault_btn_style).width(Length::Fill).height(btn_h).padding(btn_pad),
-            ]
-            .spacing(10)
-        )
-        .width(Length::Fixed(180.0))
-        .height(Length::Fill)
-        .padding(10)
-        .style(|_theme| container::Style {
-            background: Some(Color::from_rgb(0.09, 0.09, 0.09).into()),
-            border: Border { color: Color::from_rgb(0.15, 0.15, 0.15), width: 1.0, ..Default::default() },
-            ..Default::default()
-        })
-        .into();
-
-        // ── RIGHT SIDEBAR ─────────────────────────────────────────────────────────
-        let right_title = container(
-            Text::new("OUTPUT LEVEL").size(12).font(bold_font())
-                .color(Color::from_rgb(0.75, 0.75, 0.75))
-        )
-        .width(Length::Fill)
-        .padding(Padding { top: 2.0, right: 0.0, bottom: 4.0, left: 0.0 });
-
-        let scope_write_pos = self.shared_state.scope_write_pos.load(Ordering::Acquire);
-        let goniometer = canvas(GoniometerCanvas {
-            samples: self.shared_state.scope_samples.clone(),
-            write_pos: scope_write_pos,
-            correlation: self.phase_correlation,
-        })
-        .width(Length::Fill)
-        .height(Length::Fixed(139.0));
-
-        let output_block = output_level_block(
-            self.peak_l, self.peak_r, self.peak_hold_l, self.peak_hold_r,
-            self.peak_hold, Message::Plugin(LucentMsg::ResetPeak),
-            self.balance,
-            Length::Fill,
-        );
-
-        let right_sidebar = container(
-            column![
-                right_title,
-                output_block,
-                Text::new("GONIOMETER").size(10).font(bold_font())
-                    .color(Color::from_rgb(0.6, 0.6, 0.6)),
-                container(goniometer).width(Length::Fill).height(Length::Fixed(139.0)),
-            ]
-            .spacing(6)
-        )
-        .width(Length::Fixed(155.0))
-        .height(Length::Fill)
-        .padding(8)
-        .style(|_theme| container::Style {
-            background: Some(Color::from_rgb(0.1, 0.1, 0.1).into()),
-            border: Border { color: Color::from_rgb(0.18, 0.18, 0.18), width: 1.0, ..Default::default() },
-            ..Default::default()
-        });
-
-        // ── CENTER ────────────────────────────────────────────────────────────────
-        let mode = params.get_plain(LucentParamsParamId::AnalyzeMode) as i64;
-        let center: Element<Message<LucentMsg>> = if self.show_setup {
-            let setup_box = vault_setup_box(
-                "Lucent",
-                &self.vault_path_input,
-                |s| Message::Plugin(LucentMsg::VaultPathChanged(s)),
-                Message::Plugin(LucentMsg::SaveVaultPath),
-                Message::Plugin(LucentMsg::SetupToggled),
-            );
-            container(setup_box)
-                .width(Length::Fill).height(Length::Fill)
-                .center_x(Length::Fill).center_y(Length::Fill)
-                .style(|_theme| container::Style {
-                    background: Some(Color::from_rgb(0.08, 0.08, 0.08).into()),
-                    ..Default::default()
-                })
-                .into()
-        } else {
-            let resonance_text = self.resonance_summary();
-            let masking_text = self.masking_summary(mode);
-            let show_res = self.show_resonance;
-            let show_mask = self.show_masking;
-
-            let analyzer_row = container(
-                row![
-                    container(
-                        row![
-                            column![
-                                Text::new("RESONANCE").size(10).font(bold_font())
-                                    .color(Color::from_rgb(1.0, 0.55, 0.15)),
-                                Text::new(resonance_text).size(10)
-                                    .color(Color::from_rgb(0.8, 0.8, 0.8)),
-                            ].spacing(2).width(Length::Fill),
-                            toggle_button(
-                                if show_res { "ON" } else { "OFF" },
-                                show_res,
-                                Message::Plugin(LucentMsg::ResonanceToggled),
-                            ),
-                        // Start, not Center: Center re-anchors the button to
-                        // the text column's midpoint, which moves up/down as
-                        // resonance_text grows from 1 to 3 lines. Start pins
-                        // it level with the title, independent of line count.
-                        ].spacing(4).align_y(Alignment::Start)
-                    )
-                    .width(Length::FillPortion(1)).height(Length::Fixed(88.0))
-                    .padding(6).style(|_theme| panel_bg()),
-
-                    container(
-                        row![
-                            column![
-                                Text::new("MASKING").size(10).font(bold_font())
-                                    .color(Color::from_rgb(0.95, 0.22, 0.18)),
-                                Text::new(masking_text).size(10)
-                                    .color(Color::from_rgb(0.8, 0.8, 0.8)),
-                            ].spacing(2).width(Length::Fill),
-                            if mode == 0 {
-                                Element::from(
-                                    button(Text::new("OFF").size(12).font(bold_font()))
-                                        .padding([5, 10])
-                                        .style(|_theme, _status| button::Style {
-                                            background: Some(Color::from_rgb(0.1, 0.1, 0.1).into()),
-                                            text_color: Color::from_rgb(0.35, 0.35, 0.35),
-                                            border: Border { radius: 2.0.into(), ..Default::default() },
-                                            ..Default::default()
-                                        })
-                                )
-                            } else {
-                                toggle_button(
-                                    if show_mask { "ON" } else { "OFF" },
-                                    show_mask,
-                                    Message::Plugin(LucentMsg::MaskingToggled),
-                                )
-                            },
-                        ].spacing(4).align_y(Alignment::Start)
-                    )
-                    .width(Length::FillPortion(1)).height(Length::Fixed(88.0))
-                    .padding(6).style(|_theme| panel_bg()),
-
-                    container(
-                        knob_gesture(
-                            "SENSITIVITY",
-                            self.params.sensitivity.raw_target() as f32,
-                            0.0, 100.0, 50.0,
-                            |g| Message::Plugin(LucentMsg::SensitivityGesture(g)),
-                        )
-                    )
-                    // `.center_x(Length)`/`.center_y(Length)` set width/height
-                    // AND center in one call — chaining a separate `.width()`
-                    // before them got clobbered by the Length::Fill here,
-                    // which is what blew this box up to fill the row.
-                    .center_x(Length::Fixed(70.0)).center_y(Length::Fixed(88.0))
-                    .padding(6).style(|_theme| panel_bg()),
-                ]
-                .spacing(6)
-            )
-            .width(Length::Fill);
-
-            container(
-                column![
-                    self.render_main_panel(mode),
-                    analyzer_row,
-                ]
-                .spacing(6)
-            )
-            .width(Length::Fill).height(Length::Fill).padding(6)
-            .style(|_theme| container::Style {
-                background: Some(Color::from_rgb(0.08, 0.08, 0.08).into()),
-                ..Default::default()
+    let fmt = |peaks: &[(usize, f32)]| -> String {
+        peaks
+            .iter()
+            .take(3)
+            .map(|(bin, score)| {
+                let freq = *bin as f32 * sample_rate / fft_size;
+                format!("{:.0} Hz {:.1}", freq, score)
             })
-            .into()
-        };
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let fmt_relay = |peaks: &[(usize, f32, Vec<String>)]| -> String {
+        peaks
+            .iter()
+            .take(3)
+            .map(|(bin, score, contributors)| {
+                let freq = *bin as f32 * sample_rate / fft_size;
+                if contributors.is_empty() {
+                    format!("{:.0} Hz {:.1}", freq, score)
+                } else {
+                    format!("{:.0} Hz {:.1} ({})", freq, score, contributors.join(", "))
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut lines = Vec::new();
+    if !own.is_empty() {
+        lines.push(format!("Own: {}", fmt(&own)));
+    }
+    if !relay.is_empty() {
+        lines.push(format!("Group: {}", fmt_relay(&relay)));
+    }
+    lines.join("\n")
+}
 
-        let main_body = row![
-            sidebar,
-            container(center).width(Length::Fill).height(Length::Fill),
-            right_sidebar,
-        ]
-        .height(Length::Fill);
-
-        container(
-            column![header, main_body]
-                .width(Length::Fill).height(Length::Fill)
-        )
-        .width(Length::Fill).height(Length::Fill)
-        .style(|_theme| container::Style {
-            background: Some(Color::from_rgb(0.06, 0.06, 0.06).into()),
-            ..Default::default()
+fn format_masking_text(
+    mode: i64,
+    acc: &HashMap<usize, (f32, Vec<String>)>,
+    relays_empty: bool,
+    sample_rate: f32,
+) -> String {
+    if mode == 0 {
+        return "Standalone — no masking".to_string();
+    }
+    if acc.is_empty() || relays_empty {
+        return "No masking detected".to_string();
+    }
+    let fft_size = (SPECTRUM_BINS * 2) as f32;
+    let mut peaks: Vec<(usize, f32, Vec<String>)> =
+        acc.iter().map(|(&bin, (db, names))| (bin, *db, names.clone())).collect();
+    peaks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    peaks.truncate(3);
+    peaks
+        .iter()
+        .map(|(bin, db, contributors)| {
+            let freq = *bin as f32 * sample_rate / fft_size;
+            if contributors.is_empty() {
+                format!("{:.0} Hz  {:.1} dB", freq, db)
+            } else {
+                format!("{:.0} Hz  {:.1} dB ({})", freq, db, contributors.join("-"))
+            }
         })
-        .into()
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+// ─── Ticker (drives `tick()` without vizia_core's buggy timer API) ──────────
+
+/// Zero-visual-footprint View whose only job is calling `tick()` roughly
+/// every 33ms, throttled internally via `last_tick`, and keeping itself
+/// redrawing forever via `cx.needs_redraw()`. See the comment at the call
+/// site in `build()` for why this replaces `cx.add_timer`/`cx.start_timer`.
+struct Ticker {
+    shared: Arc<SharedState>,
+    params: Arc<LucentParams>,
+    lens: ParamLens<LucentParams>,
+    instance_key: usize,
+    accum: Rc<RefCell<TickAccum>>,
+    telemetry: Signal<Telemetry>,
+    last_tick: RefCell<Instant>,
+}
+
+impl Ticker {
+    fn new(
+        cx: &mut Context,
+        shared: Arc<SharedState>,
+        params: Arc<LucentParams>,
+        lens: ParamLens<LucentParams>,
+        instance_key: usize,
+        accum: Rc<RefCell<TickAccum>>,
+        telemetry: Signal<Telemetry>,
+    ) -> Handle<'_, Self> {
+        Self { shared, params, lens, instance_key, accum, telemetry, last_tick: RefCell::new(Instant::now()) }
+            .build(cx, |_| {})
     }
 }
 
-impl LucentEditor {
-    fn render_main_panel(&self, mode: i64) -> Element<'_, Message<LucentMsg>> {
-        let curves = if self.ui_state.relays.is_empty() || mode == 0 {
+const TICK_INTERVAL: Duration = Duration::from_millis(33);
+
+impl View for Ticker {
+    fn element(&self) -> Option<&'static str> {
+        Some("ticker")
+    }
+
+    fn draw(&self, cx: &mut DrawContext, _canvas: &vg::Canvas) {
+        let now = Instant::now();
+        let due = {
+            let mut last = self.last_tick.borrow_mut();
+            if now.duration_since(*last) >= TICK_INTERVAL {
+                *last = now;
+                true
+            } else {
+                false
+            }
+        };
+        if due {
+            tick(&self.shared, &self.params, &self.lens, self.instance_key, &self.accum, self.telemetry);
+        }
+        cx.needs_redraw();
+    }
+}
+
+// ─── UI ──────────────────────────────────────────────────────────────────────
+
+pub fn build(cx: &mut Context, lens: ParamLens<LucentParams>, shared: Arc<SharedState>, params: Arc<LucentParams>) {
+    let instance_key = Arc::as_ptr(&params) as usize;
+    let config = shared_analysis::load_config("Lucent");
+
+    let mut initial_name = "Lucent".to_string();
+    if let Ok(name) = params.name.read()
+        && !name.is_empty() {
+            initial_name = name.clone();
+        }
+
+    let telemetry = Signal::new(Telemetry {
+        own_spectrum: Vec::new(),
+        relays: Vec::new(),
+        resonance_cache_own: Vec::new(),
+        resonance_cache_relay: Vec::new(),
+        masking_cache: Vec::new(),
+        resonance_text: "No resonances detected".to_string(),
+        masking_text: "No masking detected".to_string(),
+        show_resonance: false,
+        show_masking: false,
+        snap_blink: 0,
+        peak_l: -90.0,
+        peak_r: -90.0,
+        peak_hold_l: -90.0,
+        peak_hold_r: -90.0,
+        peak_hold: -90.0,
+        phase_correlation: 1.0,
+        balance: 0.0,
+    });
+    let setup_visible = Signal::new(false);
+    let vault_path_input = Signal::new(config.vault_path.clone().unwrap_or_default());
+    let name_signal = Signal::new(initial_name);
+    let sensitivity_display = Signal::new(lens.get_plain(LucentParamsParamId::Sensitivity));
+
+    let accum = Rc::new(RefCell::new(TickAccum {
+        ui: LucentUiState::new(),
+        resonance_acc_own: HashMap::new(),
+        resonance_acc_relay: HashMap::new(),
+        masking_acc: HashMap::new(),
+        display_window_start: Instant::now(),
+        vault_path: config.vault_path,
+    }));
+
+    // Not using cx.add_timer()/cx.start_timer() here: vizia_core 0.4.0's
+    // Context::modify_timer has a real infinite-loop bug (peeks the
+    // running_timers BinaryHeap without popping on an id mismatch, spins
+    // forever if the target timer isn't at the heap's top - see CLAP-vault
+    // features/2026-07-04-truce-2.0-upgrade-plan.md HANDOFF, found via
+    // WinDbg). truce-vizia's own editor.rs starts a second, internal
+    // meter-refresh timer right after this setup closure returns, so any
+    // timer we start here collides with theirs in that heap and hangs the
+    // whole host on open. Ticker below drives the same 33ms cadence via
+    // draw()-triggered needs_redraw() instead - the pattern our earlier
+    // prototypes (prototypes/lucent-vizia, prototypes/truce-vizia-spike)
+    // already used, no add_timer/start_timer call at all.
+    Ticker::new(cx, shared.clone(), params.clone(), lens.clone(), instance_key, accum.clone(), telemetry)
+        .width(Pixels(1.0))
+        .height(Pixels(1.0));
+
+    // ── HEADER ──────────────────────────────────────────────────────────────
+    let shared_header = shared.clone();
+    let lens_header = lens.clone();
+    HStack::new(cx, move |cx| {
+        let shared = shared_header;
+        let lens = lens_header;
+        HStack::new(cx, |cx| {
+            Label::new(cx, "LX").font_size(20.0).color(rgb(1.0, 0.45, 0.1));
+            Label::new(cx, "AUDIOLABS").font_size(20.0).color(Color::white());
+        })
+        .width(Auto)
+        .height(Auto)
+        .horizontal_gap(Pixels(6.0))
+        .alignment(Alignment::Center);
+
+        Element::new(cx).width(Stretch(1.0));
+
+        Textbox::new(cx, name_signal)
+            .on_edit(move |_cx, text| {
+                if let Ok(mut n) = params.name.write() {
+                    *n = text.clone();
+                }
+                name_signal.set(text);
+            })
+            .width(Pixels(130.0));
+
+        Element::new(cx).width(Stretch(1.0));
+
+        let shared_for_reset = shared.clone();
+        HStack::new(cx, move |cx| {
+            let mode_signal = lens.value_signal(LucentParamsParamId::AnalyzeMode);
+            let lens_for_mode = lens.clone();
+            Binding::new(cx, mode_signal, move |cx| {
+                let mode = lens_for_mode.get_plain(LucentParamsParamId::AnalyzeMode) as i64;
+                let label = match mode { 0 => "STANDALONE", 2 => "RELAY", _ => "HYBRID" };
+                let lens_press = lens_for_mode.clone();
+                shared_ui::toggle_button(cx, label, true, move |_cx| {
+                    let current = lens_press.get_plain(LucentParamsParamId::AnalyzeMode) as i64;
+                    let next: i64 = match current { 1 => 0, 0 => 2, _ => 1 };
+                    lens_press.automate(LucentParamsParamId::AnalyzeMode, next as f64 / 2.0);
+                    lens_press.value_signal(LucentParamsParamId::AnalyzeMode).set(next as f32 / 2.0);
+                })
+                .width(Pixels(110.0));
+            });
+
+            shared_ui::danger_button(cx, "RESET", move |_cx| {
+                shared_for_reset.reset_peak.store(true, Ordering::Relaxed);
+                shared_for_reset.peak_hold.store(-100.0, Ordering::Relaxed);
+                shared_for_reset.peak_hold_l.store(-100.0, Ordering::Relaxed);
+                shared_for_reset.peak_hold_r.store(-100.0, Ordering::Relaxed);
+            });
+        })
+        .width(Auto)
+        .height(Auto)
+        .horizontal_gap(Pixels(6.0))
+        .alignment(Alignment::Center);
+    })
+    .width(Stretch(1.0))
+    .height(Pixels(50.0))
+    .padding(Pixels(8.0))
+    .alignment(Alignment::Center)
+    .background_color(rgb(0.08, 0.08, 0.08));
+
+    HStack::new(cx, move |cx| {
+        // ── LEFT SIDEBAR ─────────────────────────────────────────────────
+        let shared_for_snap = shared.clone();
+        VStack::new(cx, move |cx| {
+            // Built once, not inside a `Binding` on `telemetry` - `tick()`
+            // calls `telemetry.update(...)` unconditionally every ~33ms
+            // (Vizia signals have no equality check, see
+            // vizia_reactive::state::State::update_value_local), so a
+            // `Binding` here would tear down and rebuild this Button every
+            // tick. A real click's MouseDown/MouseUp lands on two different
+            // rebuilt entity instances more often than not, and
+            // `WindowEvent::Press` only fires when both match the same
+            // `cx.current` - the click gets silently dropped. `Memo`
+            // instead subscribes to `telemetry` and updates the label/color
+            // properties on this same, persistent entity in place.
+            Button::new(cx, move |cx| {
+                Label::new(cx, Memo::new(move |_| {
+                    if telemetry.get().snap_blink > 0 { "ANALYZING..." } else { "SNAP" }
+                }))
+                .font_size(12.0)
+                .color(Memo::new(move |_| {
+                    if telemetry.get().snap_blink > 0 { rgb(1.0, 0.85, 0.3) } else { rgb(1.0, 0.55, 0.1) }
+                }))
+            })
+            .on_press(move |_cx| {
+                shared_for_snap.snap_active.store(true, Ordering::Relaxed);
+            })
+            .width(Stretch(1.0))
+            .height(Pixels(34.0))
+            .background_color(Memo::new(move |_| {
+                if telemetry.get().snap_blink > 0 { col(0.55, 0.38, 0.05, 1.0) } else { col(0.18, 0.18, 0.18, 1.0) }
+            }));
+
+            Button::new(cx, |cx| Label::new(cx, "VAULT SETUP").font_size(12.0))
+                .on_press(move |_cx| {
+                    let now = !setup_visible.get();
+                    setup_visible.set(now);
+                })
+                .width(Stretch(1.0))
+                .height(Pixels(34.0))
+                .background_color(col(0.18, 0.18, 0.18, 1.0));
+        })
+        .width(Pixels(180.0))
+        .height(Stretch(1.0))
+        .padding(Pixels(10.0))
+        .vertical_gap(Pixels(10.0))
+        .background_color(rgb(0.09, 0.09, 0.09));
+
+        // ── CENTER ──────────────────────────────────────────────────────
+        VStack::new(cx, move |cx| {
+            Binding::new(cx, setup_visible, move |cx| {
+                if setup_visible.get() {
+                    build_setup_form(cx, vault_path_input, setup_visible);
+                } else {
+                    // `build_main_panel` reads AnalyzeMode once at build time
+                    // (masking availability, spectrum source) - rebuild it
+                    // whenever the mode switches, or those go stale until the
+                    // editor is reopened.
+                    let mode_signal = lens.value_signal(LucentParamsParamId::AnalyzeMode);
+                    let lens = lens.clone();
+                    Binding::new(cx, mode_signal, move |cx| {
+                        build_main_panel(cx, telemetry, lens.clone(), sensitivity_display);
+                    });
+                }
+            });
+        })
+        .width(Stretch(1.0))
+        .height(Stretch(1.0))
+        .background_color(rgb(0.08, 0.08, 0.08));
+
+        // ── RIGHT SIDEBAR ─────────────────────────────────────────────────
+        let shared_for_gonio = shared.clone();
+        VStack::new(cx, move |cx| {
+            Label::new(cx, "OUTPUT LEVEL").font_size(12.0).color(col(0.75, 0.75, 0.75, 1.0));
+
+            Binding::new(cx, telemetry, move |cx| {
+                let t = telemetry.get();
+                VStack::new(cx, move |cx| {
+                    StereoMeterView::new(cx, t.peak_l, t.peak_r, t.peak_hold_l, t.peak_hold_r, t.balance)
+                        .width(Stretch(1.0))
+                        .height(Pixels(255.0));
+
+                    HStack::new(cx, move |cx| {
+                        Label::new(cx, fmt_db(t.peak_hold_l)).font_size(11.0).color(rgb(1.0, 0.45, 0.1));
+                        Element::new(cx).width(Stretch(1.0));
+                        Label::new(cx, "dB").font_size(10.0).color(col(0.8, 0.8, 0.8, 1.0));
+                        Element::new(cx).width(Stretch(1.0));
+                        Label::new(cx, fmt_db(t.peak_hold_r)).font_size(11.0).color(rgb(1.0, 0.45, 0.1));
+                    })
+                    .width(Stretch(1.0))
+                    .alignment(Alignment::Center);
+                })
+                .height(Auto)
+                .vertical_gap(Pixels(4.0));
+            });
+
+            // Spacer pushes the goniometer block to the bottom of the sidebar.
+            Element::new(cx).height(Stretch(1.0));
+
+            Label::new(cx, "GONIOMETER").font_size(10.0).color(col(0.6, 0.6, 0.6, 1.0));
+
+            Binding::new(cx, telemetry, move |cx| {
+                let t = telemetry.get();
+                GoniometerView::new(cx, shared_for_gonio.scope_samples.clone(), shared_for_gonio.scope_write_pos.load(Ordering::Acquire), t.phase_correlation)
+                    .width(Stretch(1.0))
+                    .height(Pixels(155.0));
+            });
+        })
+        .width(Pixels(155.0))
+        .height(Stretch(1.0))
+        .padding(Pixels(8.0))
+        .vertical_gap(Pixels(6.0))
+        .background_color(rgb(0.1, 0.1, 0.1));
+    })
+    .width(Stretch(1.0))
+    .height(Stretch(1.0));
+}
+
+fn build_setup_form(cx: &mut Context, vault_path_input: Signal<String>, setup_visible: Signal<bool>) {
+    VStack::new(cx, move |cx| {
+        Label::new(cx, "LX AUDIOLABS - SETUP").font_size(18.0).color(Color::white());
+        Label::new(cx, "Configure your Vault path for Lucent:").font_size(12.0).color(Color::white());
+        Textbox::new(cx, vault_path_input)
+            .placeholder("Enter Vault absolute path...")
+            .on_edit(move |_cx, text| vault_path_input.set(text))
+            .width(Stretch(1.0));
+        HStack::new(cx, move |cx| {
+            Button::new(cx, |cx| Label::new(cx, "SAVE"))
+                .on_press(move |_cx| {
+                    let path = vault_path_input.get();
+                    let new_path = if path.trim().is_empty() { None } else { Some(path.trim().to_string()) };
+                    let cfg = shared_analysis::PluginConfig { vault_path: new_path, ..Default::default() };
+                    let _ = shared_analysis::save_config("Lucent", &cfg);
+                    setup_visible.set(false);
+                })
+                .background_color(col(0.15, 0.15, 0.15, 1.0));
+            Button::new(cx, |cx| Label::new(cx, "CANCEL"))
+                .on_press(move |_cx| setup_visible.set(false))
+                .background_color(col(0.15, 0.15, 0.15, 1.0));
+        })
+        .horizontal_gap(Pixels(10.0))
+        .height(Auto);
+    })
+    .width(Pixels(600.0))
+    .height(Auto)
+    .padding(Pixels(20.0))
+    .vertical_gap(Pixels(15.0))
+    .background_color(col(0.15, 0.15, 0.15, 1.0))
+    .border_color(col(0.3, 0.3, 0.3, 1.0))
+    .border_width(Pixels(1.0))
+    .corner_radius(Pixels(4.0));
+}
+
+fn build_main_panel(
+    cx: &mut Context,
+    telemetry: Signal<Telemetry>,
+    lens: ParamLens<LucentParams>,
+    sensitivity_display: Signal<f32>,
+) {
+    let mode = lens.get_plain(LucentParamsParamId::AnalyzeMode) as i64;
+
+    // Relay bar + spectrum canvas — passive display, safe to rebuild every tick.
+    Binding::new(cx, telemetry, move |cx| {
+        let t = telemetry.get();
+
+        if mode != 0 {
+            let relays_for_bar = t.relays.clone();
+            HStack::new(cx, move |cx| {
+                Label::new(cx, "RELAYS").font_size(10.0).color(rgb(1.0, 0.55, 0.15));
+                if relays_for_bar.is_empty() {
+                    Label::new(cx, "— send a relay from another LX plugin —")
+                        .font_size(10.0)
+                        .color(col(0.4, 0.4, 0.4, 1.0));
+                } else {
+                    for (idx, relay) in relays_for_bar.iter().enumerate().take(6) {
+                        let active = relay.active;
+                        let name = relay.name.clone();
+                        let telemetry_press = telemetry;
+                        Button::new(cx, move |cx| Label::new(cx, name.clone()).font_size(11.0))
+                            .on_press(move |_cx| {
+                                telemetry_press.update(|t| {
+                                    if let Some(r) = t.relays.get_mut(idx) {
+                                        r.active = !r.active;
+                                    }
+                                });
+                            })
+                            .height(Pixels(shared_ui::BUTTON_HEIGHT))
+                            .background_color(if active { shared_ui::AMBER } else { shared_ui::IDLE_BG });
+                    }
+                }
+            })
+            .width(Stretch(1.0))
+            .height(Pixels(48.0))
+            .padding(Pixels(8.0))
+            .horizontal_gap(Pixels(6.0))
+            .alignment(Alignment::Left)
+            .background_color(rgb(0.09, 0.09, 0.09));
+        }
+
+        let curves = if t.relays.is_empty() || mode == 0 {
             vec![SpectrumCurve {
-                spectrum: self.ui_state.own_spectrum.clone(),
-                color: Color::from_rgb(0.1, 0.9, 0.7),
+                spectrum: t.own_spectrum.clone(),
+                color: vg_rgb(0.1, 0.9, 0.7),
                 fill_alpha: 0.18,
                 line_alpha: 0.85,
                 line_width: 1.2,
             }]
         } else {
             let relay_colors = [
-                Color::from_rgb(1.0, 0.6, 0.2),
-                Color::from_rgb(0.8, 0.3, 0.3),
-                Color::from_rgb(0.3, 0.8, 0.5),
-                Color::from_rgb(0.4, 0.6, 1.0),
-                Color::from_rgb(0.9, 0.7, 0.3),
-                Color::from_rgb(0.7, 0.4, 0.8),
+                vg_rgb(1.0, 0.6, 0.2), vg_rgb(0.8, 0.3, 0.3), vg_rgb(0.3, 0.8, 0.5),
+                vg_rgb(0.4, 0.6, 1.0), vg_rgb(0.9, 0.7, 0.3), vg_rgb(0.7, 0.4, 0.8),
             ];
-            let mut curves_vec = vec![SpectrumCurve {
-                spectrum: self.ui_state.own_spectrum.clone(),
-                color: Color::from_rgb(0.1, 0.9, 0.7),
+            let mut curves = vec![SpectrumCurve {
+                spectrum: t.own_spectrum.clone(),
+                color: vg_rgb(0.1, 0.9, 0.7),
                 fill_alpha: 0.12,
                 line_alpha: 0.6,
                 line_width: 1.0,
             }];
-            for (idx, relay) in self.ui_state.active_relays().iter().enumerate() {
-                curves_vec.push(SpectrumCurve {
+            for (idx, relay) in t.relays.iter().filter(|r| r.active).enumerate() {
+                curves.push(SpectrumCurve {
                     spectrum: relay.spectrum.clone(),
                     color: relay_colors[idx % relay_colors.len()],
                     fill_alpha: 0.08,
@@ -630,174 +699,130 @@ impl LucentEditor {
                     line_width: 0.8,
                 });
             }
-            curves_vec
+            curves
         };
-
-        let config = SpectrumConfig {
-            sample_rate: self.shared_state.sample_rate.load(Ordering::Relaxed),
-            ..Default::default()
-        };
-        let resonance_peaks = if self.show_resonance {
-            let mut v = self.resonance_cache_own.clone();
-            v.extend(self.resonance_cache_relay.iter().map(|(bin, score, _)| (*bin, *score)));
+        let resonance_peaks = if t.show_resonance {
+            let mut v = t.resonance_cache_own.clone();
+            v.extend(t.resonance_cache_relay.iter().map(|(bin, score, _)| (*bin, *score)));
             v
         } else {
             Vec::new()
         };
-        let masking = if self.show_masking && (!self.ui_state.relays.is_empty() || mode == 2) {
-            self.masking_cache.clone()
+        let masking = if t.show_masking && (!t.relays.is_empty() || mode == 2) {
+            t.masking_cache.clone()
         } else {
             Vec::new()
         };
 
-        let fft_canvas = canvas(SpectrumCanvas {
-            curves, config, eq_overlay: None, resonance_peaks, masking,
+        SpectrumView::new(cx, SpectrumView {
+            curves,
+            config: SpectrumConfig::default(),
+            resonance_peaks,
+            masking,
+            eq_curve: None,
         })
-        .width(Length::Fill)
-        .height(Length::Fill);
+        .width(Stretch(1.0))
+        .height(Stretch(1.0));
+    });
 
-        const MAX_VISIBLE_RELAYS: usize = 6;
-        let mut relay_row = row![
-            Text::new("RELAYS").size(10).font(bold_font()).color(Color::from_rgb(1.0, 0.55, 0.15)),
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center);
-
-        if self.ui_state.relays.is_empty() {
-            relay_row = relay_row.push(
-                Text::new("— send a relay from another LX plugin —")
-                    .size(10).font(bold_font()).color(Color::from_rgb(0.4, 0.4, 0.4)),
-            );
-        } else {
-            for (idx, relay) in self.ui_state.relays.iter().take(MAX_VISIBLE_RELAYS).enumerate() {
-                relay_row = relay_row.push(toggle_button(
-                    relay.name.as_str(),
-                    relay.active,
-                    Message::Plugin(LucentMsg::RelayToggled(idx)),
-                ));
-            }
-        }
-
-        let relay_bar = if mode == 0 {
-            container(row![]).width(Length::Fill).height(Length::Fixed(0.0))
-        } else {
-            container(relay_row)
-                .width(Length::Fill).height(Length::Fixed(48.0))
-                .padding(Padding::new(8.0))
-                .style(|_theme| container::Style {
-                    background: Some(Color::from_rgb(0.09, 0.09, 0.09).into()),
-                    border: Border {
-                        color: Color::from_rgb(0.15, 0.15, 0.15),
-                        width: 1.0,
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                })
-        };
-
-        column![
-            relay_bar,
-            container(fft_canvas).width(Length::Fill).height(Length::Fill),
-        ]
-        .spacing(6.0)
-        .into()
-    }
-
-    fn resonance_summary(&self) -> String {
-        self.resonance_text.clone()
-    }
-
-    fn masking_summary(&self, _mode: i64) -> String {
-        self.masking_text.clone()
-    }
-
-    /// Builds the RESONANCE panel text from the held accumulator (strongest
-    /// score seen per bin over the last display window), not the raw
-    /// per-tick snapshot — see `resonance_acc_own`/`resonance_acc_relay`.
-    fn format_resonance_text(&self) -> String {
-        if self.resonance_acc_own.is_empty() && self.resonance_acc_relay.is_empty() {
-            return "No resonances detected".to_string();
-        }
-        let sr = self.shared_state.sample_rate.load(Ordering::Relaxed).max(1.0);
-        let fft_size = (SPECTRUM_BINS * 2) as f32;
-
-        let mut own: Vec<(usize, f32)> = self.resonance_acc_own.iter()
-            .map(|(&bin, &score)| (bin, score)).collect();
-        own.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-        let mut relay: Vec<(usize, f32, Vec<String>)> = self.resonance_acc_relay.iter()
-            .map(|(&bin, (score, names))| (bin, *score, names.clone())).collect();
-        relay.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-        let fmt = |peaks: &[(usize, f32)]| -> String {
-            peaks.iter().take(3)
-                .map(|(bin, score)| {
-                    let freq = *bin as f32 * sr / fft_size;
-                    format!("{:.0} Hz {:.1}", freq, score)
-                })
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        let fmt_relay = |peaks: &[(usize, f32, Vec<String>)]| -> String {
-            peaks.iter().take(3)
-                .map(|(bin, score, contributors)| {
-                    let freq = *bin as f32 * sr / fft_size;
-                    if contributors.is_empty() {
-                        format!("{:.0} Hz {:.1}", freq, score)
-                    } else {
-                        format!("{:.0} Hz {:.1} ({})", freq, score, contributors.join(", "))
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        let mut lines = Vec::new();
-        if !own.is_empty() {
-            lines.push(format!("Own: {}", fmt(&own)));
-        }
-        if !relay.is_empty() {
-            lines.push(format!("Group: {}", fmt_relay(&relay)));
-        }
-        lines.join("\n")
-    }
-
-    /// Builds the MASKING panel text from the held accumulator (strongest
-    /// collision seen per bin over the last display window) — see
-    /// `masking_acc`.
-    fn format_masking_text(&self, mode: i64) -> String {
-        if mode == 0 { return "Standalone — no masking".to_string(); }
-        if self.masking_acc.is_empty() || self.ui_state.relays.is_empty() {
-            return "No masking detected".to_string();
-        }
-        let sr = self.shared_state.sample_rate.load(Ordering::Relaxed).max(1.0);
-        let fft_size = (SPECTRUM_BINS * 2) as f32;
-        let mut peaks: Vec<(usize, f32, Vec<String>)> = self.masking_acc.iter()
-            .map(|(&bin, (db, names))| (bin, *db, names.clone())).collect();
-        peaks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        peaks.truncate(3);
-        peaks.iter()
-            .map(|(bin, db, contributors)| {
-                let freq = *bin as f32 * sr / fft_size;
-                if contributors.is_empty() {
-                    format!("{:.0} Hz  {:.1} dB", freq, db)
-                } else {
-                    format!("{:.0} Hz  {:.1} dB ({})", freq, db, contributors.join("-"))
-                }
+    // Analyzer row: resonance/masking text panels + sensitivity knob.
+    // Built once, not inside a `Binding` on `telemetry` - `tick()` calls
+    // `telemetry.update(...)` unconditionally every ~33ms (no equality
+    // check in vizia_reactive::state::State::update_value_local), so a
+    // `Binding` here tore down and rebuilt the ON/OFF buttons every tick.
+    // A real click's MouseDown/MouseUp then landed on two different
+    // rebuilt entity instances more often than not, and
+    // `WindowEvent::Press` only fires when both match the same
+    // `cx.current` - the click was silently dropped. `Memo` instead
+    // subscribes to `telemetry` and updates text/color on this same,
+    // persistent Button entity in place.
+    HStack::new(cx, move |cx| {
+        HStack::new(cx, move |cx| {
+            VStack::new(cx, move |cx| {
+                Label::new(cx, "RESONANCE").font_size(10.0).color(rgb(1.0, 0.55, 0.15));
+                Label::new(cx, Memo::new(move |_| telemetry.get().resonance_text.clone()))
+                    .font_size(10.0)
+                    .color(col(0.8, 0.8, 0.8, 1.0));
             })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
+            .width(Stretch(1.0));
+            Button::new(cx, move |cx| {
+                Label::new(cx, Memo::new(move |_| if telemetry.get().show_resonance { "ON" } else { "OFF" }))
+            })
+            .on_press(move |_cx| telemetry.update(|t| t.show_resonance = !t.show_resonance))
+            .height(Pixels(shared_ui::BUTTON_HEIGHT))
+            .background_color(Memo::new(move |_| {
+                if telemetry.get().show_resonance { shared_ui::AMBER } else { shared_ui::IDLE_BG }
+            }));
+        })
+        .width(Stretch(1.0))
+        .height(Pixels(88.0))
+        .padding(Pixels(6.0))
+        .background_color(rgb(0.1, 0.1, 0.1));
+
+        HStack::new(cx, move |cx| {
+            VStack::new(cx, move |cx| {
+                Label::new(cx, "MASKING").font_size(10.0).color(rgb(0.95, 0.22, 0.18));
+                Label::new(cx, Memo::new(move |_| telemetry.get().masking_text.clone()))
+                    .font_size(10.0)
+                    .color(col(0.8, 0.8, 0.8, 1.0));
+            })
+            .width(Stretch(1.0));
+            if mode == 0 {
+                Label::new(cx, "OFF").color(col(0.35, 0.35, 0.35, 1.0));
+            } else {
+                Button::new(cx, move |cx| {
+                    Label::new(cx, Memo::new(move |_| if telemetry.get().show_masking { "ON" } else { "OFF" }))
+                })
+                .on_press(move |_cx| telemetry.update(|t| t.show_masking = !t.show_masking))
+                .background_color(Memo::new(move |_| {
+                    if telemetry.get().show_masking { rgb(0.95, 0.22, 0.18) } else { col(0.15, 0.15, 0.15, 1.0) }
+                }));
+            }
+        })
+        .width(Stretch(1.0))
+        .height(Pixels(88.0))
+        .padding(Pixels(6.0))
+        .background_color(rgb(0.1, 0.1, 0.1));
+
+        VStack::new(cx, move |cx| {
+            let lens_knob = lens.clone();
+            KnobView::new(
+                cx,
+                (lens.get_plain(LucentParamsParamId::Sensitivity) / 100.0).clamp(0.0, 1.0),
+                0.5,
+                0.0,
+                100.0,
+                false,
+                move |_cx, g| match g {
+                    Gesture::Start => lens_knob.begin_edit(LucentParamsParamId::Sensitivity),
+                    Gesture::Change(v) => {
+                        let norm = (v / 100.0).clamp(0.0, 1.0);
+                        lens_knob.set(LucentParamsParamId::Sensitivity, norm as f64);
+                        sensitivity_display.set(v);
+                    }
+                    Gesture::End => lens_knob.end_edit(LucentParamsParamId::Sensitivity),
+                },
+            )
+            .width(Pixels(40.0))
+            .height(Pixels(40.0));
+
+            Label::new(cx, Memo::new(move |_| format_knob_value(sensitivity_display.get(), 100.0)))
+                .font_size(10.0)
+                .color(rgb(1.0, 0.65, 0.3));
+            Label::new(cx, "SENSITIVITY").font_size(10.0).color(col(0.75, 0.75, 0.75, 1.0));
+        })
+        .width(Pixels(70.0))
+        .height(Pixels(88.0))
+        .alignment(Alignment::Center)
+        .padding(Pixels(6.0))
+        .background_color(rgb(0.1, 0.1, 0.1));
+    })
+    .width(Stretch(1.0))
+    .height(Pixels(88.0))
+    .horizontal_gap(Pixels(6.0));
 }
 
-fn panel_bg() -> container::Style {
-    container::Style {
-        background: Some(Color::from_rgb(0.1, 0.1, 0.1).into()),
-        border: Border { color: Color::from_rgb(0.18, 0.18, 0.18), width: 1.0, radius: 3.0.into() },
-        ..Default::default()
-    }
-}
-
-// ─── SNAP Helpers ────────────────────────────────────────────────────────────
+// ─── SNAP Helpers (framework-independent, unchanged from the iced version) ──
 
 fn snap_filename(vault_path: &str) -> String {
     let dir = std::path::Path::new(vault_path);
@@ -805,29 +830,42 @@ fn snap_filename(vault_path: &str) -> String {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for e in entries.flatten() {
             let s = e.file_name().to_string_lossy().into_owned();
-            if let Some(inner) = s.strip_prefix("SNAPSHOT-").and_then(|r| r.strip_suffix(".md")) {
-                if let Ok(n) = inner.parse::<u32>() { max_n = max_n.max(n); }
-            }
+            if let Some(inner) = s.strip_prefix("SNAPSHOT-").and_then(|r| r.strip_suffix(".md"))
+                && let Ok(n) = inner.parse::<u32>() {
+                    max_n = max_n.max(n);
+                }
         }
     }
     format!("SNAPSHOT-{:03}.md", max_n + 1)
 }
 
-fn snap_markdown(stereo: &[f32], mono: &[f32], delta: &[f32],
-    relays: &[crate::ui::RelayData], corr: f32, pl: f32, pr: f32, sr: f32) -> String
-{
+fn snap_markdown(
+    stereo: &[f32],
+    mono: &[f32],
+    delta: &[f32],
+    relays: &[RelayData],
+    corr: f32,
+    pl: f32,
+    pr: f32,
+    sr: f32,
+) -> String {
     let fft_sz = 2048.0;
     let freqs: &[f32] = &[20.0, 40.0, 80.0, 160.0, 315.0, 630.0, 1250.0, 2500.0, 5000.0, 10000.0, 16000.0, 20000.0];
     let tbl = |s: &[f32]| {
-        freqs.iter().map(|&f| {
-            let bin = ((f * fft_sz / sr) as usize).min(s.len().saturating_sub(1));
-            format!("| {} | {:.1} |", if f >= 1000.0 { format!("{:.0}k", f/1000.0) } else { format!("{:.0}", f) }, s[bin])
-        }).collect::<Vec<_>>().join("\n")
+        freqs
+            .iter()
+            .map(|&f| {
+                let bin = ((f * fft_sz / sr) as usize).min(s.len().saturating_sub(1));
+                format!("| {} | {:.1} |", if f >= 1000.0 { format!("{:.0}k", f / 1000.0) } else { format!("{:.0}", f) }, s[bin])
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     };
     let relay_section = if relays.is_empty() {
         String::new()
     } else {
-        let tracks = relays.iter()
+        let tracks = relays
+            .iter()
             .map(|r| format!("### {}\n| Hz | dB |\n|----|-----|\n{}\n", r.name, tbl(&r.spectrum)))
             .collect::<Vec<_>>()
             .join("\n");
@@ -840,6 +878,6 @@ fn snap_markdown(stereo: &[f32], mono: &[f32], delta: &[f32],
         ## Spektrum — Mono\n| Hz | dB |\n|----|-----|\n{mn}\n\n\
         ## Delta\n| Hz | dB |\n|----|-----|\n{dt}\n\
         {relay_section}",
-        pl=pl, pr=pr, co=corr, st=tbl(stereo), mn=tbl(mono), dt=tbl(delta),
+        pl = pl, pr = pr, co = corr, st = tbl(stereo), mn = tbl(mono), dt = tbl(delta),
     )
 }

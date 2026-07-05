@@ -21,8 +21,6 @@ truce-params    = "2.0.0"
 truce-clap      = "2.0.0"
 truce-vst3      = "2.0.0"
 truce-loader    = "2.0.0"
-truce-iced      = "2.0.0"
-truce-standalone = { version = "2.0.0", features = ["gui"] }
 truce-test      = "2.0.0"
 clap-sys        = "0.5"
 
@@ -36,7 +34,78 @@ panic = "abort"
 [profile.shell]
 inherits = "release"
 
+# Temporary, for the Lucent-Vizia hang debugging session (see CLAP-vault
+# features/2026-07-04-truce-2.0-upgrade-plan.md) - `strip = true` on
+# [profile.release] erases every symbol, so WinDbg's stack traces show
+# raw offsets against the nearest exported name instead of real function
+# names. Keeps everything else (opt-level/lto/codegen-units) identical to
+# release so the hang still reproduces at the same optimization level -
+# only symbols differ. Delete this profile once the hang is root-caused.
+[profile.dbg]
+inherits = "release"
+strip = false
+debug = "full"
+
 [patch.crates-io]
 truce-clap = { path = "truce-clap-local" }
-truce-params = { path = "truce-params-local" }
-truce-iced = { path = "truce-iced-local" }
+# truce-vizia (git dep, Lucent/Lucent-Relay) pulls its own truce-params +
+# truce-core via `path = "../..."` relative to ITS git checkout - Cargo
+# never unifies that with a local-path patch (different SourceId even at
+# matching version), so ParamLens<P: Params> sees two different `Params`
+# traits and every plugin using truce-vizia fails to compile. Pointing
+# these two at the identical git tag truce-vizia uses makes Cargo resolve
+# the same checkout, unifying the types.
+#
+# ponytail: this drops the `truce-params-local` ParamUnit::Percent fix
+# ({:.1}% of a real 0-100 value, vs upstream's {:.0}%` * 100) - every
+# `unit = "%"` param (Equilibrium/Meridian/Aether/Aurum/Lucent) now shows
+# the wrong percentage until the fix is re-applied via an upstream PR/
+# fork branch that truce-vizia's git tag can also point at.
+truce-params = { git = "https://github.com/truce-audio/truce", tag = "v2.0.0" }
+truce-core = { git = "https://github.com/truce-audio/truce", tag = "v2.0.0" }
+
+# ponytail: tried patching baseview to truce-audio's `baseview-truce-vizia`
+# fork here (same mechanism as the truce-params/truce-core fix above -
+# truce-vizia's own nested-workspace patch to this fork doesn't propagate
+# to us as an external git dependency). Made it WORSE: Lucent's editor
+# hang went from "plugin window stuck, Reaper alive" to "whole Reaper
+# frozen, force-kill required". Rolled back. The vault handoff already
+# flagged this as an unverified risk ("ob gepatchter Baseview-Fork das
+# Embedding-Problem behebt, noch nicht verifiziert auf unserer Hardware")
+# - now verified: it doesn't, at least not with this fork/branch as-is.
+#
+# Own narrow fork instead: `baseview-local` is a byte-for-byte vendor of
+# vizia/baseview.git @ 70e4e05 (the exact rev vizia's own workspace pins,
+# see crates/truce-vizia's git dep chain) with exactly one guard added in
+# src/win/window.rs - `SetProcessDpiAwarenessContext` is process-wide and
+# can only be set once; it's only called for baseview's own top-level
+# (`!parented`) window now, never for a window embedded into a host
+# process that already set its own DPI awareness at its own startup.
+# Root-caused via source review (features/2026-07-04-truce-2.0-upgrade-plan.md
+# HANDOFF section has the full trail); not yet DAW-verified.
+[patch."https://github.com/vizia/baseview.git"]
+baseview = { path = "baseview-local" }
+
+# vizia-local: fixes a real infinite-loop bug in vizia_core 0.4.0's
+# Context::modify_timer (crates/vizia_core/src/context/mod.rs) - the search
+# loop only ever peeks the running-timers min-heap's top and never advances
+# past a non-matching entry, so a target timer that isn't currently at the
+# top busy-spins forever (no blocking wait, so it doesn't show as a hung
+# thread). Two simultaneously-running timers are enough to trigger it - e.g.
+# vizia_core's own Environment::caret_timer (always registered, every vizia
+# app) racing a plugin's own meter-refresh timer (truce-vizia starts one
+# after our editor setup closure returns). Byte-for-byte vendor of the whole
+# vizia workspace at the pinned rev (multi-crate, unlike baseview - vizia_core
+# depends on its sibling crates via relative path, so a single-crate vendor
+# doesn't resolve), examples/assets stripped, one function patched. Local fix
+# only for now - not yet submitted upstream to vizia/vizia.
+[patch."https://github.com/vizia/vizia.git"]
+vizia = { path = "vizia-local" }
+vizia_core = { path = "vizia-local/crates/vizia_core" }
+vizia_baseview = { path = "vizia-local/crates/vizia_baseview" }
+vizia_id = { path = "vizia-local/crates/vizia_id" }
+vizia_input = { path = "vizia-local/crates/vizia_input" }
+vizia_reactive = { path = "vizia-local/crates/vizia_reactive" }
+vizia_storage = { path = "vizia-local/crates/vizia_storage" }
+vizia_style = { path = "vizia-local/crates/vizia_style" }
+vizia_window = { path = "vizia-local/crates/vizia_window" }

@@ -12,12 +12,13 @@
 use truce::prelude::*;
 use truce_core::editor::Editor;
 use truce_core::state::StateLoadError;
-use truce_iced::IcedEditor;
+use truce_vizia::ViziaEditor;
 use std::sync::Arc;
 use shared_dsp::{Biquad, state_migration};
 use shared_analysis::SharedState;
 
 mod editor;
+mod aether_canvas;
 
 const NUM_BANDS: usize = 5;
 const CF_DELAY_MAX: usize = 512;
@@ -253,7 +254,7 @@ impl PluginLogic for Aether {
             let cf_l = h_l + self.cf_lp_l * cf_mix;
             let cf_r = h_r + self.cf_lp_r * cf_mix;
 
-            let gain_smoothed = self.params.gain.value() as f32;
+            let gain_smoothed = self.params.gain.value();
             let g = 10.0_f32.powf(gain_smoothed / 20.0);
             buffer.output(0)[i] = cf_l * g;
             buffer.output(1)[i] = cf_r * g;
@@ -302,7 +303,15 @@ impl PluginLogic for Aether {
     fn state_changed(&mut self) {}
 
     fn editor(&self) -> Box<dyn Editor> {
-        IcedEditor::<AetherParams, editor::AetherEditor>::new(self.params.clone(), (WINDOW_W, WINDOW_H)).into_editor()
+        // Vizia migration (2026-07-05).
+        let shared = self.params.shared.clone();
+        let params = self.params.clone();
+        ViziaEditor::<AetherParams>::new(
+            self.params.clone(),
+            (WINDOW_W, WINDOW_H),
+            move |cx, lens| editor::build(cx, lens, params.clone(), shared.clone()),
+        )
+        .into_editor()
     }
 }
 
