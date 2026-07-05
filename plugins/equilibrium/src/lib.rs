@@ -11,7 +11,7 @@
 use truce::prelude::*;
 use truce_core::editor::Editor;
 use truce_core::state::StateLoadError;
-use truce_iced::IcedEditor;
+use truce_vizia::ViziaEditor;
 use std::sync::Arc;
 use shared_dsp::state_migration;
 use std::f32::consts::FRAC_PI_4;
@@ -20,6 +20,8 @@ use shared_dsp::{Biquad, LR2Crossover, AutoLoudMeter, DBTP_CEILING};
 use shared_analysis::{SharedState, SCOPE_BUFFER_LEN, SnapFFT, SnapMode};
 
 mod editor;
+mod vizia_canvas;
+mod vizia_widgets;
 
 const BAND_COUNT: usize = 5;
 const WINDOW_W: u32 = 990;
@@ -897,7 +899,19 @@ impl PluginLogic for Equilibrium {
     fn state_changed(&mut self) {}
 
     fn editor(&self) -> Box<dyn Editor> {
-        IcedEditor::<EquilibriumParams, editor::EquilibriumEditor>::new(self.params.clone(), (WINDOW_W, WINDOW_H)).into_editor()
+        // Vizia port (CLAP-vault features/2026-07-04-truce-2.0-upgrade-plan.md).
+        // `shared` is captured directly into the setup closure rather than
+        // read through `ParamLens` - the band meters/goniometer/preset data
+        // live in `EquilibriumParams::shared` (atomics + mutexes written by
+        // `process()`), not in the param store `ParamLens` binds to.
+        let shared = self.params.shared.clone();
+        let params = self.params.clone();
+        ViziaEditor::<EquilibriumParams>::new(
+            self.params.clone(),
+            (WINDOW_W, WINDOW_H),
+            move |cx, lens| editor::build(cx, lens, shared.clone(), params.clone()),
+        )
+        .into_editor()
     }
 }
 

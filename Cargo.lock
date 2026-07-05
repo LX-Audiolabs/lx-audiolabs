@@ -24,17 +24,16 @@ dependencies = [
  "clap-sys",
  "shared-analysis",
  "shared-dsp",
- "shared-ui",
  "tracing",
  "truce",
  "truce-clap",
  "truce-core",
- "truce-iced",
  "truce-loader",
  "truce-params",
- "truce-standalone",
  "truce-test",
+ "truce-vizia",
  "truce-vst3",
+ "vizia",
 ]
 
 [[package]]
@@ -1038,17 +1037,16 @@ dependencies = [
  "clap-sys",
  "shared-analysis",
  "shared-dsp",
- "shared-ui",
  "tracing",
  "truce",
  "truce-clap",
  "truce-core",
- "truce-iced",
  "truce-loader",
  "truce-params",
- "truce-standalone",
  "truce-test",
+ "truce-vizia",
  "truce-vst3",
+ "vizia",
 ]
 
 [[package]]
@@ -2109,7 +2107,6 @@ dependencies = [
  "clap-sys",
  "realfft",
  "shared-analysis",
- "shared-dsp",
  "tracing",
  "truce",
  "truce-clap",
@@ -2119,6 +2116,7 @@ dependencies = [
  "truce-test",
  "truce-vizia",
  "truce-vst3",
+ "vizia",
 ]
 
 [[package]]

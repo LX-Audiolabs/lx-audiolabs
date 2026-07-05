@@ -1,103 +1,65 @@
-// Equilibrium editor — Iced UI truce port.
-//
-// Layout (990×660):
-//   Header : brand + monitor strip (MONO/DELTA/BYPASS)
-//   Left   : preset panel (SNAP, Vault, preset list)
-//   Center : SpectrumCanvas + 5 band columns (Gain/Width/Pan/Solo)
-//   Right  : output gain, pre-master, auto-loud, output meter, goniometer
-//   Footer : LISTEN/APPLY/RESET buttons, Mono Floor knob, RESET ALL
-
-use truce_iced::iced;
-use truce_iced::iced::widget::{button, canvas, column, container, row, Space, Text};
-use truce_iced::iced::widget::canvas::{Geometry, Path, Stroke};
-use truce_iced::iced::{Alignment, Border, Color, Element, Length, Padding, Point, Rectangle, Size, Subscription};
-use truce_iced::iced::mouse::Cursor;
-use truce_iced::{IcedPlugin, Message, ParamCache};
-use truce_core::editor::PluginContext;
-use truce::prelude::{FloatParam, BoolParam};
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
+//! Vizia port of the old iced `editor.rs`. See CLAP-vault
+//! `features/2026-07-04-truce-2.0-upgrade-plan.md` for the Ticker/Memo/Binding
+//! rationale (same pattern as `plugins/lucent/src/editor.rs`, the pilot this
+//! port follows): tick-frequency telemetry lives in one `Signal<Telemetry>`
+//! updated every ~33ms by `Ticker` (not `cx.add_timer`/`start_timer` -
+//! vizia_core 0.4.0's `modify_timer` has a real infinite-loop bug), passive
+//! display regions are wrapped in `Binding`s keyed to it, and drag widgets
+//! (sliders/knobs) are built once outside any tick-driven Binding so a drag
+//! survives across ticks. Slider/knob positions instead refresh on
+//! `params_gen`, a Signal bumped only by discrete actions (ResetAll,
+//! SelectPreset) - see its doc comment in `build()`.
+use std::cell::RefCell;
 use std::path::PathBuf;
+use std::sync::{atomic::Ordering, Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use vizia::prelude::*;
+use vizia::vg;
 
 use shared_analysis::SharedState;
-use shared_ui::{
-    bold_font, header_brand, monitor_strip, vault_setup_box,
-    ai_preset_panel, output_tools_strip, auto_loud_button, output_level_block,
-    knob_gesture_bipolar, knob_gesture_suffixed, hslider_gesture,
-    GoniometerCanvas, Gesture,
-};
+use truce_vizia::ParamLens;
 
-use crate::EquilibriumParams;
+use crate::vizia_canvas::{fmt_db, EqSpectrumView, GoniometerView, StereoMeterView};
+use crate::vizia_widgets::{format_knob_value, Gesture, HSliderView, KnobView};
+use crate::{EquilibriumParams, EquilibriumParamsParamId as K};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-// ─── Messages ────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-pub enum EquilibriumMsg {
-    Tick,
-    GainGesture(usize, Gesture),
-    WidthGesture(usize, Gesture),
-    PanGesture(usize, Gesture),
-    MonoFloorGesture(Gesture),
-    OutputGainGesture(Gesture),
-    SoloToggled(usize),
-    MonoToggled,
-    DeltaToggled,
-    BypassToggled,
-    ListenToggled,
-    ApplyAnalysisAsTarget,
-    ResetAnalysis,
-    AutoLoudTriggered,
-    ResetAll,
-    SelectPreset(usize),
-    PresetNameChanged(String),
-    SavePreset,
-    SetupToggled,
-    VaultPathChanged(String),
-    SaveVaultPath,
-    ResetPeak,
-    PreMasterToggled,
-    PreMasterGesture(Gesture),
-    SnapPressed,
+/// `vizia::prelude::Color` (CSS-style, used by `.color()`/`.background_color()`
+/// view modifiers) is a different type from `vg::Color` (Skia, used inside
+/// `draw()` - see `vizia_canvas::col`/`rgb`). These are the view-modifier
+/// versions, same helper Lucent's `editor.rs` defines for the same reason.
+fn col(r: f32, g: f32, b: f32, a: f32) -> Color {
+    Color::rgba(
+        (r.clamp(0.0, 1.0) * 255.0) as u8,
+        (g.clamp(0.0, 1.0) * 255.0) as u8,
+        (b.clamp(0.0, 1.0) * 255.0) as u8,
+        (a.clamp(0.0, 1.0) * 255.0) as u8,
+    )
+}
+fn rgb(r: f32, g: f32, b: f32) -> Color {
+    col(r, g, b, 1.0)
 }
 
-// ─── Editor ──────────────────────────────────────────────────────────────────
+const GAIN_IDS: [K; 5] = [K::LowGain, K::BassGain, K::MidGain, K::HighMidGain, K::HighGain];
+const WIDTH_IDS: [K; 5] = [K::LowWidth, K::BassWidth, K::MidWidth, K::HighMidWidth, K::HighWidth];
+const PAN_IDS: [K; 5] = [K::LowPan, K::BassPan, K::MidPan, K::HighMidPan, K::HighPan];
+const SOLO_IDS: [K; 5] = [K::SoloLow, K::SoloBass, K::SoloMid, K::SoloHighMid, K::SoloHigh];
+const BAND_NAMES: [&str; 5] = ["Sub", "Bass", "Mid", "Pres", "Air"];
+const BAND_HZ: [&str; 5] = ["0-80Hz", "80-300Hz", "300Hz-2kHz", "2-6kHz", ">6kHz"];
 
-pub struct EquilibriumEditor {
-    params: Arc<EquilibriumParams>,
-    shared_state: Arc<SharedState>,
-
-    // Preset state
-    vault_path: Option<String>,
-    show_setup: bool,
-    vault_path_input: String,
-    preset_name_input: String,
-    presets: Vec<(String, Option<PathBuf>, EqPreset)>,
-    selected_preset_index: Option<usize>,
-    preset_refresh_counter: u32,
-
-    // Cached meter values
-    band_levels: [f32; 5],
-    target_levels: [f32; 5],
-    target_tolerances: [f32; 5],
-    listen_levels: [f32; 5],
-    listen_tolerances: [f32; 5],
-    listen_level_min: [f32; 5],
-    listen_level_max: [f32; 5],
-    listen_samples: f32,
-    phase_correlation: f32,
-    output_peak: f32,
-    peak_hold: f32,
-    peak_l: f32,
-    peak_r: f32,
-    peak_hold_l: f32,
-    peak_hold_r: f32,
-    balance: f32,
-    auto_loud_measuring: bool,
-    snap_active: bool,
-    snap_blink_counter: u32,
+fn format_pan(pan: f32) -> String {
+    if pan.abs() < 0.01 {
+        "C".into()
+    } else if pan < 0.0 {
+        format!("L {:.0}%", -pan * 100.0)
+    } else {
+        format!("R {:.0}%", pan * 100.0)
+    }
 }
+
+// ─── Preset data (framework-independent, unchanged from the iced version) ──
 
 #[derive(Debug, Clone)]
 pub struct EqPreset {
@@ -108,34 +70,18 @@ pub struct EqPreset {
     pub mono_floor_hz: f32,
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-fn format_pan(pan: f32) -> String {
-    if pan.abs() < 0.01 { "C".into() }
-    else if pan < 0.0 { format!("L {:.0}%", -pan * 100.0) }
-    else { format!("R {:.0}%", pan * 100.0) }
-}
-
-fn vsep<'a, M: 'a>() -> Element<'a, M> {
-    container(Space::new())
-        .width(Length::Fixed(1.0))
-        .height(Length::Fill)
-        .style(|_| container::Style {
-            background: Some(Color::from_rgba(1.0, 1.0, 1.0, 0.08).into()),
-            ..Default::default()
-        })
-        .into()
-}
-
 fn load_presets(vault_path: Option<&str>) -> Vec<(String, Option<PathBuf>, EqPreset)> {
-    let mut presets = vec![
-        ("Pink Noise".to_string(), None, EqPreset {
+    let mut presets = vec![(
+        "Pink Noise".to_string(),
+        None,
+        EqPreset {
             bands: [3.0, 0.0, -3.0, -6.0, -9.0],
             tolerances: shared_analysis::DEFAULT_TOLERANCES,
-            pans: [0.0; 5], widths: [100.0; 5],
+            pans: [0.0; 5],
+            widths: [100.0; 5],
             mono_floor_hz: 0.0,
-        }),
-    ];
+        },
+    )];
     let custom = shared_analysis::list_custom_presets("Equilibrium", vault_path);
     for (name, path, profile) in custom {
         presets.push((
@@ -153,716 +99,1043 @@ fn load_presets(vault_path: Option<&str>) -> Vec<(String, Option<PathBuf>, EqPre
     presets
 }
 
-// ─── SpectrumCanvas ──────────────────────────────────────────────────────────
+// ─── Telemetry (tick-frequency display state) ───────────────────────────────
 
-pub struct EqSpectrumCanvas {
-    pub band_levels: [f32; 5],
-    pub target_levels: [f32; 5],
-    pub target_tolerances: [f32; 5],
-    pub listen_levels: [f32; 5],
-    pub listen_tolerances: [f32; 5],
-    pub listen_level_min: [f32; 5],
-    pub listen_level_max: [f32; 5],
-    pub listen_samples: f32,
+#[derive(Clone)]
+struct Telemetry {
+    band_levels: [f32; 5],
+    target_levels: [f32; 5],
+    target_tolerances: [f32; 5],
+    listen_levels: [f32; 5],
+    listen_tolerances: [f32; 5],
+    listen_level_min: [f32; 5],
+    listen_level_max: [f32; 5],
+    listen_samples: f32,
+    phase_correlation: f32,
+    peak_l: f32,
+    peak_r: f32,
+    peak_hold_l: f32,
+    peak_hold_r: f32,
+    peak_hold: f32,
+    balance: f32,
+    auto_loud_measuring: bool,
+    snap_active: bool,
+    snap_blink_counter: u32,
 }
 
-impl<M> canvas::Program<M> for EqSpectrumCanvas {
-    type State = ();
+/// Bookkeeping that persists across ticks but never touches the UI directly.
+/// Lives in `Arc<Mutex<_>>` (not `Rc<RefCell<_>>` - vizia's `on_press`
+/// requires `Send + Sync` closures), shared with every closure that
+/// reads/writes presets or the vault path (preset-select, save-preset,
+/// vault-setup-save), not just `tick()`.
+struct TickAccum {
+    presets: Vec<(String, Option<PathBuf>, EqPreset)>,
+    vault_path: Option<String>,
+    preset_refresh_counter: u32,
+}
 
-    fn draw(
-        &self,
-        _state: &Self::State,
-        renderer: &truce_iced::iced::Renderer,
-        _theme: &truce_iced::iced::Theme,
-        bounds: Rectangle,
-        _cursor: Cursor,
-    ) -> Vec<Geometry> {
-        let mut frame = canvas::Frame::new(renderer, bounds.size());
-        let width = bounds.width;
-        let height = bounds.height;
-        let col_width = width / 5.0;
+#[allow(clippy::too_many_arguments)]
+fn tick(shared: &SharedState, params: &EquilibriumParams, accum: &Arc<Mutex<TickAccum>>, telemetry: Signal<Telemetry>, params_gen: Signal<u32>) {
+    let mut acc = accum.lock().unwrap();
 
-        frame.fill(&Path::rectangle(Point::ORIGIN, bounds.size()), Color::from_rgb(0.08, 0.08, 0.08));
+    let mut band_levels = [0.0f32; 5];
+    let mut target_levels = [0.0f32; 5];
+    let mut target_tolerances = [0.0f32; 5];
+    let mut listen_levels = [0.0f32; 5];
+    let mut listen_tolerances = [0.0f32; 5];
+    let mut listen_level_min = [0.0f32; 5];
+    let mut listen_level_max = [0.0f32; 5];
+    for b in 0..5 {
+        band_levels[b] = shared.band_levels[b].load(Ordering::Acquire);
+        target_levels[b] = shared.target_levels[b].load(Ordering::Acquire);
+        target_tolerances[b] = shared.target_tolerances[b].load(Ordering::Acquire);
+        listen_levels[b] = shared.listen_levels[b].load(Ordering::Acquire);
+        listen_tolerances[b] = shared.listen_tolerances[b].load(Ordering::Acquire);
+        listen_level_min[b] = shared.listen_level_min[b].load(Ordering::Acquire);
+        listen_level_max[b] = shared.listen_level_max[b].load(Ordering::Acquire);
+    }
+    let listen_samples = shared.listen_samples.load(Ordering::Acquire);
+    let phase_correlation = shared.phase_correlation.load(Ordering::Acquire);
+    let peak_l = shared.output_peak_l.load(Ordering::Acquire);
+    let peak_r = shared.output_peak_r.load(Ordering::Acquire);
+    let peak_hold_l = shared.peak_hold_l.load(Ordering::Acquire);
+    let peak_hold_r = shared.peak_hold_r.load(Ordering::Acquire);
+    let peak_hold = shared.peak_hold.load(Ordering::Acquire);
+    let balance = shared.balance.load(Ordering::Acquire);
 
-        // Pink noise tilt, halved from the original +3dB/band (was tuned for pure
-        // pink noise, over-boosted the Air bar on real mix material — 2026-07-03).
-        // ponytail: flat per-band step, not true dB/octave against band center freq.
-        const TILT: [f32; 5] = [-1.5, 0.0, 1.5, 3.0, 4.5];
+    acc.preset_refresh_counter = acc.preset_refresh_counter.wrapping_add(1);
+    if acc.preset_refresh_counter % 60 == 0 {
+        acc.presets = load_presets(acc.vault_path.as_deref());
+        // Low-frequency (~2s), not the 33ms tick itself - the sidebar's
+        // preset list is keyed off this, not `telemetry`, so its Buttons
+        // never see the tick-driven rebuild-drops-clicks issue documented
+        // on `Ticker`/`build_main_panel`.
+        params_gen.update(|g| *g = g.wrapping_add(1));
+    }
 
-        // Silence detection uses RAW band levels (before clamping/tilt)
-        let raw_band_avg: f32 = (0..5).map(|b| self.band_levels[b]).sum::<f32>() / 5.0;
-        let is_silent = raw_band_avg <= -70.0;
-
-        // Compute normalized averages for relative display
-        let mut listen_sum = 0.0;
-        let mut band_sum = 0.0;
-        for (b, &tilt) in TILT.iter().enumerate() {
-            listen_sum += self.listen_levels[b].max(-50.0) + tilt;
-            band_sum  += self.band_levels[b].max(-50.0) + tilt;
+    let measuring = shared.auto_loud_measuring.load(Ordering::Acquire);
+    if !measuring {
+        let offset = shared.auto_loud_gain_offset.load(Ordering::Acquire);
+        if offset.abs() > 0.05 {
+            let cur = params.output_gain.raw_target() as f32;
+            params.output_gain.set_value((cur + offset).clamp(-12.0, 12.0) as f64);
+            shared.auto_loud_gain_offset.store(0.0, Ordering::Release);
         }
-        let listen_avg = listen_sum / 5.0;
-        let band_avg   = band_sum / 5.0;
+    }
 
-        let min_db = -30.0f32;
-        let max_db = 12.0f32;
-        let db_range = max_db - min_db;
+    let snap_now = shared.snap_active.load(Ordering::Acquire);
+    let vault_path = acc.vault_path.clone();
 
-        let db_to_y = |db: f32| {
-            let norm = ((db - min_db) / db_range).clamp(0.0, 1.0);
-            height - (norm * height)
+    telemetry.update(move |t| {
+        t.band_levels = band_levels;
+        t.target_levels = target_levels;
+        t.target_tolerances = target_tolerances;
+        t.listen_levels = listen_levels;
+        t.listen_tolerances = listen_tolerances;
+        t.listen_level_min = listen_level_min;
+        t.listen_level_max = listen_level_max;
+        t.listen_samples = listen_samples;
+        t.phase_correlation = phase_correlation;
+        t.peak_l = peak_l;
+        t.peak_r = peak_r;
+        t.peak_hold_l = peak_hold_l;
+        t.peak_hold_r = peak_hold_r;
+        t.peak_hold = peak_hold;
+        t.balance = balance;
+        t.auto_loud_measuring = measuring;
+
+        let was_active = t.snap_active;
+        t.snap_active = snap_now;
+        if snap_now {
+            t.snap_blink_counter = t.snap_blink_counter.wrapping_add(1);
+        } else if was_active {
+            t.snap_blink_counter = 0;
+            if let Some(vp) = vault_path {
+                if !vp.is_empty() {
+                    let stereo = shared.snap_stereo_snap.try_lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
+                    let mono = shared.snap_mono_snap.try_lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
+                    let delta = shared.snap_delta_snap.try_lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
+                    let sr = shared.sample_rate.load(Ordering::Acquire);
+                    let md = snap_markdown(&stereo, &mono, &delta, band_levels, phase_correlation, peak_l, peak_r, sr);
+                    let fname = snap_filename(&vp);
+                    let _ = std::fs::write(std::path::Path::new(&vp).join(&fname), &md);
+                }
+            }
+        }
+    });
+}
+
+// ─── Ticker (drives `tick()` without vizia_core's buggy timer API) ──────────
+
+struct Ticker {
+    shared: Arc<SharedState>,
+    params: Arc<EquilibriumParams>,
+    accum: Arc<Mutex<TickAccum>>,
+    telemetry: Signal<Telemetry>,
+    params_gen: Signal<u32>,
+    last_tick: RefCell<Instant>,
+}
+
+impl Ticker {
+    fn new(
+        cx: &mut Context,
+        shared: Arc<SharedState>,
+        params: Arc<EquilibriumParams>,
+        accum: Arc<Mutex<TickAccum>>,
+        telemetry: Signal<Telemetry>,
+        params_gen: Signal<u32>,
+    ) -> Handle<'_, Self> {
+        Self { shared, params, accum, telemetry, params_gen, last_tick: RefCell::new(Instant::now()) }.build(cx, |_| {})
+    }
+}
+
+const TICK_INTERVAL: Duration = Duration::from_millis(33);
+
+impl View for Ticker {
+    fn element(&self) -> Option<&'static str> {
+        Some("ticker")
+    }
+
+    fn draw(&self, cx: &mut DrawContext, _canvas: &vg::Canvas) {
+        let now = Instant::now();
+        let due = {
+            let mut last = self.last_tick.borrow_mut();
+            if now.duration_since(*last) >= TICK_INTERVAL {
+                *last = now;
+                true
+            } else {
+                false
+            }
         };
-
-        // Horizontal dB grid lines
-        for &db in &[-30.0f32, -24.0, -18.0, -12.0, -6.0, 0.0, 6.0, 12.0] {
-            let y = db_to_y(db);
-            let is_major = db == -30.0 || db == -18.0 || db == -6.0 || db == 6.0;
-            let alpha = if is_major { 0.20 } else { 0.10 };
-            frame.stroke(
-                &Path::line(Point::new(0.0, y), Point::new(width, y)),
-                Stroke::default().with_color(Color::from_rgba(1.0, 1.0, 1.0, alpha)).with_width(1.0),
-            );
+        if due {
+            tick(&self.shared, &self.params, &self.accum, self.telemetry, self.params_gen);
         }
-
-        // Separators
-        for i in 1..5 {
-            let x = i as f32 * col_width;
-            frame.stroke(
-                &Path::line(Point::new(x, 0.0), Point::new(x, height)),
-                Stroke::default().with_color(Color::from_rgba(1.0, 1.0, 1.0, 0.05)).with_width(1.0),
-            );
-        }
-
-        for b in 0..5 {
-            let col_x = b as f32 * col_width;
-
-            // Peak meter amber bar — relative to spectral average
-            let bar_alpha = if self.listen_samples > 0.0 { 0.12 } else { 0.55 };
-            if !is_silent {
-                let peak_db_t = self.band_levels[b].max(-50.0) + TILT[b];
-                let norm_band_db = peak_db_t - band_avg;
-                let bar_top_y = db_to_y(norm_band_db);
-                let bar_h = (height - bar_top_y).max(0.0);
-                frame.fill(
-                    &Path::rectangle(Point::new(col_x + 5.0, bar_top_y), Size::new(col_width - 10.0, bar_h)),
-                    Color::from_rgba(1.0, 0.45, 0.1, bar_alpha),
-                );
-            }
-
-            // Target Corridor & Line — hidden during Listen/Analyze
-            if self.listen_samples <= 100.0 {
-                let target_db = self.target_levels[b].max(-30.0) + TILT[b];
-                let target_sum: f32 = (0..5).map(|i| self.target_levels[i].max(-30.0) + TILT[i]).sum();
-                let target_avg = target_sum / 5.0;
-                let norm_target_db = target_db - target_avg;
-                let tolerance = self.target_tolerances[b];
-
-                let target_y = db_to_y(norm_target_db);
-                let upper_y = db_to_y(norm_target_db + tolerance);
-                let lower_y = db_to_y(norm_target_db - tolerance);
-                let corridor_h = (lower_y - upper_y).max(2.0);
-
-                // Target Corridor Shaded Area
-                frame.fill(
-                    &Path::rectangle(Point::new(col_x + 1.0, upper_y), Size::new(col_width - 2.0, corridor_h)),
-                    Color::from_rgba(1.0, 1.0, 1.0, 0.15),
-                );
-
-                // Target Line
-                frame.stroke(
-                    &Path::line(Point::new(col_x, target_y), Point::new(col_x + col_width, target_y)),
-                    Stroke::default().with_color(Color::from_rgba(1.0, 1.0, 1.0, 0.55)).with_width(1.0),
-                );
-            }
-
-            // Listen range (if active)
-            if self.listen_samples > 100.0 {
-                let listen_db = self.listen_levels[b].max(-50.0) + TILT[b];
-                let norm_listen_db = listen_db - listen_avg;
-                let listen_y = db_to_y(norm_listen_db);
-
-                // Red Min/Max Box — exact peak range from analysis
-                let min_db_l = self.listen_level_min[b].max(-50.0) + TILT[b];
-                let max_db_l = self.listen_level_max[b].max(-50.0) + TILT[b];
-                let norm_min = min_db_l - listen_avg;
-                let norm_max = max_db_l - listen_avg;
-                let upper_y = db_to_y(norm_max);
-                let lower_y = db_to_y(norm_min);
-                let tolerance_h = (lower_y - upper_y).max(2.0);
-
-                frame.fill(
-                    &Path::rectangle(Point::new(col_x + 1.0, upper_y), Size::new(col_width - 2.0, tolerance_h)),
-                    Color::from_rgba(1.0, 0.3, 0.3, 0.12),
-                );
-
-                // Listen Tolerances Corridor
-                let listen_tolerance = self.listen_tolerances[b];
-                let l_upper_y = db_to_y(norm_listen_db + listen_tolerance);
-                let l_lower_y = db_to_y(norm_listen_db - listen_tolerance);
-                let l_corridor_h = (l_lower_y - l_upper_y).max(2.0);
-                frame.fill(
-                    &Path::rectangle(Point::new(col_x + 1.0, l_upper_y), Size::new(col_width - 2.0, l_corridor_h)),
-                    Color::from_rgba(0.5, 0.5, 1.0, 0.10),
-                );
-
-                // Analyzed Level Line (Crimson)
-                frame.stroke(
-                    &Path::line(Point::new(col_x, listen_y), Point::new(col_x + col_width, listen_y)),
-                    Stroke::default().with_color(Color::from_rgba(1.0, 0.3, 0.3, 0.7)).with_width(1.5),
-                );
-            }
-        }
-
-        vec![frame.into_geometry()]
+        cx.needs_redraw();
     }
 }
 
-// ─── IcedPlugin ──────────────────────────────────────────────────────────────
+// ─── Small widget helpers ────────────────────────────────────────────────────
 
-impl IcedPlugin<EquilibriumParams> for EquilibriumEditor {
-    type Message = EquilibriumMsg;
+/// Fixed-label toggle button (MONO/DELTA/BYPASS/PRE-MASTER): amber when the
+/// bound bool param is active, dark otherwise. Wrapped in a `Binding` on the
+/// param's own value signal - fires only on that param's own changes (click
+/// or host automation), never on the 33ms tick, so it never hits the
+/// rebuild-drops-clicks issue `Memo` was needed for on the tick-driven panels.
+fn styled_toggle(cx: &mut Context, lens: ParamLens<EquilibriumParams>, id: K, label: &'static str) {
+    let sig = lens.value_signal(id);
+    Binding::new(cx, sig, move |cx| {
+        let active = lens.get(id) > 0.5;
+        let lens = lens.clone();
+        Button::new(cx, move |cx| Label::new(cx, label).font_size(12.0))
+            .on_press(move |_cx| {
+                let now = lens.get(id) <= 0.5;
+                lens.automate(id, if now { 1.0 } else { 0.0 });
+            })
+            .padding(Pixels(6.0))
+            .background_color(if active { rgb(1.0, 0.45, 0.1) } else { col(0.15, 0.15, 0.15, 1.0) });
+    });
+}
 
-    fn new(params: Arc<EquilibriumParams>) -> Self {
-        let config = shared_analysis::load_config("Equilibrium");
-        let presets = load_presets(config.vault_path.as_deref());
-        let selected_idx = Some(0usize.min(presets.len().saturating_sub(1)));
+/// Toggle button whose label itself changes with state (SOLO/SOLO ON,
+/// LISTEN/LISTEN ON).
+fn styled_toggle_dyn(cx: &mut Context, lens: ParamLens<EquilibriumParams>, id: K, label_off: &'static str, label_on: &'static str) {
+    let sig = lens.value_signal(id);
+    Binding::new(cx, sig, move |cx| {
+        let active = lens.get(id) > 0.5;
+        let lens = lens.clone();
+        Button::new(cx, move |cx| Label::new(cx, if active { label_on } else { label_off }).font_size(12.0))
+            .on_press(move |_cx| {
+                let now = lens.get(id) <= 0.5;
+                lens.automate(id, if now { 1.0 } else { 0.0 });
+            })
+            .padding(Pixels(6.0))
+            .background_color(if active { rgb(1.0, 0.45, 0.1) } else { col(0.15, 0.15, 0.15, 1.0) });
+    });
+}
 
-        let mut target_levels = [0.0f32; 5];
-        let mut target_tolerances = shared_analysis::DEFAULT_TOLERANCES;
-        if let Some(idx) = selected_idx {
-            let p = &presets[idx].2;
-            target_levels = p.bands;
-            target_tolerances = p.tolerances;
-            for b in 0..5 {
-                params.shared.target_levels[b].store(p.bands[b], Ordering::Release);
-                params.shared.target_tolerances[b].store(p.tolerances[b], Ordering::Release);
-            }
-            params.shared.selected_preset_index.store(idx, Ordering::Release);
+// ─── UI ──────────────────────────────────────────────────────────────────────
+
+pub fn build(cx: &mut Context, lens: ParamLens<EquilibriumParams>, shared: Arc<SharedState>, params: Arc<EquilibriumParams>) {
+    let config = shared_analysis::load_config("Equilibrium");
+    let presets = load_presets(config.vault_path.as_deref());
+    let selected_idx = Some(0usize.min(presets.len().saturating_sub(1)));
+
+    let mut target_levels = [0.0f32; 5];
+    let mut target_tolerances = shared_analysis::DEFAULT_TOLERANCES;
+    if let Some(idx) = selected_idx {
+        let p = &presets[idx].2;
+        target_levels = p.bands;
+        target_tolerances = p.tolerances;
+        for b in 0..5 {
+            shared.target_levels[b].store(p.bands[b], Ordering::Release);
+            shared.target_tolerances[b].store(p.tolerances[b], Ordering::Release);
         }
-
-        Self {
-            shared_state: params.shared.clone(),
-            params,
-            vault_path: config.vault_path.clone(),
-            show_setup: false,
-            vault_path_input: config.vault_path.unwrap_or_default(),
-            preset_name_input: String::new(),
-            presets,
-            selected_preset_index: selected_idx,
-            preset_refresh_counter: 0,
-            band_levels: [-90.0; 5],
-            target_levels,
-            target_tolerances,
-            listen_levels: [-90.0; 5],
-            listen_tolerances: [0.0; 5],
-            listen_level_min: [-90.0; 5],
-            listen_level_max: [-90.0; 5],
-            listen_samples: 0.0,
-            phase_correlation: 1.0,
-            output_peak: -90.0, peak_hold: -90.0,
-            peak_l: -90.0, peak_r: -90.0,
-            peak_hold_l: -90.0, peak_hold_r: -90.0,
-            balance: 0.0,
-            auto_loud_measuring: false,
-            snap_active: false,
-            snap_blink_counter: 0,
-        }
+        shared.selected_preset_index.store(idx, Ordering::Release);
     }
 
-    fn subscription(&self) -> Subscription<Message<EquilibriumMsg>> {
-        truce_iced::iced::event::listen_raw(|event, _status, _window| {
-            use truce_iced::iced::{Event, window::Event as WinEvent};
-            match event {
-                Event::Window(WinEvent::RedrawRequested(_)) => Some(Message::Plugin(EquilibriumMsg::Tick)),
-                _ => None,
+    let telemetry = Signal::new(Telemetry {
+        band_levels: [-90.0; 5],
+        target_levels,
+        target_tolerances,
+        listen_levels: [-90.0; 5],
+        listen_tolerances: [0.0; 5],
+        listen_level_min: [-90.0; 5],
+        listen_level_max: [-90.0; 5],
+        listen_samples: 0.0,
+        phase_correlation: 1.0,
+        peak_l: -90.0,
+        peak_r: -90.0,
+        peak_hold_l: -90.0,
+        peak_hold_r: -90.0,
+        peak_hold: -90.0,
+        balance: 0.0,
+        auto_loud_measuring: false,
+        snap_active: false,
+        snap_blink_counter: 0,
+    });
+
+    let show_setup = Signal::new(false);
+    let vault_path_input = Signal::new(config.vault_path.clone().unwrap_or_default());
+    let preset_name_input = Signal::new(String::new());
+    let selected_preset = Signal::new(selected_idx);
+    // Bumped only by discrete actions (ResetAll, SelectPreset, SavePreset,
+    // vault-path save) so the preset list and the slider/knob columns
+    // rebuild and re-read the freshly-written param/preset values. Never
+    // bumped from `tick()` at 33ms - see module doc.
+    let params_gen = Signal::new(0u32);
+
+    let accum = Arc::new(Mutex::new(TickAccum {
+        presets,
+        vault_path: config.vault_path,
+        preset_refresh_counter: 0,
+    }));
+
+    Ticker::new(cx, shared.clone(), params.clone(), accum.clone(), telemetry, params_gen).width(Pixels(1.0)).height(Pixels(1.0));
+
+    // ── HEADER ──
+    let lens_header = lens.clone();
+    HStack::new(cx, move |cx| {
+        let lens = lens_header;
+        HStack::new(cx, |cx| {
+            Label::new(cx, "LX").font_size(20.0).color(rgb(1.0, 0.45, 0.1));
+            Label::new(cx, "AUDIOLABS").font_size(20.0).color(Color::white());
+            Element::new(cx).width(Pixels(14.0));
+            Element::new(cx).width(Pixels(1.0)).height(Pixels(28.0)).background_color(col(0.18, 0.22, 0.22, 1.0));
+            Element::new(cx).width(Pixels(14.0));
+            VStack::new(cx, |cx| {
+                Label::new(cx, "EQUILIBRIUM").font_size(13.0).color(rgb(1.0, 0.65, 0.3));
+                Label::new(cx, format!("v{VERSION}")).font_size(10.0).color(col(0.5, 0.5, 0.5, 1.0));
+            })
+            .width(Auto)
+            .height(Auto)
+            .vertical_gap(Pixels(2.0));
+        })
+        .width(Auto)
+        .height(Auto)
+        .horizontal_gap(Pixels(6.0))
+        .alignment(Alignment::Center);
+
+        Element::new(cx).width(Stretch(1.0));
+
+        HStack::new(cx, move |cx| {
+            styled_toggle(cx, lens.clone(), K::MonoActive, "MONO");
+            styled_toggle(cx, lens.clone(), K::DeltaActive, "DELTA");
+            styled_toggle(cx, lens.clone(), K::BypassActive, "BYPASS");
+        })
+        .width(Auto)
+        .height(Auto)
+        .horizontal_gap(Pixels(4.0))
+        .alignment(Alignment::Center);
+    })
+    .width(Stretch(1.0))
+    .height(Pixels(50.0))
+    .padding(Pixels(10.0))
+    .alignment(Alignment::Center)
+    .background_color(rgb(0.08, 0.08, 0.08));
+
+    let lens_body = lens.clone();
+    let shared_body = shared.clone();
+    let accum_body = accum.clone();
+    HStack::new(cx, move |cx| {
+        let lens_middle = lens_body.clone();
+        let accum_middle = accum_body.clone();
+        build_sidebar(cx, accum_body.clone(), telemetry, selected_preset, preset_name_input, show_setup, shared_body.clone(), lens_body.clone(), params_gen);
+
+        VStack::new(cx, move |cx| {
+            Binding::new(cx, show_setup, move |cx| {
+                if show_setup.get() {
+                    build_setup_form(cx, vault_path_input, show_setup, accum_middle.clone(), params_gen);
+                } else {
+                    build_main_panel(cx, telemetry, lens_middle.clone(), params_gen);
+                }
+            });
+        })
+        .width(Stretch(1.0))
+        .height(Stretch(1.0))
+        .background_color(rgb(0.06, 0.06, 0.06));
+
+        build_right_sidebar(cx, telemetry, lens_body.clone(), shared_body.clone());
+    })
+    .width(Stretch(1.0))
+    .height(Stretch(1.0));
+
+    build_footer(cx, telemetry, lens, shared, accum, selected_preset, params_gen);
+}
+
+// ─── Sidebar (TARGET PROFILES) ───────────────────────────────────────────────
+
+fn build_sidebar(
+    cx: &mut Context,
+    accum: Arc<Mutex<TickAccum>>,
+    telemetry: Signal<Telemetry>,
+    selected_preset: Signal<Option<usize>>,
+    preset_name_input: Signal<String>,
+    show_setup: Signal<bool>,
+    shared: Arc<SharedState>,
+    lens: ParamLens<EquilibriumParams>,
+    params_gen: Signal<u32>,
+) {
+    VStack::new(cx, move |cx| {
+        Label::new(cx, "TARGET PROFILES").font_size(14.0).color(Color::white());
+
+        Textbox::new(cx, preset_name_input)
+            .placeholder("Preset Name...")
+            .on_edit(move |_cx, text| preset_name_input.set(text))
+            .width(Stretch(1.0));
+
+        let accum_hs = accum.clone();
+        let shared_hs = shared.clone();
+        let lens_hs = lens.clone();
+        HStack::new(cx, move |cx| {
+            let accum_label = accum_hs.clone();
+            let shared_press = shared_hs.clone();
+            let accum_press = accum_hs.clone();
+            Button::new(cx, move |cx| {
+                Label::new(
+                    cx,
+                    Memo::new(move |_| {
+                        let t = telemetry.get();
+                        let no_vault = accum_label.lock().unwrap().vault_path.as_ref().is_none_or(|v| v.is_empty());
+                        if t.snap_active {
+                            "ANALYZE...".to_string()
+                        } else if no_vault {
+                            "SET VAULT".to_string()
+                        } else {
+                            "SNAP".to_string()
+                        }
+                    }),
+                )
+                .font_size(12.0)
+                .color(Memo::new(move |_| {
+                    let blink = telemetry.get().snap_active && (telemetry.get().snap_blink_counter / 8).is_multiple_of(2);
+                    if blink { rgb(1.0, 0.85, 0.3) } else { rgb(1.0, 0.55, 0.1) }
+                }))
+            })
+            .on_press(move |_cx| {
+                let no_vault = accum_press.lock().unwrap().vault_path.as_ref().is_none_or(|v| v.is_empty());
+                if no_vault {
+                    show_setup.set(true);
+                } else {
+                    shared_press.snap_active.store(true, Ordering::Release);
+                    shared_press.snap_phase.store(1, Ordering::Release);
+                }
+            })
+            .width(Stretch(1.0))
+            .height(Pixels(34.0))
+            .background_color(Memo::new(move |_| {
+                let blink = telemetry.get().snap_active && (telemetry.get().snap_blink_counter / 8).is_multiple_of(2);
+                if blink { col(0.55, 0.38, 0.05, 1.0) } else { col(0.18, 0.18, 0.18, 1.0) }
+            }));
+
+            let accum_save = accum_hs.clone();
+            let lens_save = lens_hs.clone();
+            Button::new(cx, |cx| Label::new(cx, "SAVE").font_size(12.0))
+                .on_press(move |_cx| {
+                    do_save_preset(&accum_save, &telemetry, preset_name_input, &lens_save, params_gen);
+                })
+                .width(Stretch(1.0))
+                .height(Pixels(34.0))
+                .background_color(col(0.18, 0.18, 0.18, 1.0));
+        })
+        .width(Stretch(1.0))
+        .height(Auto)
+        .horizontal_gap(Pixels(4.0));
+
+        Button::new(cx, |cx| Label::new(cx, "VAULT SETUP").font_size(12.0))
+            .on_press(move |_cx| show_setup.set(!show_setup.get()))
+            .width(Stretch(1.0))
+            .height(Pixels(34.0))
+            .background_color(col(0.18, 0.18, 0.18, 1.0));
+
+        let accum_list = accum.clone();
+        let lens_list = lens.clone();
+        // Keyed to `params_gen`, NOT `telemetry` - the preset list holds
+        // Buttons, and `telemetry` updates unconditionally every 33ms from
+        // `tick()`. A `Binding` on it would tear down and rebuild every
+        // preset Button that often, dropping clicks the same way the
+        // header mode button did in Lucent's pilot (see module doc).
+        // `params_gen` only bumps on discrete events (preset saved/picked,
+        // vault path saved, ~2s periodic reload).
+        Binding::new(cx, params_gen, move |cx| {
+            let acc = accum_list.lock().unwrap();
+            let no_vault = acc.vault_path.as_ref().is_none_or(|v| v.is_empty());
+            if no_vault {
+                Label::new(cx, "Set Vault-path first").font_size(9.0).color(col(1.0, 0.75, 0.2, 1.0));
+            }
+            let sel = selected_preset.get();
+            let factory: Vec<(usize, String)> = acc.presets.iter().enumerate().filter(|(_, (_, p, _))| p.is_none()).map(|(i, (n, _, _))| (i, n.clone())).collect();
+            let user: Vec<(usize, String)> = acc.presets.iter().enumerate().filter(|(_, (_, p, _))| p.is_some()).map(|(i, (n, _, _))| (i, n.clone())).collect();
+            drop(acc);
+            let accum_scroll = accum_list.clone();
+            let shared_scroll = shared.clone();
+            let lens_scroll = lens_list.clone();
+            ScrollView::new(cx, move |cx| {
+                if !factory.is_empty() {
+                    Label::new(cx, "── Factory ──").font_size(11.0).color(rgb(1.0, 0.55, 0.15));
+                    for (idx, name) in factory {
+                        preset_list_item(cx, idx, name, sel, selected_preset, accum_scroll.clone(), shared_scroll.clone(), lens_scroll.clone(), params_gen);
+                    }
+                }
+                if !user.is_empty() {
+                    Label::new(cx, "── Vault Presets ──").font_size(11.0).color(rgb(1.0, 0.55, 0.15));
+                    for (idx, name) in user {
+                        preset_list_item(cx, idx, name, sel, selected_preset, accum_scroll.clone(), shared_scroll.clone(), lens_scroll.clone(), params_gen);
+                    }
+                }
+            })
+            .height(Stretch(1.0));
+        });
+    })
+    .width(Pixels(180.0))
+    .height(Stretch(1.0))
+    .padding(Pixels(10.0))
+    .vertical_gap(Pixels(10.0))
+    .background_color(rgb(0.1, 0.1, 0.1));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn preset_list_item(
+    cx: &mut Context,
+    idx: usize,
+    name: String,
+    selected: Option<usize>,
+    selected_preset: Signal<Option<usize>>,
+    accum: Arc<Mutex<TickAccum>>,
+    shared: Arc<SharedState>,
+    lens: ParamLens<EquilibriumParams>,
+    params_gen: Signal<u32>,
+) {
+    let is_sel = selected == Some(idx);
+    Button::new(cx, move |cx| Label::new(cx, format!("> {name}")).font_size(13.0))
+        .on_press(move |_cx| {
+            let acc = accum.lock().unwrap();
+            let Some((_, _, prof)) = acc.presets.get(idx).cloned() else { return };
+            drop(acc);
+
+            selected_preset.set(Some(idx));
+            shared.selected_preset_index.store(idx, Ordering::Release);
+            for b in 0..5 {
+                shared.target_levels[b].store(prof.bands[b], Ordering::Release);
+                shared.target_tolerances[b].store(prof.tolerances[b], Ordering::Release);
+            }
+            // Bands are the Target Profile (analysis reference line), not a
+            // gain correction — only stereo settings apply directly to params.
+            for (id, val) in [
+                (K::LowWidth, prof.widths[0] as f64),
+                (K::BassWidth, prof.widths[1] as f64),
+                (K::MidWidth, prof.widths[2] as f64),
+                (K::HighMidWidth, prof.widths[3] as f64),
+                (K::HighWidth, prof.widths[4] as f64),
+                (K::LowPan, prof.pans[0] as f64),
+                (K::BassPan, prof.pans[1] as f64),
+                (K::MidPan, prof.pans[2] as f64),
+                (K::HighMidPan, prof.pans[3] as f64),
+                (K::HighPan, prof.pans[4] as f64),
+                (K::MonoFloor, prof.mono_floor_hz as f64),
+            ] {
+                lens.automate(id, param_norm(id, val));
+            }
+            params_gen.update(|g| *g = g.wrapping_add(1));
+        })
+        .width(Stretch(1.0))
+        .background_color(if is_sel { col(0.18, 0.14, 0.08, 1.0) } else { Color::transparent() })
+        .color(if is_sel { rgb(1.0, 0.45, 0.1) } else { col(0.9, 0.9, 0.9, 1.0) });
+}
+
+// ─── Setup form ──────────────────────────────────────────────────────────────
+
+fn build_setup_form(cx: &mut Context, vault_path_input: Signal<String>, show_setup: Signal<bool>, accum: Arc<Mutex<TickAccum>>, params_gen: Signal<u32>) {
+    VStack::new(cx, move |cx| {
+        Label::new(cx, "LX AUDIOLABS - SETUP").font_size(18.0).color(Color::white());
+        Label::new(cx, "Configure your Vault path for Equilibrium:").font_size(12.0).color(Color::white());
+        Textbox::new(cx, vault_path_input)
+            .placeholder("Enter Vault absolute path...")
+            .on_edit(move |_cx, text| vault_path_input.set(text))
+            .width(Stretch(1.0));
+        HStack::new(cx, move |cx| {
+            Button::new(cx, |cx| Label::new(cx, "SAVE"))
+                .on_press(move |_cx| {
+                    let vp = vault_path_input.get().trim().to_string();
+                    if !vp.is_empty() {
+                        let mut cfg = shared_analysis::load_config("Equilibrium");
+                        cfg.vault_path = Some(vp.clone());
+                        let _ = shared_analysis::save_config("Equilibrium", &cfg);
+                        let mut acc = accum.lock().unwrap();
+                        acc.vault_path = Some(vp.clone());
+                        acc.presets = load_presets(Some(&vp));
+                        drop(acc);
+                        params_gen.update(|g| *g = g.wrapping_add(1));
+                        show_setup.set(false);
+                    }
+                })
+                .background_color(col(0.15, 0.15, 0.15, 1.0));
+            Button::new(cx, |cx| Label::new(cx, "CANCEL")).on_press(move |_cx| show_setup.set(false)).background_color(col(0.15, 0.15, 0.15, 1.0));
+        })
+        .horizontal_gap(Pixels(10.0))
+        .height(Auto);
+    })
+    .width(Pixels(600.0))
+    .height(Auto)
+    .padding(Pixels(20.0))
+    .vertical_gap(Pixels(15.0))
+    .background_color(col(0.15, 0.15, 0.15, 1.0))
+    .border_color(col(0.3, 0.3, 0.3, 1.0))
+    .border_width(Pixels(1.0))
+    .corner_radius(Pixels(4.0));
+}
+
+// ─── Main panel (5-band spectrum + slider columns) ──────────────────────────
+
+fn build_main_panel(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamLens<EquilibriumParams>, params_gen: Signal<u32>) {
+    // Spectrum + band labels - passive display, safe to rebuild every tick.
+    Binding::new(cx, telemetry, move |cx| {
+        let t = telemetry.get();
+        EqSpectrumView::new(
+            cx,
+            EqSpectrumView {
+                band_levels: t.band_levels,
+                target_levels: t.target_levels,
+                target_tolerances: t.target_tolerances,
+                listen_levels: t.listen_levels,
+                listen_tolerances: t.listen_tolerances,
+                listen_level_min: t.listen_level_min,
+                listen_level_max: t.listen_level_max,
+                listen_samples: t.listen_samples,
+            },
+        )
+        .width(Stretch(1.0))
+        .height(Stretch(1.0));
+
+        HStack::new(cx, move |cx| {
+            for i in 0..5 {
+                Label::new(cx, format!("{} ({})", BAND_NAMES[i], BAND_HZ[i]))
+                    .font_size(11.0)
+                    .color(rgb(1.0, 0.55, 0.15))
+                    .width(Stretch(1.0))
+                    .alignment(Alignment::Center);
             }
         })
-    }
+        .width(Stretch(1.0))
+        .height(Pixels(20.0));
+    });
 
-    fn needs_redraw(&self) -> bool { true }
-
-    fn update(
-        &mut self,
-        message: Message<EquilibriumMsg>,
-        _cache: &ParamCache<EquilibriumParams>,
-        ctx: &PluginContext<EquilibriumParams>,
-    ) -> iced::Task<Message<EquilibriumMsg>> {
-        match &message {
-            Message::Plugin(msg) => self.handle_msg(msg, ctx),
-            _ => {}
-        }
-        iced::Task::none()
-    }
-
-    fn view(&self, _cache: &ParamCache<EquilibriumParams>) -> Element<'_, Message<EquilibriumMsg>> {
-        let pm = |m: EquilibriumMsg| Message::Plugin(m);
-
-        // ── Sidebar ──
-        let sel_name = self.selected_preset_index.and_then(|i| self.presets.get(i)).map(|(n, _, _)| n.as_str());
-        let no_vault = self.vault_path.as_ref().is_none_or(|v| v.is_empty());
-        let warning: Option<&str> = if no_vault { Some("Set Vault-path first") } else { None };
-        let factory: Vec<(&str, Message<EquilibriumMsg>)> = self.presets.iter().enumerate()
-            .filter(|(_, (_, p, _))| p.is_none())
-            .map(|(i, (n, _, _))| (n.as_str(), pm(EquilibriumMsg::SelectPreset(i)))).collect();
-        let user: Vec<(&str, Message<EquilibriumMsg>)> = self.presets.iter().enumerate()
-            .filter(|(_, (_, p, _))| p.is_some())
-            .map(|(i, (n, _, _))| (n.as_str(), pm(EquilibriumMsg::SelectPreset(i)))).collect();
-        let snap_blink = self.snap_active && (self.snap_blink_counter / 8).is_multiple_of(2);
-        let snap_label = if self.snap_active { "ANALYZE..." } else if no_vault { "SET VAULT" } else { "SNAP" };
-
-        let sidebar = ai_preset_panel(
-            "TARGET PROFILES", sel_name, &self.preset_name_input,
-            move |s| pm(EquilibriumMsg::PresetNameChanged(s)),
-            pm(EquilibriumMsg::SavePreset), pm(EquilibriumMsg::SnapPressed),
-            snap_label, snap_blink, pm(EquilibriumMsg::SetupToggled),
-            warning, factory.into_iter(), user.into_iter(),
-        );
-
-        // ── Middle ──
-        let middle: Element<'_, Message<EquilibriumMsg>> = if self.show_setup {
-            let sb = vault_setup_box("Equilibrium", &self.vault_path_input,
-                move |s| pm(EquilibriumMsg::VaultPathChanged(s)),
-                pm(EquilibriumMsg::SaveVaultPath), pm(EquilibriumMsg::SetupToggled));
-            container(sb).width(Length::Fill).height(Length::Fill).center_x(Length::Fill).center_y(Length::Fill).into()
-        } else {
-            let band_names = ["Sub", "Bass", "Mid", "Pres", "Air"];
-            let band_hz = ["0-80Hz", "80-300Hz", "300Hz-2kHz", "2-6kHz", ">6kHz"];
-            let mut sliders_row = row![].spacing(10);
+    // Slider columns - drag widgets, rebuilt only on `params_gen` (ResetAll /
+    // SelectPreset), never on the 33ms tick. See module doc.
+    Binding::new(cx, params_gen, move |cx| {
+        // `Binding`'s setup closure is `Fn`, callable again on every
+        // `params_gen` bump - `lens` is captured by reference into it, so a
+        // fresh clone is made per invocation rather than moving the
+        // captured `lens` itself into the nested `HStack` closure.
+        let lens_row = lens.clone();
+        HStack::new(cx, move |cx| {
             for b in 0..5 {
-                let gain = [&self.params.low_gain, &self.params.bass_gain, &self.params.mid_gain, &self.params.high_mid_gain, &self.params.high_gain][b].raw_target() as f32;
-                let width = [&self.params.low_width, &self.params.bass_width, &self.params.mid_width, &self.params.high_mid_width, &self.params.high_width][b].raw_target() as f32;
-                let pan = [&self.params.low_pan, &self.params.bass_pan, &self.params.mid_pan, &self.params.high_mid_pan, &self.params.high_pan][b].raw_target() as f32;
-                let is_solo = [&self.params.solo_low, &self.params.solo_bass, &self.params.solo_mid, &self.params.solo_high_mid, &self.params.solo_high][b].value();
-                let band_col = column![
-                    Text::new("Gain").size(12).font(bold_font()).color(Color::from_rgb(0.75, 0.75, 0.75)),
-                    hslider_gesture(-12.0, 12.0, gain, 0.0, move |g| pm(EquilibriumMsg::GainGesture(b, g))),
-                    Text::new(format!("{:.1} dB", gain)).size(11).font(bold_font()).color(Color::from_rgb(0.8, 0.8, 0.8)),
-                    Text::new("Width").size(12).font(bold_font()).color(Color::from_rgb(0.75, 0.75, 0.75)),
-                    hslider_gesture(0.0, 150.0, width, 100.0, move |g| pm(EquilibriumMsg::WidthGesture(b, g))),
-                    Text::new(format!("{:.0}%", width)).size(11).font(bold_font()).color(Color::from_rgb(0.8, 0.8, 0.8)),
-                    Text::new("Pan").size(12).font(bold_font()).color(Color::from_rgb(0.75, 0.75, 0.75)),
-                    hslider_gesture(-1.0, 1.0, pan, 0.0, move |g| pm(EquilibriumMsg::PanGesture(b, g))),
-                    Text::new(format_pan(pan)).size(11).font(bold_font()).color(Color::from_rgb(0.8, 0.8, 0.8)),
-                    button(Text::new(if is_solo { "SOLO ON" } else { "SOLO" }).size(12).font(bold_font()))
-                        .on_press(pm(EquilibriumMsg::SoloToggled(b)))
-                        .style(move |_, s| button::Style {
-                            background: Some(if is_solo { Color::from_rgb(1.0, 0.45, 0.1) } else if s == button::Status::Hovered { Color::from_rgb(0.25, 0.25, 0.25) } else { Color::from_rgb(0.15, 0.15, 0.15) }.into()),
-                            text_color: Color::WHITE, border: Border { radius: 2.0.into(), ..Default::default() }, ..Default::default()
-                        }),
-                ].spacing(4).align_x(Alignment::Center).width(Length::FillPortion(1));
-                sliders_row = sliders_row.push(band_col);
+                let lens_col = lens_row.clone();
+                VStack::new(cx, move |cx| {
+                    let gain = lens_col.get_plain(GAIN_IDS[b]);
+                    let width = lens_col.get_plain(WIDTH_IDS[b]);
+                    let pan = lens_col.get_plain(PAN_IDS[b]);
+
+                    Label::new(cx, "Gain").font_size(12.0).color(col(0.75, 0.75, 0.75, 1.0));
+                    let gain_display = Signal::new(gain);
+                    let lens_gain = lens_col.clone();
+                    HSliderView::new(cx, -12.0, 12.0, gain, 0.0, move |_cx, g| match g {
+                        Gesture::Start => lens_gain.begin_edit(GAIN_IDS[b]),
+                        Gesture::Change(v) => {
+                            let range = 24.0f64;
+                            let norm = ((v as f64) + 12.0) / range;
+                            lens_gain.set(GAIN_IDS[b], norm.clamp(0.0, 1.0));
+                            gain_display.set(v);
+                        }
+                        Gesture::End => lens_gain.end_edit(GAIN_IDS[b]),
+                    })
+                    .width(Stretch(1.0))
+                    .height(Pixels(22.0));
+                    Label::new(cx, Memo::new(move |_| format!("{:.1} dB", gain_display.get()))).font_size(11.0).color(col(0.8, 0.8, 0.8, 1.0));
+
+                    Label::new(cx, "Width").font_size(12.0).color(col(0.75, 0.75, 0.75, 1.0));
+                    let width_display = Signal::new(width);
+                    let lens_width = lens_col.clone();
+                    HSliderView::new(cx, 0.0, 150.0, width, 100.0, move |_cx, g| match g {
+                        Gesture::Start => lens_width.begin_edit(WIDTH_IDS[b]),
+                        Gesture::Change(v) => {
+                            let norm = (v as f64) / 150.0;
+                            lens_width.set(WIDTH_IDS[b], norm.clamp(0.0, 1.0));
+                            width_display.set(v);
+                        }
+                        Gesture::End => lens_width.end_edit(WIDTH_IDS[b]),
+                    })
+                    .width(Stretch(1.0))
+                    .height(Pixels(22.0));
+                    Label::new(cx, Memo::new(move |_| format!("{:.0}%", width_display.get()))).font_size(11.0).color(col(0.8, 0.8, 0.8, 1.0));
+
+                    Label::new(cx, "Pan").font_size(12.0).color(col(0.75, 0.75, 0.75, 1.0));
+                    let pan_display = Signal::new(pan);
+                    let lens_pan = lens_col.clone();
+                    HSliderView::new(cx, -1.0, 1.0, pan, 0.0, move |_cx, g| match g {
+                        Gesture::Start => lens_pan.begin_edit(PAN_IDS[b]),
+                        Gesture::Change(v) => {
+                            let norm = ((v as f64) + 1.0) / 2.0;
+                            lens_pan.set(PAN_IDS[b], norm.clamp(0.0, 1.0));
+                            pan_display.set(v);
+                        }
+                        Gesture::End => lens_pan.end_edit(PAN_IDS[b]),
+                    })
+                    .width(Stretch(1.0))
+                    .height(Pixels(22.0));
+                    Label::new(cx, Memo::new(move |_| format_pan(pan_display.get()))).font_size(11.0).color(col(0.8, 0.8, 0.8, 1.0));
+
+                    styled_toggle_dyn(cx, lens_col.clone(), SOLO_IDS[b], "SOLO", "SOLO ON");
+                })
+                .vertical_gap(Pixels(4.0))
+                .alignment(Alignment::Center)
+                .width(Stretch(1.0));
             }
+        })
+        .width(Stretch(1.0))
+        .height(Auto)
+        .horizontal_gap(Pixels(10.0))
+        .padding(Pixels(10.0));
+    });
+}
 
-            let spectrum = canvas(EqSpectrumCanvas {
-                band_levels: self.band_levels, target_levels: self.target_levels,
-                target_tolerances: self.target_tolerances, listen_levels: self.listen_levels,
-                listen_tolerances: self.listen_tolerances, listen_level_min: self.listen_level_min,
-                listen_level_max: self.listen_level_max, listen_samples: self.listen_samples,
-            }).width(Length::Fill).height(Length::Fill);
+// ─── Right sidebar (output level, pre-master, auto loud, goniometer) ───────
 
-            let labels: Vec<Element<'_, Message<EquilibriumMsg>>> = (0..5).map(|i|
-                container(Text::new(format!("{} ({})", band_names[i], band_hz[i])).size(11).font(bold_font()).color(Color::from_rgb(1.0, 0.55, 0.15)))
-                    .center_x(Length::Fill).width(Length::FillPortion(1)).into()
-            ).collect();
+fn build_right_sidebar(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamLens<EquilibriumParams>, shared: Arc<SharedState>) {
+    VStack::new(cx, move |cx| {
+        Label::new(cx, "OUTPUT LEVEL").font_size(12.0).color(col(0.75, 0.75, 0.75, 1.0));
 
-            container(column![
-                container(spectrum).height(Length::Fill).width(Length::Fill),
-                row(labels).height(Length::Fixed(20.0)).width(Length::Fill),
-                container(sliders_row).height(Length::Shrink).width(Length::Fill).padding(10),
-            ].spacing(10)).width(Length::Fill).height(Length::Fill).into()
-        };
+        let lens_hs = lens.clone();
+        let shared_hs = shared.clone();
+        HStack::new(cx, move |cx| {
+            let out_gain = lens_hs.get_plain(K::OutputGain);
+            let lens_knob = lens_hs.clone();
+            let out_gain_display = Signal::new(out_gain);
+            let norm = ((out_gain + 12.0) / 24.0).clamp(0.0, 1.0);
+            KnobView::new(cx, norm, 0.5, -12.0, 12.0, true, move |_cx, g| match g {
+                Gesture::Start => lens_knob.begin_edit(K::OutputGain),
+                Gesture::Change(v) => {
+                    let n = ((v as f64) + 12.0) / 24.0;
+                    lens_knob.set(K::OutputGain, n.clamp(0.0, 1.0));
+                    out_gain_display.set(v);
+                }
+                Gesture::End => lens_knob.end_edit(K::OutputGain),
+            })
+            .width(Pixels(48.0))
+            .height(Pixels(48.0));
 
-        // ── Right Sidebar ──
-        let scope_write_pos = self.shared_state.scope_write_pos.load(Ordering::Acquire);
-        let gonio = canvas(GoniometerCanvas {
-            samples: self.shared_state.scope_samples.clone(),
-            write_pos: scope_write_pos,
-            correlation: self.phase_correlation,
-        }).width(Length::Fill).height(Length::Fixed(139.0));
+            VStack::new(cx, move |cx| {
+                let pre_target = lens_hs.get_plain(K::PreMasterTargetDb);
+                styled_toggle(cx, lens_hs.clone(), K::PreMasterActive, "PRE-MASTER");
+                let pre_display = Signal::new(pre_target);
+                Label::new(cx, Memo::new(move |_| format!("Target: {:.1} dB", pre_display.get()))).font_size(10.0).color(col(0.75, 0.75, 0.75, 1.0));
+                let lens_pre = lens_hs.clone();
+                HSliderView::new(cx, -6.0, -3.0, pre_target, -6.0, move |_cx, g| match g {
+                    Gesture::Start => lens_pre.begin_edit(K::PreMasterTargetDb),
+                    Gesture::Change(v) => {
+                        let n = ((v as f64) + 6.0) / 3.0;
+                        lens_pre.set(K::PreMasterTargetDb, n.clamp(0.0, 1.0));
+                        pre_display.set(v);
+                    }
+                    Gesture::End => lens_pre.end_edit(K::PreMasterTargetDb),
+                })
+                .width(Stretch(1.0))
+                .height(Pixels(22.0));
 
-        let pre_active = self.params.pre_master_active.value();
-        let pre_target = self.params.pre_master_target_db.raw_target() as f32;
-        let pre_btn = button(Text::new("PRE-MASTER").size(10).font(bold_font()))
-            .on_press(pm(EquilibriumMsg::PreMasterToggled)).padding([3, 6])
-            .style(move |_, s| button::Style {
-                background: Some((if pre_active { Color::from_rgb(1.0, 0.45, 0.1) } else if s == button::Status::Hovered { Color::from_rgb(0.25, 0.25, 0.25) } else { Color::from_rgb(0.15, 0.15, 0.15) }).into()),
-                text_color: Color::WHITE, border: Border { radius: 2.0.into(), ..Default::default() }, ..Default::default()
-            });
+                // Built once, not inside a `Binding` on `telemetry` - `tick()`
+                // calls `telemetry.update(...)` unconditionally every ~33ms
+                // (no equality check), so a `Binding` here would tear down
+                // and rebuild this Button every tick and drop clicks the
+                // same way the header mode button did in Lucent's pilot
+                // (see module doc). `Memo` instead updates label/color on
+                // this same persistent entity in place; the disabled-while-
+                // pre-master-active behaviour is a guard inside `on_press`
+                // rather than conditionally attaching the handler.
+                let shared_al = shared_hs.clone();
+                let lens_al = lens_hs.clone();
+                Button::new(cx, move |cx| {
+                    Label::new(cx, Memo::new(move |_| if telemetry.get().auto_loud_measuring { "MEASURING..." } else { "AUTO LOUD" }))
+                        .font_size(10.0)
+                })
+                .on_press(move |_cx| {
+                    if lens_al.get(K::PreMasterActive) > 0.5 {
+                        return;
+                    }
+                    shared_al.auto_loud_trigger.store(true, Ordering::Release);
+                })
+                .background_color(Memo::new(move |_| {
+                    let t = telemetry.get();
+                    let pre_active = lens_hs.get(K::PreMasterActive) > 0.5;
+                    let is_active = shared_hs.auto_loud_gain_offset.load(Ordering::Acquire).abs() > 0.05;
+                    if pre_active {
+                        col(0.1, 0.1, 0.1, 1.0)
+                    } else if t.auto_loud_measuring {
+                        rgb(1.0, 0.8, 0.0)
+                    } else if is_active {
+                        rgb(1.0, 0.45, 0.1)
+                    } else {
+                        col(0.15, 0.15, 0.15, 1.0)
+                    }
+                }));
+            })
+            .width(Auto)
+            .height(Auto)
+            .vertical_gap(Pixels(4.0));
+        })
+        .width(Stretch(1.0))
+        .height(Auto)
+        .horizontal_gap(Pixels(4.0))
+        .alignment(Alignment::Center);
 
-        let pre_section = column![
-            pre_btn,
-            Text::new(format!("Target: {:.1} dB", pre_target)).size(10).font(bold_font()).color(Color::from_rgb(0.75, 0.75, 0.75)),
-            container(hslider_gesture(-6.0, -3.0, pre_target, -6.0, move |g| pm(EquilibriumMsg::PreMasterGesture(g)))).width(Length::Fill),
-        ].spacing(4);
+        let shared_reset = shared.clone();
+        Binding::new(cx, telemetry, move |cx| {
+            let t = telemetry.get();
+            StereoMeterView::new(cx, t.peak_l, t.peak_r, t.peak_hold_l, t.peak_hold_r, t.balance).width(Stretch(1.0)).height(Pixels(120.0));
 
-        let controls = row![
-            container(knob_gesture_bipolar("OUT GAIN", self.params.output_gain.raw_target() as f32, -12.0, 12.0, 0.0,
-                move |g| pm(EquilibriumMsg::OutputGainGesture(g)))).width(Length::Fixed(60.0)),
-            column![pre_section, auto_loud_button(self.auto_loud_measuring,
-                self.shared_state.auto_loud_gain_offset.load(Ordering::Acquire).abs() > 0.05,
-                self.params.pre_master_active.value(), pm(EquilibriumMsg::AutoLoudTriggered))],
-        ].spacing(4).align_y(Alignment::Center);
-
-        let right_title = container(Text::new("OUTPUT LEVEL").size(12).font(bold_font()).color(Color::from_rgb(0.75, 0.75, 0.75)))
-            .width(Length::Fill).padding(Padding { top: 2.0, right: 0.0, bottom: 4.0, left: 0.0 });
-
-        let out_block = output_level_block(self.peak_l, self.peak_r, self.peak_hold_l, self.peak_hold_r,
-            self.peak_hold, pm(EquilibriumMsg::ResetPeak), self.balance, Length::Fill);
-
-        let right = container(column![
-            right_title, controls, out_block,
-            Text::new("GONIOMETER").size(10).font(bold_font()).color(Color::from_rgb(0.6, 0.6, 0.6)),
-            container(gonio).width(Length::Fill).height(Length::Fixed(139.0)),
-        ].spacing(6))
-        .width(Length::Fixed(155.0)).height(Length::Fill).padding(8)
-        .style(|_| container::Style {
-            background: Some(Color::from_rgb(0.1, 0.1, 0.1).into()),
-            border: Border { color: Color::from_rgb(0.18, 0.18, 0.18), width: 1.0, ..Default::default() },
-            ..Default::default()
+            let shared_l = shared_reset.clone();
+            let shared_r = shared_reset.clone();
+            HStack::new(cx, move |cx| {
+                Button::new(cx, move |cx| Label::new(cx, fmt_db(t.peak_hold_l)).font_size(11.0))
+                    .on_press(move |_cx| shared_l.reset_peak.store(true, Ordering::Release))
+                    .background_color(Color::transparent())
+                    .color(rgb(1.0, 0.45, 0.1));
+                Element::new(cx).width(Stretch(1.0));
+                Label::new(cx, "dB").font_size(10.0).color(col(0.8, 0.8, 0.8, 1.0));
+                Element::new(cx).width(Stretch(1.0));
+                Button::new(cx, move |cx| Label::new(cx, fmt_db(t.peak_hold_r)).font_size(11.0))
+                    .on_press(move |_cx| shared_r.reset_peak.store(true, Ordering::Release))
+                    .background_color(Color::transparent())
+                    .color(rgb(1.0, 0.45, 0.1));
+            })
+            .width(Stretch(1.0))
+            .height(Auto)
+            .alignment(Alignment::Center);
         });
 
-        // ── Header ──
-        let strip = monitor_strip(
-            self.params.mono_active.value(), self.params.delta_active.value(), self.params.bypass_active.value(),
-            pm(EquilibriumMsg::MonoToggled), pm(EquilibriumMsg::DeltaToggled), pm(EquilibriumMsg::BypassToggled));
-        let header = container(row![container(header_brand("EQUILIBRIUM", VERSION)).width(Length::Fill), strip]
-            .align_y(Alignment::Center).spacing(10))
-            .width(Length::Fill).height(Length::Fixed(50.0)).padding(10)
-            .style(|_| container::Style {
-                background: Some(Color::from_rgb(0.08, 0.08, 0.08).into()),
-                border: Border { color: Color::from_rgb(0.15, 0.15, 0.15), width: 1.0, ..Default::default() },
-                ..Default::default()
-            });
+        Element::new(cx).height(Stretch(1.0));
 
-        // ── Footer ──
-        let is_listen = self.params.listen_active.value();
-        let listen_btn = button(Text::new(if is_listen { "LISTEN ON" } else { "LISTEN" }).size(13).font(bold_font()))
-            .on_press(pm(EquilibriumMsg::ListenToggled)).padding(8)
-            .style(move |_, s| button::Style {
-                background: Some((if is_listen { Color::from_rgb(1.0, 0.45, 0.1) } else if s == button::Status::Hovered { Color::from_rgb(0.25, 0.25, 0.25) } else { Color::from_rgb(0.15, 0.15, 0.15) }).into()),
-                text_color: Color::WHITE, border: Border { radius: 2.0.into(), ..Default::default() }, ..Default::default()
-            });
-
-        let apply_btn = button(Text::new("APPLY ANALYSIS").size(12))
-            .on_press_maybe(if is_listen { Some(pm(EquilibriumMsg::ApplyAnalysisAsTarget)) } else { None }).padding(8)
-            .style(move |_, s| {
-                let bg = if is_listen { if s == button::Status::Hovered { Color::from_rgb(0.25, 0.25, 0.25) } else { Color::from_rgb(0.15, 0.15, 0.15) } } else { Color::from_rgb(0.08, 0.08, 0.08) };
-                let tc = if is_listen { Color::WHITE } else { Color::from_rgb(0.3, 0.3, 0.3) };
-                button::Style { background: Some(bg.into()), text_color: tc, border: Border { radius: 2.0.into(), ..Default::default() }, ..Default::default() }
-            });
-
-        let ra_btn = button(Text::new("RESET ANALYSIS").size(12))
-            .on_press_maybe(if is_listen { Some(pm(EquilibriumMsg::ResetAnalysis)) } else { None }).padding(8)
-            .style(move |_, s| {
-                let bg = if is_listen { if s == button::Status::Hovered { Color::from_rgb(0.25, 0.25, 0.25) } else { Color::from_rgb(0.15, 0.15, 0.15) } } else { Color::from_rgb(0.08, 0.08, 0.08) };
-                let tc = if is_listen { Color::WHITE } else { Color::from_rgb(0.3, 0.3, 0.3) };
-                button::Style { background: Some(bg.into()), text_color: tc, border: Border { radius: 2.0.into(), ..Default::default() }, ..Default::default() }
-            });
-
-        let mf_knob = knob_gesture_suffixed("MONO FLOOR", " Hz", self.params.mono_floor.raw_target() as f32, 0.0, 300.0, 0.0,
-            move |g| pm(EquilibriumMsg::MonoFloorGesture(g)));
-        let reset_btn = output_tools_strip(pm(EquilibriumMsg::ResetAll));
-
-        let analyse_section = column![
-            Text::new("ANALYZE").size(10).font(bold_font()).color(Color::from_rgb(1.0, 0.55, 0.15)),
-            row![listen_btn, apply_btn, ra_btn].spacing(12).align_y(Alignment::Center),
-        ].spacing(4).align_x(Alignment::Center);
-
-        let mf_section = column![
-            Text::new("MONO FLOOR").size(10).font(bold_font()).color(Color::from_rgb(1.0, 0.55, 0.15)),
-            row![mf_knob].spacing(12).align_y(Alignment::Center),
-        ].spacing(4).align_x(Alignment::Center);
-
-        let footer = container(row![
-            container(analyse_section).padding(5), vsep(), Space::new().width(Length::Fill),
-            vsep(), container(mf_section).padding(5), vsep(), container(reset_btn).padding(5),
-        ].align_y(Alignment::Center).spacing(15))
-        .width(Length::Fill).height(Length::Fixed(110.0)).padding(8)
-        .style(|_| container::Style {
-            background: Some(Color::from_rgb(0.08, 0.08, 0.08).into()),
-            border: Border { color: Color::from_rgb(0.15, 0.15, 0.15), width: 1.0, ..Default::default() },
-            ..Default::default()
+        Label::new(cx, "GONIOMETER").font_size(10.0).color(col(0.6, 0.6, 0.6, 1.0));
+        let shared_gonio = shared.clone();
+        Binding::new(cx, telemetry, move |cx| {
+            let t = telemetry.get();
+            GoniometerView::new(cx, shared_gonio.scope_samples.clone(), shared_gonio.scope_write_pos.load(Ordering::Acquire), t.phase_correlation)
+                .width(Stretch(1.0))
+                .height(Pixels(139.0));
         });
+    })
+    .width(Pixels(155.0))
+    .height(Stretch(1.0))
+    .padding(Pixels(8.0))
+    .vertical_gap(Pixels(6.0))
+    .background_color(rgb(0.1, 0.1, 0.1));
+}
 
-        // ── Assembly ──
-        let body = column![header, row![sidebar, container(middle).width(Length::Fill).height(Length::Fill), right].height(Length::Fill).width(Length::Fill), footer]
-            .width(Length::Fill).height(Length::Fill);
+// ─── Footer (analyze / mono floor / reset all) ──────────────────────────────
 
-        container(body).width(Length::Fill).height(Length::Fill)
-            .style(|_| container::Style { background: Some(Color::from_rgb(0.06, 0.06, 0.06).into()), text_color: Some(Color::WHITE), ..Default::default() }).into()
+fn build_footer(
+    cx: &mut Context,
+    telemetry: Signal<Telemetry>,
+    lens: ParamLens<EquilibriumParams>,
+    shared: Arc<SharedState>,
+    accum: Arc<Mutex<TickAccum>>,
+    selected_preset: Signal<Option<usize>>,
+    params_gen: Signal<u32>,
+) {
+    let lens_analyze = lens.clone();
+    let shared_analyze = shared.clone();
+    let lens_mono = lens.clone();
+    HStack::new(cx, move |cx| {
+        VStack::new(cx, move |cx| {
+            Label::new(cx, "ANALYZE").font_size(10.0).color(rgb(1.0, 0.55, 0.15));
+            HStack::new(cx, move |cx| {
+                styled_toggle_dyn(cx, lens_analyze.clone(), K::ListenActive, "LISTEN", "LISTEN ON");
+
+                let shared_apply = shared_analyze.clone();
+                let lens_apply = lens_analyze.clone();
+                Button::new(cx, |cx| Label::new(cx, "APPLY ANALYSIS").font_size(12.0))
+                    .on_press(move |_cx| {
+                        if lens_apply.get(K::ListenActive) <= 0.5 {
+                            return;
+                        }
+                        let t = telemetry.get();
+                        if t.listen_samples > 100.0 {
+                            for b in 0..5 {
+                                shared_apply.target_levels[b].store(t.listen_levels[b], Ordering::Release);
+                                shared_apply.target_tolerances[b].store(t.listen_tolerances[b], Ordering::Release);
+                            }
+                        }
+                    })
+                    .background_color(col(0.15, 0.15, 0.15, 1.0));
+
+                let shared_ra = shared_analyze.clone();
+                let lens_ra = lens_analyze.clone();
+                Button::new(cx, |cx| Label::new(cx, "RESET ANALYSIS").font_size(12.0))
+                    .on_press(move |_cx| {
+                        if lens_ra.get(K::ListenActive) <= 0.5 {
+                            return;
+                        }
+                        shared_ra.reset_analysis.store(true, Ordering::Release);
+                        shared_ra.listen_samples.store(0.0, Ordering::Release);
+                        for b in 0..5 {
+                            shared_ra.listen_levels[b].store(-90.0, Ordering::Release);
+                            shared_ra.listen_tolerances[b].store(0.0, Ordering::Release);
+                        }
+                    })
+                    .background_color(col(0.15, 0.15, 0.15, 1.0));
+            })
+            .horizontal_gap(Pixels(12.0))
+            .alignment(Alignment::Center)
+            .height(Auto);
+        })
+        .vertical_gap(Pixels(4.0))
+        .alignment(Alignment::Center)
+        .width(Auto)
+        .padding(Pixels(5.0));
+
+        Element::new(cx).width(Stretch(1.0));
+
+        VStack::new(cx, move |cx| {
+            Label::new(cx, "MONO FLOOR").font_size(10.0).color(rgb(1.0, 0.55, 0.15));
+            let mf = lens_mono.get_plain(K::MonoFloor);
+            let lens_mf = lens_mono.clone();
+            let mf_display = Signal::new(mf);
+            KnobView::new(cx, (mf / 300.0).clamp(0.0, 1.0), 0.0, 0.0, 300.0, false, move |_cx, g| match g {
+                Gesture::Start => lens_mf.begin_edit(K::MonoFloor),
+                Gesture::Change(v) => {
+                    let n = (v as f64) / 300.0;
+                    lens_mf.set(K::MonoFloor, n.clamp(0.0, 1.0));
+                    mf_display.set(v);
+                }
+                Gesture::End => lens_mf.end_edit(K::MonoFloor),
+            })
+            .width(Pixels(48.0))
+            .height(Pixels(48.0));
+            Label::new(cx, Memo::new(move |_| format!("{} Hz", format_knob_value(mf_display.get(), 300.0)))).font_size(10.0).color(rgb(1.0, 0.65, 0.3));
+        })
+        .vertical_gap(Pixels(4.0))
+        .alignment(Alignment::Center)
+        .width(Auto)
+        .padding(Pixels(5.0));
+
+        Button::new(cx, |cx| Label::new(cx, "RESET").font_size(12.0))
+            .on_press(move |_cx| reset_all(&lens, &shared, &accum, selected_preset, params_gen))
+            .padding(Pixels(6.0))
+            .background_color(col(0.2, 0.08, 0.08, 1.0))
+            .color(col(0.9, 0.5, 0.5, 1.0));
+    })
+    .width(Stretch(1.0))
+    .height(Pixels(110.0))
+    .padding(Pixels(8.0))
+    .alignment(Alignment::Center)
+    .horizontal_gap(Pixels(15.0))
+    .background_color(rgb(0.08, 0.08, 0.08));
+}
+
+// ─── Actions ─────────────────────────────────────────────────────────────────
+
+/// Bands/tolerances are the Target Profile (analysis reference line, set via
+/// APPLY ANALYSIS or an already-selected preset) - not the current gain
+/// knob positions.
+fn do_save_preset(accum: &Arc<Mutex<TickAccum>>, telemetry: &Signal<Telemetry>, preset_name_input: Signal<String>, lens: &ParamLens<EquilibriumParams>, params_gen: Signal<u32>) {
+    let t = telemetry.get();
+    let bands = t.target_levels;
+    let tolerances = t.target_tolerances;
+
+    let name_input = preset_name_input.get();
+    let mut acc = accum.lock().unwrap();
+    let name = if name_input.trim().is_empty() {
+        format!("User Preset {}", acc.presets.len() + 1)
+    } else {
+        name_input.trim().to_string()
+    };
+
+    let dir = match &acc.vault_path {
+        Some(vp) if !vp.is_empty() => std::path::PathBuf::from(vp),
+        _ => shared_analysis::get_plugin_dir("Equilibrium").join("presets"),
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    let safe = name.replace(|c: char| !c.is_alphanumeric() && c != ' ' && c != '-' && c != '_', "");
+    let fp = dir.join(format!("{safe}.md"));
+
+    let prof = shared_analysis::Profile {
+        name: name.clone(),
+        bands,
+        tolerances,
+        pans: [
+            lens.get_plain(K::LowPan),
+            lens.get_plain(K::BassPan),
+            lens.get_plain(K::MidPan),
+            lens.get_plain(K::HighMidPan),
+            lens.get_plain(K::HighPan),
+        ],
+        widths: [
+            lens.get_plain(K::LowWidth),
+            lens.get_plain(K::BassWidth),
+            lens.get_plain(K::MidWidth),
+            lens.get_plain(K::HighMidWidth),
+            lens.get_plain(K::HighWidth),
+        ],
+        mono_floor_hz: lens.get_plain(K::MonoFloor),
+        ..shared_analysis::Profile::default()
+    };
+    let md = shared_analysis::export_preset_to_markdown(&prof);
+    if std::fs::write(&fp, &md).is_ok() {
+        acc.presets = load_presets(acc.vault_path.as_deref());
+        preset_name_input.set(String::new());
+        params_gen.update(|g| *g = g.wrapping_add(1));
     }
 }
 
-// ─── Message Handler ─────────────────────────────────────────────────────────
-
-impl EquilibriumEditor {
-    fn handle_msg(&mut self, msg: &EquilibriumMsg, ctx: &PluginContext<EquilibriumParams>) {
-        match msg {
-            EquilibriumMsg::Tick => self.do_tick(ctx),
-            EquilibriumMsg::GainGesture(b, g) => self.do_gesture(|p| [&p.low_gain, &p.bass_gain, &p.mid_gain, &p.high_mid_gain, &p.high_gain][*b], g, ctx),
-            EquilibriumMsg::WidthGesture(b, g) => self.do_gesture(|p| [&p.low_width, &p.bass_width, &p.mid_width, &p.high_mid_width, &p.high_width][*b], g, ctx),
-            EquilibriumMsg::PanGesture(b, g) => self.do_gesture(|p| [&p.low_pan, &p.bass_pan, &p.mid_pan, &p.high_mid_pan, &p.high_pan][*b], g, ctx),
-            EquilibriumMsg::MonoFloorGesture(g) => self.do_gesture(|p| &p.mono_floor, g, ctx),
-            EquilibriumMsg::OutputGainGesture(g) => self.do_gesture(|p| &p.output_gain, g, ctx),
-            EquilibriumMsg::SoloToggled(b) => self.do_toggle(|p| [&p.solo_low, &p.solo_bass, &p.solo_mid, &p.solo_high_mid, &p.solo_high][*b], ctx),
-            EquilibriumMsg::MonoToggled => self.do_toggle(|p| &p.mono_active, ctx),
-            EquilibriumMsg::DeltaToggled => self.do_toggle(|p| &p.delta_active, ctx),
-            EquilibriumMsg::BypassToggled => self.do_toggle(|p| &p.bypass_active, ctx),
-            EquilibriumMsg::ListenToggled => self.do_toggle(|p| &p.listen_active, ctx),
-            EquilibriumMsg::ApplyAnalysisAsTarget => {
-                if self.listen_samples > 100.0 {
-                    for b in 0..5 {
-                        self.target_levels[b] = self.listen_levels[b];
-                        self.target_tolerances[b] = self.listen_tolerances[b];
-                        self.shared_state.target_levels[b].store(self.listen_levels[b], Ordering::Release);
-                        self.shared_state.target_tolerances[b].store(self.listen_tolerances[b], Ordering::Release);
-                    }
-                }
-            }
-            EquilibriumMsg::ResetAnalysis => {
-                self.shared_state.reset_analysis.store(true, Ordering::Release);
-                self.listen_levels = [-90.0; 5];
-                self.listen_level_min = [-90.0; 5];
-                self.listen_level_max = [-90.0; 5];
-                self.shared_state.listen_samples.store(0.0, Ordering::Release);
-                for b in 0..5 {
-                    self.shared_state.listen_levels[b].store(-90.0, Ordering::Release);
-                    self.shared_state.listen_tolerances[b].store(0.0, Ordering::Release);
-                }
-            }
-            EquilibriumMsg::AutoLoudTriggered => {
-                if !self.params.pre_master_active.value() {
-                    self.shared_state.auto_loud_trigger.store(true, Ordering::Release);
-                }
-            }
-            EquilibriumMsg::ResetAll => {
-                let p = &self.params;
-                for (param, val) in [
-                    (&p.low_gain, 0.0f64), (&p.bass_gain, 0.0), (&p.mid_gain, 0.0), (&p.high_mid_gain, 0.0), (&p.high_gain, 0.0),
-                    (&p.low_width, 100.0), (&p.bass_width, 100.0), (&p.mid_width, 100.0), (&p.high_mid_width, 100.0), (&p.high_width, 100.0),
-                    (&p.low_pan, 0.0), (&p.bass_pan, 0.0), (&p.mid_pan, 0.0), (&p.high_mid_pan, 0.0), (&p.high_pan, 0.0),
-                    (&p.output_gain, 0.0), (&p.mono_floor, 0.0), (&p.pre_master_target_db, -3.0),
-                ] {
-                    param.set_value(val);
-                    ctx.begin_edit(param.info.id);
-                    ctx.set_param(param.info.id, param.info.range.normalize(val));
-                    ctx.end_edit(param.info.id);
-                }
-                for bp in [&p.solo_low, &p.solo_bass, &p.solo_mid, &p.solo_high_mid, &p.solo_high, &p.pre_master_active] {
-                    if bp.value() {
-                        bp.set_value(false);
-                        ctx.begin_edit(bp.info.id);
-                        ctx.set_param(bp.info.id, 0.0);
-                        ctx.end_edit(bp.info.id);
-                    }
-                }
-                let (target_levels, target_tolerances) = if let Some(prof) = self.presets.first().map(|p| &p.2) {
-                    (prof.bands, prof.tolerances)
-                } else {
-                    ([0.0f32; 5], shared_analysis::DEFAULT_TOLERANCES)
-                };
-                self.target_levels = target_levels;
-                self.target_tolerances = target_tolerances;
-                self.selected_preset_index = if self.presets.is_empty() { None } else { Some(0) };
-                for b in 0..5 {
-                    self.shared_state.target_levels[b].store(target_levels[b], Ordering::Release);
-                    self.shared_state.target_tolerances[b].store(target_tolerances[b], Ordering::Release);
-                }
-                if let Some(idx) = self.selected_preset_index {
-                    self.shared_state.selected_preset_index.store(idx, Ordering::Release);
-                }
-                self.shared_state.auto_loud_gain_offset.store(0.0, Ordering::Release);
-                self.shared_state.reset_analysis.store(true, Ordering::Release);
-            }
-            EquilibriumMsg::SelectPreset(idx) => {
-                let i = *idx;
-                if i < self.presets.len() {
-                    self.selected_preset_index = Some(i);
-                    self.shared_state.selected_preset_index.store(i, Ordering::Release);
-                    let prof = &self.presets[i].2;
-                    for b in 0..5 {
-                        self.shared_state.target_levels[b].store(prof.bands[b], Ordering::Release);
-                        self.shared_state.target_tolerances[b].store(prof.tolerances[b], Ordering::Release);
-                    }
-                    // Bands are the Target Profile (analysis reference line), not a
-                    // gain correction — only stereo settings apply directly to params.
-                    let set_f = |param: &FloatParam, val: f64| {
-                        param.set_value(val);
-                        ctx.begin_edit(param.info.id);
-                        ctx.set_param(param.info.id, param.info.range.normalize(val));
-                        ctx.end_edit(param.info.id);
-                    };
-                    set_f(&self.params.low_width, prof.widths[0] as f64);
-                    set_f(&self.params.bass_width, prof.widths[1] as f64);
-                    set_f(&self.params.mid_width, prof.widths[2] as f64);
-                    set_f(&self.params.high_mid_width, prof.widths[3] as f64);
-                    set_f(&self.params.high_width, prof.widths[4] as f64);
-
-                    set_f(&self.params.low_pan, prof.pans[0] as f64);
-                    set_f(&self.params.bass_pan, prof.pans[1] as f64);
-                    set_f(&self.params.mid_pan, prof.pans[2] as f64);
-                    set_f(&self.params.high_mid_pan, prof.pans[3] as f64);
-                    set_f(&self.params.high_pan, prof.pans[4] as f64);
-
-                    set_f(&self.params.mono_floor, prof.mono_floor_hz as f64);
-                }
-            }
-            EquilibriumMsg::PresetNameChanged(name) => self.preset_name_input = name.clone(),
-            EquilibriumMsg::SavePreset => self.do_save_preset(),
-            EquilibriumMsg::SetupToggled => self.show_setup = !self.show_setup,
-            EquilibriumMsg::VaultPathChanged(p) => self.vault_path_input = p.clone(),
-            EquilibriumMsg::SaveVaultPath => {
-                let vp = self.vault_path_input.trim().to_string();
-                if !vp.is_empty() {
-                    self.vault_path = Some(vp.clone());
-                    let mut cfg = shared_analysis::load_config("Equilibrium");
-                    cfg.vault_path = Some(vp.clone());
-                    let _ = shared_analysis::save_config("Equilibrium", &cfg);
-                    self.presets = load_presets(Some(&vp));
-                    self.selected_preset_index = Some(0);
-                    self.show_setup = false;
-                }
-            }
-            EquilibriumMsg::ResetPeak => {
-                self.shared_state.reset_peak.store(true, Ordering::Release);
-            }
-            EquilibriumMsg::PreMasterToggled => {
-                let nv = !self.params.pre_master_active.value();
-                self.do_toggle(|p| &p.pre_master_active, ctx);
-                if nv {
-                    self.shared_state.auto_loud_measuring.store(false, Ordering::Release);
-                    self.shared_state.auto_loud_gain_offset.store(0.0, Ordering::Release);
-                }
-            }
-            EquilibriumMsg::PreMasterGesture(g) => self.do_gesture(|p| &p.pre_master_target_db, g, ctx),
-            EquilibriumMsg::SnapPressed => {
-                if self.vault_path.as_ref().is_none_or(|v| v.is_empty()) {
-                    self.show_setup = true;
-                } else {
-                    self.shared_state.snap_active.store(true, Ordering::Release);
-                    self.shared_state.snap_phase.store(1, Ordering::Release);
-                }
-            }
+fn reset_all(lens: &ParamLens<EquilibriumParams>, shared: &SharedState, accum: &Arc<Mutex<TickAccum>>, selected_preset: Signal<Option<usize>>, params_gen: Signal<u32>) {
+    for (id, val) in [
+        (K::LowGain, 0.0f64),
+        (K::BassGain, 0.0),
+        (K::MidGain, 0.0),
+        (K::HighMidGain, 0.0),
+        (K::HighGain, 0.0),
+        (K::LowWidth, 100.0),
+        (K::BassWidth, 100.0),
+        (K::MidWidth, 100.0),
+        (K::HighMidWidth, 100.0),
+        (K::HighWidth, 100.0),
+        (K::LowPan, 0.0),
+        (K::BassPan, 0.0),
+        (K::MidPan, 0.0),
+        (K::HighMidPan, 0.0),
+        (K::HighPan, 0.0),
+        (K::OutputGain, 0.0),
+        (K::MonoFloor, 0.0),
+        (K::PreMasterTargetDb, -3.0),
+    ] {
+        let norm = param_norm(id, val);
+        lens.automate(id, norm);
+    }
+    for id in [K::SoloLow, K::SoloBass, K::SoloMid, K::SoloHighMid, K::SoloHigh, K::PreMasterActive] {
+        if lens.get(id) > 0.5 {
+            lens.automate(id, 0.0);
         }
     }
 
-    fn do_tick(&mut self, _ctx: &PluginContext<EquilibriumParams>) {
-        for b in 0..5 {
-            self.band_levels[b] = self.shared_state.band_levels[b].load(Ordering::Acquire);
-            self.target_levels[b] = self.shared_state.target_levels[b].load(Ordering::Acquire);
-            self.target_tolerances[b] = self.shared_state.target_tolerances[b].load(Ordering::Acquire);
-            self.listen_levels[b] = self.shared_state.listen_levels[b].load(Ordering::Acquire);
-            self.listen_tolerances[b] = self.shared_state.listen_tolerances[b].load(Ordering::Acquire);
-            self.listen_level_min[b] = self.shared_state.listen_level_min[b].load(Ordering::Acquire);
-            self.listen_level_max[b] = self.shared_state.listen_level_max[b].load(Ordering::Acquire);
-        }
-        self.listen_samples = self.shared_state.listen_samples.load(Ordering::Acquire);
-        self.phase_correlation = self.shared_state.phase_correlation.load(Ordering::Acquire);
-        self.output_peak = self.shared_state.output_peak.load(Ordering::Acquire);
-        self.peak_hold = self.shared_state.peak_hold.load(Ordering::Acquire);
-        self.peak_l = self.shared_state.output_peak_l.load(Ordering::Acquire);
-        self.peak_r = self.shared_state.output_peak_r.load(Ordering::Acquire);
-        self.peak_hold_l = self.shared_state.peak_hold_l.load(Ordering::Acquire);
-        self.peak_hold_r = self.shared_state.peak_hold_r.load(Ordering::Acquire);
-        self.balance = self.shared_state.balance.load(Ordering::Acquire);
+    let acc = accum.lock().unwrap();
+    let (target_levels, target_tolerances) = if let Some(prof) = acc.presets.first().map(|p| &p.2) {
+        (prof.bands, prof.tolerances)
+    } else {
+        ([0.0f32; 5], shared_analysis::DEFAULT_TOLERANCES)
+    };
+    let has_presets = !acc.presets.is_empty();
+    drop(acc);
 
-        self.preset_refresh_counter = self.preset_refresh_counter.wrapping_add(1);
-        if self.preset_refresh_counter % 60 == 0 {
-            self.presets = load_presets(self.vault_path.as_deref());
-        }
-
-        let measuring = self.shared_state.auto_loud_measuring.load(Ordering::Acquire);
-        self.auto_loud_measuring = measuring;
-        if !measuring {
-            let offset = self.shared_state.auto_loud_gain_offset.load(Ordering::Acquire);
-            if offset.abs() > 0.05 {
-                let cur = self.params.output_gain.raw_target() as f32;
-                self.params.output_gain.set_value((cur + offset).clamp(-12.0, 12.0) as f64);
-                self.shared_state.auto_loud_gain_offset.store(0.0, Ordering::Release);
-            }
-        }
-
-        let snap_now = self.shared_state.snap_active.load(Ordering::Acquire);
-        let was = self.snap_active;
-        self.snap_active = snap_now;
-        if self.snap_active { self.snap_blink_counter = self.snap_blink_counter.wrapping_add(1); }
-        else if was {
-            self.snap_blink_counter = 0;
-            if let Some(ref vp) = self.vault_path {
-                if !vp.is_empty() {
-                    let stereo = self.shared_state.snap_stereo_snap.lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
-                    let mono = self.shared_state.snap_mono_snap.lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
-                    let delta = self.shared_state.snap_delta_snap.lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
-                    let sr = self.shared_state.sample_rate.load(Ordering::Acquire);
-                    let md = snap_markdown(&self.params, &stereo, &mono, &delta, self.band_levels, self.phase_correlation, self.peak_l, self.peak_r, sr);
-                    let fname = snap_filename(vp);
-                    let _ = std::fs::write(std::path::Path::new(vp).join(&fname), &md);
-                }
-            }
-        }
+    for b in 0..5 {
+        shared.target_levels[b].store(target_levels[b], Ordering::Release);
+        shared.target_tolerances[b].store(target_tolerances[b], Ordering::Release);
     }
-
-    fn do_gesture(&self, f: impl Fn(&EquilibriumParams) -> &FloatParam, g: &Gesture, ctx: &PluginContext<EquilibriumParams>) {
-        let p = f(&self.params);
-        match g {
-            Gesture::Start => ctx.begin_edit(p.info.id),
-            Gesture::Change(v) => {
-                p.set_value(*v as f64);
-                let norm = p.info.range.normalize(*v as f64);
-                ctx.set_param(p.info.id, norm);
-            }
-            Gesture::End => ctx.end_edit(p.info.id),
-        }
+    let sel = if has_presets { Some(0) } else { None };
+    selected_preset.set(sel);
+    if let Some(idx) = sel {
+        shared.selected_preset_index.store(idx, Ordering::Release);
     }
+    shared.auto_loud_gain_offset.store(0.0, Ordering::Release);
+    shared.reset_analysis.store(true, Ordering::Release);
 
-    fn do_toggle(&self, f: impl Fn(&EquilibriumParams) -> &BoolParam, ctx: &PluginContext<EquilibriumParams>) {
-        let p = f(&self.params);
-        let new_val = !p.value();
-        p.set_value(new_val);
-        let norm = if new_val { 1.0 } else { 0.0 };
-        ctx.begin_edit(p.info.id);
-        ctx.set_param(p.info.id, norm);
-        ctx.end_edit(p.info.id);
-    }
-
-    fn do_save_preset(&mut self) {
-        // Bands/tolerances are the Target Profile (analysis reference line,
-        // set via ApplyAnalysisAsTarget or an already-selected preset) —
-        // not the current gain knob positions.
-        let bands = self.target_levels;
-        let tolerances = self.target_tolerances;
-
-        let name = if self.preset_name_input.trim().is_empty() {
-            format!("User Preset {}", self.presets.len() + 1)
-        } else { self.preset_name_input.trim().to_string() };
-
-        let dir = match &self.vault_path {
-            Some(vp) if !vp.is_empty() => std::path::PathBuf::from(vp),
-            _ => shared_analysis::get_plugin_dir("Equilibrium").join("presets"),
-        };
-        let _ = std::fs::create_dir_all(&dir);
-        let safe = name.replace(|c: char| !c.is_alphanumeric() && c != ' ' && c != '-' && c != '_', "");
-        let fp = dir.join(format!("{}.md", safe));
-
-        let prof = shared_analysis::Profile {
-            name: name.clone(), bands, tolerances,
-            pans: [self.params.low_pan.raw_target() as f32, self.params.bass_pan.raw_target() as f32,
-                self.params.mid_pan.raw_target() as f32, self.params.high_mid_pan.raw_target() as f32,
-                self.params.high_pan.raw_target() as f32],
-            widths: [self.params.low_width.raw_target() as f32, self.params.bass_width.raw_target() as f32,
-                self.params.mid_width.raw_target() as f32, self.params.high_mid_width.raw_target() as f32,
-                self.params.high_width.raw_target() as f32],
-            mono_floor_hz: self.params.mono_floor.raw_target() as f32,
-            ..shared_analysis::Profile::default()
-        };
-        let md = shared_analysis::export_preset_to_markdown(&prof);
-        if std::fs::write(&fp, &md).is_ok() {
-            self.presets = load_presets(self.vault_path.as_deref());
-            self.preset_name_input.clear();
-        }
-    }
+    params_gen.update(|g| *g = g.wrapping_add(1));
 }
 
-// ─── SNAP Helpers ────────────────────────────────────────────────────────────
+/// Normalize a plain param value against its known linear range - the
+/// ranges are fixed per `EquilibriumParams`' `#[param(range = ...)]`
+/// declarations, so this avoids threading `ParamInfo` lookups through
+/// `reset_all`'s call sites just to invert a linear range.
+fn param_norm(id: K, plain: f64) -> f64 {
+    let (min, max) = match id {
+        K::LowGain | K::BassGain | K::MidGain | K::HighMidGain | K::HighGain | K::OutputGain => (-12.0, 12.0),
+        K::LowWidth | K::BassWidth | K::MidWidth | K::HighMidWidth | K::HighWidth => (0.0, 150.0),
+        K::LowPan | K::BassPan | K::MidPan | K::HighMidPan | K::HighPan => (-1.0, 1.0),
+        K::MonoFloor => (0.0, 300.0),
+        K::PreMasterTargetDb => (-6.0, -3.0),
+        _ => (0.0, 1.0),
+    };
+    ((plain - min) / (max - min)).clamp(0.0, 1.0)
+}
+
+// ─── SNAP Helpers (framework-independent, unchanged from the iced version) ──
 
 fn snap_filename(vault_path: &str) -> String {
     let dir = std::path::Path::new(vault_path);
@@ -871,23 +1144,27 @@ fn snap_filename(vault_path: &str) -> String {
         for e in entries.flatten() {
             let s = e.file_name().to_string_lossy().into_owned();
             if let Some(inner) = s.strip_prefix("SNAPSHOT-").and_then(|r| r.strip_suffix(".md")) {
-                if let Ok(n) = inner.parse::<u32>() { max_n = max_n.max(n); }
+                if let Ok(n) = inner.parse::<u32>() {
+                    max_n = max_n.max(n);
+                }
             }
         }
     }
     format!("SNAPSHOT-{:03}.md", max_n + 1)
 }
 
-fn snap_markdown(_p: &EquilibriumParams, stereo: &[f32], mono: &[f32], delta: &[f32],
-    band_levels: [f32; 5], corr: f32, pl: f32, pr: f32, sr: f32) -> String
-{
+fn snap_markdown(stereo: &[f32], mono: &[f32], delta: &[f32], band_levels: [f32; 5], corr: f32, pl: f32, pr: f32, sr: f32) -> String {
     let fft_sz = 2048.0;
     let freqs: &[f32] = &[20.0, 40.0, 80.0, 160.0, 315.0, 630.0, 1250.0, 2500.0, 5000.0, 10000.0, 16000.0, 20000.0];
     let tbl = |s: &[f32]| {
-        freqs.iter().map(|&f| {
-            let bin = ((f * fft_sz / sr) as usize).min(s.len().saturating_sub(1));
-            format!("| {} | {:.1} |", if f >= 1000.0 { format!("{:.0}k", f/1000.0) } else { format!("{:.0}", f) }, s[bin])
-        }).collect::<Vec<_>>().join("\n")
+        freqs
+            .iter()
+            .map(|&f| {
+                let bin = ((f * fft_sz / sr) as usize).min(s.len().saturating_sub(1));
+                format!("| {} | {:.1} |", if f >= 1000.0 { format!("{:.0}k", f / 1000.0) } else { format!("{:.0}", f) }, s[bin])
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     };
     format!(
         "---\nplugin: equilibrium\ntype: snapshot\n---\n\n# Equilibrium Snapshot\n\n\
@@ -897,7 +1174,7 @@ fn snap_markdown(_p: &EquilibriumParams, stereo: &[f32], mono: &[f32], delta: &[
         ## Delta\n| Hz | dB |\n|----|-----|\n{dt}\n\n\
         ## 5-Band\n| Band | Pegel |\n|------|-------|\n\
         | Low | {b0:.1} dB |\n| Bass | {b1:.1} dB |\n| Mid | {b2:.1} dB |\n| Hi-Mid | {b3:.1} dB |\n| High | {b4:.1} dB |\n",
-        pl=pl, pr=pr, co=corr, st=tbl(stereo), mn=tbl(mono), dt=tbl(delta),
-        b0=band_levels[0], b1=band_levels[1], b2=band_levels[2], b3=band_levels[3], b4=band_levels[4],
+        pl = pl, pr = pr, co = corr, st = tbl(stereo), mn = tbl(mono), dt = tbl(delta),
+        b0 = band_levels[0], b1 = band_levels[1], b2 = band_levels[2], b3 = band_levels[3], b4 = band_levels[4],
     )
 }
