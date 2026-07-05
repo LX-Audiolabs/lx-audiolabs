@@ -1301,18 +1301,22 @@ fn plain_knob(cx: &mut Context, lens: &ParamLens<MeridianParams>, params: &Arc<M
     let value = lens.get_plain(id);
     let display = Signal::new(value);
     let norm = ((value - min) / (max - min)).clamp(0.0, 1.0);
-    KnobView::new(cx, norm, 0.0, min, max, false, move |_cx, g| match g {
-        Gesture::Start => lens.begin_edit(id),
-        Gesture::Change(v) => {
-            lens.set(id, field(&params).info.range.normalize(v as f64));
-            display.set(v);
-        }
-        Gesture::End => lens.end_edit(id),
+    VStack::new(cx, move |cx| {
+        KnobView::new(cx, norm, 0.0, min, max, false, move |_cx, g| match g {
+            Gesture::Start => lens.begin_edit(id),
+            Gesture::Change(v) => {
+                lens.set(id, field(&params).info.range.normalize(v as f64));
+                display.set(v);
+            }
+            Gesture::End => lens.end_edit(id),
+        })
+        .width(Pixels(40.0))
+        .height(Pixels(40.0));
+        Label::new(cx, Memo::new(move |_| format_knob_value(display.get(), max))).font_size(9.0).color(rgb(1.0, 0.65, 0.3));
+        Label::new(cx, label).font_size(9.0).color(col(0.75, 0.75, 0.75, 1.0));
     })
-    .width(Pixels(40.0))
-    .height(Pixels(40.0));
-    Label::new(cx, Memo::new(move |_| format_knob_value(display.get(), max))).font_size(9.0).color(rgb(1.0, 0.65, 0.3));
-    Label::new(cx, label).font_size(9.0).color(col(0.75, 0.75, 0.75, 1.0));
+    .alignment(Alignment::Center)
+    .width(Pixels(40.0));
 }
 
 /// A single bipolar knob (Tilt, Pan, Width, Inflate Curve, Out Gain).
@@ -1322,18 +1326,22 @@ fn bipolar_knob(cx: &mut Context, lens: &ParamLens<MeridianParams>, params: &Arc
     let value = lens.get_plain(id);
     let display = Signal::new(value);
     let norm = ((value - min) / (max - min)).clamp(0.0, 1.0);
-    KnobView::new(cx, norm, ((default - min) / (max - min)).clamp(0.0, 1.0), min, max, true, move |_cx, g| match g {
-        Gesture::Start => lens.begin_edit(id),
-        Gesture::Change(v) => {
-            lens.set(id, field(&params).info.range.normalize(v as f64));
-            display.set(v);
-        }
-        Gesture::End => lens.end_edit(id),
+    VStack::new(cx, move |cx| {
+        KnobView::new(cx, norm, ((default - min) / (max - min)).clamp(0.0, 1.0), min, max, true, move |_cx, g| match g {
+            Gesture::Start => lens.begin_edit(id),
+            Gesture::Change(v) => {
+                lens.set(id, field(&params).info.range.normalize(v as f64));
+                display.set(v);
+            }
+            Gesture::End => lens.end_edit(id),
+        })
+        .width(Pixels(40.0))
+        .height(Pixels(40.0));
+        Label::new(cx, Memo::new(move |_| format_knob_value(display.get(), max.abs().max(min.abs())))).font_size(9.0).color(rgb(1.0, 0.65, 0.3));
+        Label::new(cx, label).font_size(9.0).color(col(0.75, 0.75, 0.75, 1.0));
     })
-    .width(Pixels(40.0))
-    .height(Pixels(40.0));
-    Label::new(cx, Memo::new(move |_| format_knob_value(display.get(), max.abs().max(min.abs())))).font_size(9.0).color(rgb(1.0, 0.65, 0.3));
-    Label::new(cx, label).font_size(9.0).color(col(0.75, 0.75, 0.75, 1.0));
+    .alignment(Alignment::Center)
+    .width(Pixels(40.0));
 }
 
 // ─── Right sidebar (output level, auto loud, goniometer) ────────────────────
