@@ -164,7 +164,7 @@ fn tick(shared: &SharedState, params: &EquilibriumParams, accum: &Arc<Mutex<Tick
     let balance = shared.balance.load(Ordering::Acquire);
 
     acc.preset_refresh_counter = acc.preset_refresh_counter.wrapping_add(1);
-    let refresh_presets = acc.preset_refresh_counter % 60 == 0;
+    let refresh_presets = acc.preset_refresh_counter.is_multiple_of(60);
     if refresh_presets {
         acc.presets = load_presets(acc.vault_path.as_deref());
     }
@@ -228,8 +228,8 @@ fn tick(shared: &SharedState, params: &EquilibriumParams, accum: &Arc<Mutex<Tick
             t.snap_blink_counter = t.snap_blink_counter.wrapping_add(1);
         } else if was_active {
             t.snap_blink_counter = 0;
-            if let Some(vp) = vault_path {
-                if !vp.is_empty() {
+            if let Some(vp) = vault_path
+                && !vp.is_empty() {
                     let stereo = shared.snap_stereo_snap.try_lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
                     let mono = shared.snap_mono_snap.try_lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
                     let delta = shared.snap_delta_snap.try_lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
@@ -238,7 +238,6 @@ fn tick(shared: &SharedState, params: &EquilibriumParams, accum: &Arc<Mutex<Tick
                     let fname = snap_filename(&vp);
                     let _ = std::fs::write(std::path::Path::new(&vp).join(&fname), &md);
                 }
-            }
         }
     });
 }
@@ -304,19 +303,16 @@ fn styled_toggle(cx: &mut Context, lens: ParamLens<EquilibriumParams>, id: K, la
     Binding::new(cx, sig, move |cx| {
         let active = lens.get(id) > 0.5;
         let lens = lens.clone();
-        Button::new(cx, move |cx| Label::new(cx, label).font_size(12.0))
-            .on_press(move |_cx| {
-                let now = lens.get(id) <= 0.5;
-                let norm = if now { 1.0 } else { 0.0 };
-                lens.automate(id, norm);
-                // automate() only writes the backend param store - `sig` is
-                // a separate Signal seeded once by value_signal() and never
-                // otherwise updated, so without this push this Binding would
-                // never refire and the button would never repaint.
-                sig.set(norm as f32);
-            })
-            .padding(Pixels(6.0))
-            .background_color(if active { rgb(1.0, 0.45, 0.1) } else { col(0.15, 0.15, 0.15, 1.0) });
+        shared_ui::toggle_button(cx, label, active, move |_cx| {
+            let now = lens.get(id) <= 0.5;
+            let norm = if now { 1.0 } else { 0.0 };
+            lens.automate(id, norm);
+            // automate() only writes the backend param store - `sig` is
+            // a separate Signal seeded once by value_signal() and never
+            // otherwise updated, so without this push this Binding would
+            // never refire and the button would never repaint.
+            sig.set(norm as f32);
+        });
     });
 }
 
@@ -327,15 +323,12 @@ fn styled_toggle_dyn(cx: &mut Context, lens: ParamLens<EquilibriumParams>, id: K
     Binding::new(cx, sig, move |cx| {
         let active = lens.get(id) > 0.5;
         let lens = lens.clone();
-        Button::new(cx, move |cx| Label::new(cx, if active { label_on } else { label_off }).font_size(12.0))
-            .on_press(move |_cx| {
-                let now = lens.get(id) <= 0.5;
-                let norm = if now { 1.0 } else { 0.0 };
-                lens.automate(id, norm);
-                sig.set(norm as f32);
-            })
-            .padding(Pixels(6.0))
-            .background_color(if active { rgb(1.0, 0.45, 0.1) } else { col(0.15, 0.15, 0.15, 1.0) });
+        shared_ui::toggle_button(cx, if active { label_on } else { label_off }, active, move |_cx| {
+            let now = lens.get(id) <= 0.5;
+            let norm = if now { 1.0 } else { 0.0 };
+            lens.automate(id, norm);
+            sig.set(norm as f32);
+        });
     });
 }
 
@@ -344,7 +337,7 @@ fn styled_toggle_dyn(cx: &mut Context, lens: ParamLens<EquilibriumParams>, id: K
 pub fn build(cx: &mut Context, lens: ParamLens<EquilibriumParams>, shared: Arc<SharedState>, params: Arc<EquilibriumParams>) {
     let config = shared_analysis::load_config("Equilibrium");
     let presets = load_presets(config.vault_path.as_deref());
-    let selected_idx = Some(0usize.min(presets.len().saturating_sub(1)));
+    let selected_idx = Some(0usize);
 
     let mut target_levels = [0.0f32; 5];
     let mut target_tolerances = shared_analysis::DEFAULT_TOLERANCES;
@@ -613,6 +606,7 @@ fn preset_list_item(
 ) {
     let is_sel = selected == Some(idx);
     Button::new(cx, move |cx| Label::new(cx, format!("> {name}")).font_size(13.0))
+        .alignment(Alignment::Left)
         .on_press(move |_cx| {
             let acc = accum.lock().unwrap();
             let Some((_, _, prof)) = acc.presets.get(idx).cloned() else { return };
@@ -833,8 +827,8 @@ fn build_right_sidebar(cx: &mut Context, telemetry: Signal<Telemetry>, lens: Par
                         }
                         Gesture::End => lens_knob.end_edit(K::OutputGain),
                     })
-                    .width(Pixels(48.0))
-                    .height(Pixels(48.0));
+                    .width(Pixels(40.0))
+                    .height(Pixels(40.0));
                 }
             });
 
@@ -895,11 +889,12 @@ fn build_right_sidebar(cx: &mut Context, telemetry: Signal<Telemetry>, lens: Par
                     } else if t.auto_loud_measuring {
                         rgb(1.0, 0.8, 0.0)
                     } else if is_active {
-                        rgb(1.0, 0.45, 0.1)
+                        shared_ui::AMBER
                     } else {
-                        col(0.15, 0.15, 0.15, 1.0)
+                        shared_ui::IDLE_BG
                     }
-                }));
+                }))
+                .height(Pixels(shared_ui::BUTTON_HEIGHT));
             })
             .width(Auto)
             .height(Auto)
@@ -943,7 +938,7 @@ fn build_right_sidebar(cx: &mut Context, telemetry: Signal<Telemetry>, lens: Par
             let t = telemetry.get();
             GoniometerView::new(cx, shared_gonio.scope_samples.clone(), shared_gonio.scope_write_pos.load(Ordering::Acquire), t.phase_correlation)
                 .width(Stretch(1.0))
-                .height(Pixels(139.0));
+                .height(Pixels(115.0));
         });
     })
     .width(Pixels(155.0))
@@ -1037,8 +1032,8 @@ fn build_footer(
                         }
                         Gesture::End => lens_mf.end_edit(K::MonoFloor),
                     })
-                    .width(Pixels(48.0))
-                    .height(Pixels(48.0));
+                    .width(Pixels(40.0))
+                    .height(Pixels(40.0));
                     Label::new(cx, Memo::new(move |_| format!("{} Hz", format_knob_value(mf_display.get(), 300.0)))).font_size(10.0).color(rgb(1.0, 0.65, 0.3));
                 }
             });
@@ -1048,15 +1043,11 @@ fn build_footer(
         .width(Auto)
         .padding(Pixels(5.0));
 
-        Button::new(cx, |cx| Label::new(cx, "RESET").font_size(12.0))
-            .on_press(move |_cx| reset_all(&lens, &shared, &accum, selected_preset, params_gen))
-            .padding(Pixels(6.0))
-            .background_color(col(0.2, 0.08, 0.08, 1.0))
-            .color(col(0.9, 0.5, 0.5, 1.0));
+        shared_ui::danger_button(cx, "RESET", move |_cx| reset_all(&lens, &shared, &accum, selected_preset, params_gen));
     })
     .width(Stretch(1.0))
     .height(Pixels(110.0))
-    .padding_left(Pixels(28.0))
+    .padding_left(Pixels(170.0))
     .padding_right(Pixels(8.0))
     .padding_top(Pixels(8.0))
     .padding_bottom(Pixels(8.0))
@@ -1203,11 +1194,10 @@ fn snap_filename(vault_path: &str) -> String {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for e in entries.flatten() {
             let s = e.file_name().to_string_lossy().into_owned();
-            if let Some(inner) = s.strip_prefix("SNAPSHOT-").and_then(|r| r.strip_suffix(".md")) {
-                if let Ok(n) = inner.parse::<u32>() {
+            if let Some(inner) = s.strip_prefix("SNAPSHOT-").and_then(|r| r.strip_suffix(".md"))
+                && let Ok(n) = inner.parse::<u32>() {
                     max_n = max_n.max(n);
                 }
-            }
         }
     }
     format!("SNAPSHOT-{:03}.md", max_n + 1)

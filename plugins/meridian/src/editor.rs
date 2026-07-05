@@ -145,8 +145,8 @@ fn list_meridian_presets(vault_path: Option<&str>) -> Vec<(String, PathBuf, Meri
                 let path = entry.path();
                 let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
                 if path.is_file() && path.extension().is_some_and(|e| e == "md")
-                    && !stem.starts_with("SNAPSHOT-") && seen.insert(path.clone()) {
-                    if let Ok(content) = std::fs::read_to_string(&path) {
+                    && !stem.starts_with("SNAPSHOT-") && seen.insert(path.clone())
+                    && let Ok(content) = std::fs::read_to_string(&path) {
                         match shared_analysis::preset_plugin_name(&content).as_deref() {
                             Some("meridian") => {}
                             _ => continue,
@@ -156,12 +156,11 @@ fn list_meridian_presets(vault_path: Option<&str>) -> Vec<(String, PathBuf, Meri
                             presets.push((stem, path, prof));
                         }
                     }
-                }
             }
         }
     };
     scan(&local_dir);
-    if let Some(vp) = vault_path { if !vp.is_empty() { scan(std::path::Path::new(vp)); } }
+    if let Some(vp) = vault_path && !vp.is_empty() { scan(std::path::Path::new(vp)); }
     presets
 }
 
@@ -391,9 +390,8 @@ fn snap_filename(vault_path: &str) -> String {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for e in entries.flatten() {
             let s = e.file_name().to_string_lossy().into_owned();
-            if let Some(inner) = s.strip_prefix("SNAPSHOT-").and_then(|r| r.strip_suffix(".md")) {
-                if let Ok(n) = inner.parse::<u32>() { max_n = max_n.max(n); }
-            }
+            if let Some(inner) = s.strip_prefix("SNAPSHOT-").and_then(|r| r.strip_suffix(".md"))
+                && let Ok(n) = inner.parse::<u32>() { max_n = max_n.max(n); }
         }
     }
     format!("SNAPSHOT-{:03}.md", max_n + 1)
@@ -498,7 +496,7 @@ fn tick(shared: &SharedState, params: &MeridianParams, accum: &Arc<Mutex<TickAcc
     }
 
     acc.preset_refresh_counter = acc.preset_refresh_counter.wrapping_add(1);
-    let refresh_presets = acc.preset_refresh_counter % 150 == 0;
+    let refresh_presets = acc.preset_refresh_counter.is_multiple_of(150);
     if refresh_presets {
         acc.presets = list_meridian_presets(acc.vault_path.as_deref());
     }
@@ -540,8 +538,8 @@ fn tick(shared: &SharedState, params: &MeridianParams, accum: &Arc<Mutex<TickAcc
             t.snap_blink_counter = t.snap_blink_counter.wrapping_add(1);
         } else if was_active {
             t.snap_blink_counter = 0;
-            if let Some(vp) = vault_path {
-                if !vp.is_empty() {
+            if let Some(vp) = vault_path
+                && !vp.is_empty() {
                     let stereo = shared.snap_stereo_snap.try_lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
                     let mono = shared.snap_mono_snap.try_lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
                     let delta = shared.snap_delta_snap.try_lock().ok().map(|v| v.clone()).unwrap_or_else(|| vec![-90.0; 1024]);
@@ -549,7 +547,6 @@ fn tick(shared: &SharedState, params: &MeridianParams, accum: &Arc<Mutex<TickAcc
                     let fname = snap_filename(&vp);
                     let _ = std::fs::write(std::path::Path::new(&vp).join(&fname), &md);
                 }
-            }
         }
     });
 }
@@ -615,22 +612,16 @@ fn styled_toggle(cx: &mut Context, lens: ParamLens<MeridianParams>, id: K, label
     Binding::new(cx, sig, move |cx| {
         let active = lens.get(id) > 0.5;
         let lens = lens.clone();
-        Button::new(cx, move |cx| Label::new(cx, label).font_size(12.0))
-            .on_press(move |_cx| {
-                let now = lens.get(id) <= 0.5;
-                let norm = if now { 1.0 } else { 0.0 };
-                lens.automate(id, norm);
-                // automate() only writes the backend param store - `sig` is
-                // a separate Signal seeded once by value_signal() and never
-                // otherwise updated, so without this push this Binding would
-                // never refire and the button would never repaint.
-                sig.set(norm as f32);
-            })
-            .padding_left(Pixels(14.0))
-            .padding_right(Pixels(14.0))
-            .padding_top(Pixels(8.0))
-            .padding_bottom(Pixels(8.0))
-            .background_color(if active { rgb(1.0, 0.45, 0.1) } else { col(0.15, 0.15, 0.15, 1.0) });
+        shared_ui::toggle_button(cx, label, active, move |_cx| {
+            let now = lens.get(id) <= 0.5;
+            let norm = if now { 1.0 } else { 0.0 };
+            lens.automate(id, norm);
+            // automate() only writes the backend param store - `sig` is
+            // a separate Signal seeded once by value_signal() and never
+            // otherwise updated, so without this push this Binding would
+            // never refire and the button would never repaint.
+            sig.set(norm as f32);
+        });
     });
 }
 
@@ -647,13 +638,10 @@ fn slope_selector(cx: &mut Context, lens: ParamLens<MeridianParams>, params: Arc
                 let is_sel = current == s;
                 let lens = lens.clone();
                 let norm = step_norms[s as usize];
-                Button::new(cx, move |cx| Label::new(cx, slope_char(s)).font_size(11.0))
-                    .on_press(move |_cx| {
-                        lens.automate(id, norm);
-                        sig.set(norm as f32);
-                    })
-                    .padding(Pixels(4.0))
-                    .background_color(if is_sel { rgb(1.0, 0.45, 0.1) } else { col(0.15, 0.15, 0.15, 1.0) });
+                shared_ui::toggle_button_small(cx, slope_char(s), is_sel, move |_cx| {
+                    lens.automate(id, norm);
+                    sig.set(norm as f32);
+                });
             }
         })
         .horizontal_gap(Pixels(4.0))
@@ -758,7 +746,7 @@ pub fn build(cx: &mut Context, lens: ParamLens<MeridianParams>, shared: Arc<Shar
                 if show_setup.get() {
                     build_setup_form(cx, vault_path_input, show_setup, accum_middle.clone(), params_gen);
                 } else {
-                    build_main_panel(cx, telemetry, lens_middle.clone(), params_middle.clone(), shared_middle.clone());
+                    build_main_panel(cx, telemetry, lens_middle.clone(), params_middle.clone(), shared_middle.clone(), params_gen);
                 }
             });
         })
@@ -873,6 +861,9 @@ fn build_sidebar(
             let lens_scroll = lens_list.clone();
             let params_scroll = params_list.clone();
             ScrollView::new(cx, move |cx| {
+                if !user.is_empty() {
+                    Label::new(cx, "── Vault Presets ──").font_size(11.0).color(rgb(1.0, 0.55, 0.15));
+                }
                 for (idx, name) in user {
                     preset_list_item(cx, idx, name, sel, selected_preset, accum_scroll.clone(), lens_scroll.clone(), params_scroll.clone(), params_gen);
                 }
@@ -901,6 +892,7 @@ fn preset_list_item(
 ) {
     let is_sel = selected == Some(idx);
     Button::new(cx, move |cx| Label::new(cx, format!("> {name}")).font_size(13.0))
+        .alignment(Alignment::Left)
         .on_press(move |_cx| {
             let acc = accum.lock().unwrap();
             let Some((_, _, prof)) = acc.presets.get(idx).cloned() else { return };
@@ -1027,8 +1019,15 @@ fn build_setup_form(cx: &mut Context, vault_path_input: Signal<String>, show_set
 
 // ─── Main panel (top strip + spectrum/EQ-curve + 5-band EQ row) ─────────────
 
-fn build_main_panel(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamLens<MeridianParams>, params: Arc<MeridianParams>, shared: Arc<SharedState>) {
+fn build_main_panel(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamLens<MeridianParams>, params: Arc<MeridianParams>, shared: Arc<SharedState>, params_gen: Signal<u32>) {
     // ── Top strip: Filter / Warmth / Exciter / Tilt ──
+    // Wrapped in `Binding(params_gen)` so RESET / preset-load refreshes these
+    // drag widgets - they snapshot `lens.get_plain()` once at construction and
+    // otherwise never see a value changed from outside their own gesture.
+    Binding::new(cx, params_gen, {
+    let lens = lens.clone();
+    let params = params.clone();
+    move |cx| {
     HStack::new(cx, {
         let lens = lens.clone();
         let params = params.clone();
@@ -1056,8 +1055,8 @@ fn build_main_panel(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamL
                                 }
                                 Gesture::End => lens_hpf.end_edit(K::HpfFreq),
                             })
-                            .width(Pixels(44.0))
-                            .height(Pixels(44.0));
+                            .width(Pixels(40.0))
+                            .height(Pixels(40.0));
                             Label::new(cx, Memo::new(move |_| short_freq(hpf_display.get()))).font_size(9.0).color(rgb(1.0, 0.65, 0.3));
                             Label::new(cx, "LOW CUT").font_size(9.0).color(col(0.75, 0.75, 0.75, 1.0));
                         })
@@ -1079,8 +1078,8 @@ fn build_main_panel(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamL
                                 }
                                 Gesture::End => lens_lpf.end_edit(K::LpfFreq),
                             })
-                            .width(Pixels(44.0))
-                            .height(Pixels(44.0));
+                            .width(Pixels(40.0))
+                            .height(Pixels(40.0));
                             Label::new(cx, Memo::new(move |_| short_freq(lpf_display.get()))).font_size(9.0).color(rgb(1.0, 0.65, 0.3));
                             Label::new(cx, "HIGH CUT").font_size(9.0).color(col(0.75, 0.75, 0.75, 1.0));
                         })
@@ -1118,7 +1117,7 @@ fn build_main_panel(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamL
                 let params = params.clone();
                 move |cx| {
                     strip_label(cx, "TILT EQ");
-                    bipolar_knob(cx, &lens, &params, K::TiltGain, |p| &p.tilt_gain, -1.5, 1.5, "SLOPE");
+                    bipolar_knob(cx, &lens, &params, K::TiltGain, |p| &p.tilt_gain, -1.5, 1.5, 0.0, "SLOPE");
                 }
             })
             .vertical_gap(Pixels(4.0))
@@ -1131,6 +1130,7 @@ fn build_main_panel(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamL
     .horizontal_gap(Pixels(15.0))
     .alignment(Alignment::Center)
     .padding(Pixels(5.0));
+    }});
 
     // ── Spectrum + EQ curve overlay - passive display, rebuilt every tick ──
     let params_spec = params.clone();
@@ -1157,6 +1157,12 @@ fn build_main_panel(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamL
         let _ = t;
     });
 
+    // ── 5-band EQ row - drag widgets, rebuilt only on `params_gen` (RESET /
+    // preset load), same reasoning as the top strip above.
+    Binding::new(cx, params_gen, {
+        let lens = lens.clone();
+        let params = params.clone();
+        move |cx| {
     HStack::new(cx, move |cx| {
         for label in HZ_LABELS {
             Label::new(cx, label).font_size(10.0).color(rgb(1.0, 0.55, 0.15)).width(Stretch(1.0)).alignment(Alignment::Center);
@@ -1165,7 +1171,8 @@ fn build_main_panel(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamL
     .width(Stretch(1.0))
     .height(Pixels(15.0));
 
-    // ── 5-band EQ row - drag widgets, built once ──
+    let lens = lens.clone();
+    let params = params.clone();
     HStack::new(cx, move |cx| {
         for b in 0..5 {
             let gain_field = GAIN_FIELDS[b];
@@ -1226,6 +1233,7 @@ fn build_main_panel(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamL
     .height(Auto)
     .horizontal_gap(Pixels(10.0))
     .padding(Pixels(10.0));
+    }});
 }
 
 fn vsep(cx: &mut Context) {
@@ -1256,8 +1264,8 @@ fn linear_knob_group(cx: &mut Context, lens: &ParamLens<MeridianParams>, params:
                         }
                         Gesture::End => lens.end_edit(id),
                     })
-                    .width(Pixels(44.0))
-                    .height(Pixels(44.0));
+                    .width(Pixels(40.0))
+                    .height(Pixels(40.0));
                     Label::new(cx, Memo::new(move |_| format_knob_value(display.get(), max))).font_size(9.0).color(rgb(1.0, 0.65, 0.3));
                     Label::new(cx, label).font_size(9.0).color(col(0.75, 0.75, 0.75, 1.0));
                 })
@@ -1297,13 +1305,13 @@ fn plain_knob(cx: &mut Context, lens: &ParamLens<MeridianParams>, params: &Arc<M
 }
 
 /// A single bipolar knob (Tilt, Pan, Width, Inflate Curve, Out Gain).
-fn bipolar_knob(cx: &mut Context, lens: &ParamLens<MeridianParams>, params: &Arc<MeridianParams>, id: K, field: FloatField, min: f32, max: f32, label: &'static str) {
+fn bipolar_knob(cx: &mut Context, lens: &ParamLens<MeridianParams>, params: &Arc<MeridianParams>, id: K, field: FloatField, min: f32, max: f32, default: f32, label: &'static str) {
     let lens = lens.clone();
     let params = params.clone();
     let value = lens.get_plain(id);
     let display = Signal::new(value);
     let norm = ((value - min) / (max - min)).clamp(0.0, 1.0);
-    KnobView::new(cx, norm, ((0.0 - min) / (max - min)).clamp(0.0, 1.0), min, max, true, move |_cx, g| match g {
+    KnobView::new(cx, norm, ((default - min) / (max - min)).clamp(0.0, 1.0), min, max, true, move |_cx, g| match g {
         Gesture::Start => lens.begin_edit(id),
         Gesture::Change(v) => {
             lens.set(id, field(&params).info.range.normalize(v as f64));
@@ -1311,8 +1319,8 @@ fn bipolar_knob(cx: &mut Context, lens: &ParamLens<MeridianParams>, params: &Arc
         }
         Gesture::End => lens.end_edit(id),
     })
-    .width(Pixels(48.0))
-    .height(Pixels(48.0));
+    .width(Pixels(40.0))
+    .height(Pixels(40.0));
     Label::new(cx, Memo::new(move |_| format_knob_value(display.get(), max.abs().max(min.abs())))).font_size(10.0).color(rgb(1.0, 0.65, 0.3));
     Label::new(cx, label).font_size(9.0).color(col(0.75, 0.75, 0.75, 1.0));
 }
@@ -1333,22 +1341,37 @@ fn build_right_sidebar(cx: &mut Context, telemetry: Signal<Telemetry>, lens: Par
                 // for exactly this reason) - re-read the plain value from
                 // the param on every bump so the knob doesn't go stale like
                 // it did before this Binding existed.
-                Binding::new(cx, params_gen, {
+                VStack::new(cx, {
                     let lens = lens.clone();
                     let params = params.clone();
-                    move |cx| { bipolar_knob(cx, &lens, &params, K::OutputGain, |p| &p.output_gain, -12.0, 12.0, "OUT GAIN"); }
-                });
-
-                let shared_al = shared.clone();
-                Button::new(cx, move |cx| {
-                    Label::new(cx, Memo::new(move |_| if telemetry.get().auto_loud_measuring { "MEASURING..." } else { "AUTO LOUD" })).font_size(10.0)
+                    move |cx| {
+                        Binding::new(cx, params_gen, {
+                            let lens = lens.clone();
+                            let params = params.clone();
+                            move |cx| { bipolar_knob(cx, &lens, &params, K::OutputGain, |p| &p.output_gain, -12.0, 12.0, 0.0, "OUT GAIN"); }
+                        });
+                    }
                 })
-                .on_press(move |_cx| shared_al.auto_loud_trigger.store(true, Ordering::Release))
-                .width(Stretch(1.0))
-                .background_color(Memo::new(move |_| {
-                    let t = telemetry.get();
-                    if t.auto_loud_measuring { rgb(1.0, 0.8, 0.0) } else { col(0.15, 0.15, 0.15, 1.0) }
-                }));
+                .alignment(Alignment::Center)
+                .width(Auto);
+
+                let shared_press = shared.clone();
+                let shared_bg = shared.clone();
+                VStack::new(cx, move |cx| {
+                    Button::new(cx, move |cx| {
+                        Label::new(cx, Memo::new(move |_| if telemetry.get().auto_loud_measuring { "MEASURING..." } else { "AUTO LOUD" })).font_size(10.0)
+                    })
+                    .on_press(move |_cx| shared_press.auto_loud_trigger.store(true, Ordering::Release))
+                    .width(Stretch(1.0))
+                    .height(Pixels(shared_ui::BUTTON_HEIGHT))
+                    .background_color(Memo::new(move |_| {
+                        let t = telemetry.get();
+                        let is_active = shared_bg.auto_loud_gain_offset.load(Ordering::Acquire).abs() > 0.05;
+                        if t.auto_loud_measuring { rgb(1.0, 0.8, 0.0) } else if is_active { shared_ui::AMBER } else { shared_ui::IDLE_BG }
+                    }));
+                })
+                .alignment(Alignment::Center)
+                .width(Stretch(1.0));
             }
         })
         .width(Stretch(1.0))
@@ -1359,7 +1382,7 @@ fn build_right_sidebar(cx: &mut Context, telemetry: Signal<Telemetry>, lens: Par
         let shared_reset = shared.clone();
         Binding::new(cx, telemetry, move |cx| {
             let t = telemetry.get();
-            StereoMeterView::new(cx, t.peak_l, t.peak_r, t.peak_hold_l, t.peak_hold_r, t.balance).width(Stretch(1.0)).height(Pixels(155.0));
+            StereoMeterView::new(cx, t.peak_l, t.peak_r, t.peak_hold_l, t.peak_hold_r, t.balance).width(Stretch(1.0)).height(Pixels(230.0));
 
             let shared_l = shared_reset.clone();
             let shared_r = shared_reset.clone();
@@ -1422,6 +1445,10 @@ fn build_footer(
                     let lens = lens.clone();
                     let params = params.clone();
                     move |cx| {
+                        Binding::new(cx, params_gen, {
+                            let lens = lens.clone();
+                            let params = params.clone();
+                            move |cx| {
                         for (label, id, field, min, max) in [
                             ("THRESH", K::CompThreshold, (|p: &MeridianParams| &p.comp_threshold) as FloatField, -30.0f32, 0.0f32),
                             ("MIX", K::CompMix, (|p: &MeridianParams| &p.comp_mix) as FloatField, 0.0, 100.0),
@@ -1452,6 +1479,8 @@ fn build_footer(
                             .alignment(Alignment::Center)
                             .width(Auto);
                         }
+                            }
+                        });
 
                         Binding::new(cx, telemetry, move |cx| {
                             let t = telemetry.get();
@@ -1496,6 +1525,10 @@ fn build_footer(
             move |cx| {
                 Label::new(cx, "INFLATE").font_size(10.0).color(rgb(1.0, 0.55, 0.15));
                 HStack::new(cx, move |cx| {
+                    Binding::new(cx, params_gen, {
+                        let lens = lens.clone();
+                        let params = params.clone();
+                        move |cx| {
                     VStack::new(cx, {
                         let lens = lens.clone();
                         let params = params.clone();
@@ -1507,10 +1540,12 @@ fn build_footer(
                     VStack::new(cx, {
                         let lens = lens.clone();
                         let params = params.clone();
-                        move |cx| { bipolar_knob(cx, &lens, &params, K::InflateCurve, |p| &p.inflate_curve, -50.0, 50.0, "CURVE"); }
+                        move |cx| { bipolar_knob(cx, &lens, &params, K::InflateCurve, |p| &p.inflate_curve, -50.0, 50.0, 0.0, "CURVE"); }
                     })
                     .alignment(Alignment::Center)
                     .width(Auto);
+                        }
+                    });
 
                     VStack::new(cx, {
                         let lens = lens.clone();
@@ -1543,20 +1578,26 @@ fn build_footer(
             move |cx| {
                 Label::new(cx, "STEREO / ROUTING").font_size(10.0).color(rgb(1.0, 0.55, 0.15));
                 HStack::new(cx, move |cx| {
+                    Binding::new(cx, params_gen, {
+                        let lens = lens.clone();
+                        let params = params.clone();
+                        move |cx| {
                     VStack::new(cx, {
                         let lens = lens.clone();
                         let params = params.clone();
-                        move |cx| { bipolar_knob(cx, &lens, &params, K::Pan, |p| &p.pan, -1.0, 1.0, "PAN"); }
+                        move |cx| { bipolar_knob(cx, &lens, &params, K::Pan, |p| &p.pan, -1.0, 1.0, 0.0, "PAN"); }
                     })
                     .alignment(Alignment::Center)
                     .width(Auto);
                     VStack::new(cx, {
                         let lens = lens.clone();
                         let params = params.clone();
-                        move |cx| { bipolar_knob(cx, &lens, &params, K::StereoWidth, |p| &p.stereo_width, 0.0, 200.0, "WIDTH"); }
+                        move |cx| { bipolar_knob(cx, &lens, &params, K::StereoWidth, |p| &p.stereo_width, 0.0, 200.0, 100.0, "WIDTH"); }
                     })
                     .alignment(Alignment::Center)
                     .width(Auto);
+                        }
+                    });
                 })
                 .horizontal_gap(Pixels(14.0))
                 .alignment(Alignment::Center)
@@ -1570,14 +1611,7 @@ fn build_footer(
 
         vsep(cx);
 
-        Button::new(cx, |cx| Label::new(cx, "RESET").font_size(12.0))
-            .on_press(move |_cx| reset_all(&lens, &params, &shared, &accum, params_gen))
-            .padding_left(Pixels(14.0))
-            .padding_right(Pixels(14.0))
-            .padding_top(Pixels(8.0))
-            .padding_bottom(Pixels(8.0))
-            .background_color(col(0.2, 0.08, 0.08, 1.0))
-            .color(col(0.9, 0.5, 0.5, 1.0));
+        shared_ui::danger_button(cx, "RESET", move |_cx| reset_all(&lens, &params, &shared, &accum, params_gen));
     })
     .width(Stretch(1.0))
     .height(Pixels(110.0))
@@ -1592,16 +1626,13 @@ fn styled_toggle_small(cx: &mut Context, lens: ParamLens<MeridianParams>, id: K,
     Binding::new(cx, sig, move |cx| {
         let active = lens.get(id) > 0.5;
         let lens = lens.clone();
-        Button::new(cx, move |cx| Label::new(cx, label).font_size(9.0))
-            .on_press(move |_cx| {
-                let now = lens.get(id) <= 0.5;
-                let norm = if now { 1.0 } else { 0.0 };
-                lens.automate(id, norm);
-                sig.set(norm as f32);
-            })
-            .width(Pixels(48.0))
-            .padding(Pixels(4.0))
-            .background_color(if active { rgb(1.0, 0.45, 0.1) } else { col(0.15, 0.15, 0.15, 1.0) });
+        shared_ui::toggle_button_small(cx, label, active, move |_cx| {
+            let now = lens.get(id) <= 0.5;
+            let norm = if now { 1.0 } else { 0.0 };
+            lens.automate(id, norm);
+            sig.set(norm as f32);
+        })
+        .width(Pixels(48.0));
     });
 }
 

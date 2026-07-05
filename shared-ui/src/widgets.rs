@@ -132,12 +132,23 @@ impl View for KnobView {
             }
             WindowEvent::MouseMove(_x, y) => {
                 if self.dragging {
-                    let dy = self.drag_start_y - *y;
-                    let new_norm = (self.drag_start_norm + dy / 200.0).clamp(0.0, 1.0);
-                    self.value_norm = new_norm;
-                    let new_val = self.min + new_norm * (self.max - self.min);
-                    (self.on_gesture)(cx, Gesture::Change(new_val));
-                    cx.needs_redraw();
+                    // Defensive: if the button-up was missed (e.g. the host
+                    // stole focus mid-drag) `dragging` would otherwise stay
+                    // stuck true forever, ignoring all input until a fresh
+                    // click - end the drag as soon as we notice the button
+                    // isn't actually held anymore.
+                    if cx.mouse().left.state != MouseButtonState::Pressed {
+                        self.dragging = false;
+                        (self.on_gesture)(cx, Gesture::End);
+                        cx.release();
+                    } else {
+                        let dy = self.drag_start_y - *y;
+                        let new_norm = (self.drag_start_norm + dy / 200.0).clamp(0.0, 1.0);
+                        self.value_norm = new_norm;
+                        let new_val = self.min + new_norm * (self.max - self.min);
+                        (self.on_gesture)(cx, Gesture::Change(new_val));
+                        cx.needs_redraw();
+                    }
                 }
             }
             WindowEvent::MouseEnter => {
@@ -327,11 +338,17 @@ impl View for HSliderView {
             }
             WindowEvent::MouseMove(x, _y) => {
                 if self.dragging {
-                    let new_val = self.val_at(cx, *x);
-                    let span = self.max - self.min;
-                    self.value_norm = if span.abs() < 1e-9 { 0.0 } else { ((new_val - self.min) / span).clamp(0.0, 1.0) };
-                    (self.on_gesture)(cx, Gesture::Change(new_val));
-                    cx.needs_redraw();
+                    if cx.mouse().left.state != MouseButtonState::Pressed {
+                        self.dragging = false;
+                        (self.on_gesture)(cx, Gesture::End);
+                        cx.release();
+                    } else {
+                        let new_val = self.val_at(cx, *x);
+                        let span = self.max - self.min;
+                        self.value_norm = if span.abs() < 1e-9 { 0.0 } else { ((new_val - self.min) / span).clamp(0.0, 1.0) };
+                        (self.on_gesture)(cx, Gesture::Change(new_val));
+                        cx.needs_redraw();
+                    }
                 }
             }
             WindowEvent::MouseEnter => {

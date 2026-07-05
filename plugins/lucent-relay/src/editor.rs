@@ -44,11 +44,10 @@ pub fn set_relay_handle(key: usize, h: RelayHandle) {
 }
 
 pub fn remove_relay_handle(key: usize) {
-    if let Some(map) = RELAY_HANDLES.get() {
-        if let Ok(mut m) = map.lock() {
+    if let Some(map) = RELAY_HANDLES.get()
+        && let Ok(mut m) = map.lock() {
             m.remove(&key);
         }
-    }
 }
 
 fn take_relay_handle(key: usize) -> Option<RelayHandle> {
@@ -143,7 +142,7 @@ impl View for Ticker {
 
             // Keep selected target if still valid, else clear.
             let target = self.handle.target();
-            if !target.is_empty() && !lucent_list.iter().any(|l| *l == target) {
+            if !target.is_empty() && !lucent_list.contains(&target) {
                 self.selected_target.set(String::new());
             }
 
@@ -212,7 +211,9 @@ pub fn build(cx: &mut Context, params: Arc<LucentRelayParams>) {
                         g.name = text;
                     }
                 })
-                .width(Stretch(1.0));
+                .width(Stretch(1.0))
+                .height(Pixels(20.0))
+                .font_size(11.0);
         })
         .width(Stretch(1.0))
         .height(Pixels(32.0))
@@ -240,7 +241,9 @@ pub fn build(cx: &mut Context, params: Arc<LucentRelayParams>) {
                         g.target = val;
                     }
                 })
-                .width(Stretch(1.0));
+                .width(Stretch(1.0))
+                .height(Pixels(20.0))
+                .font_size(11.0);
         })
         .width(Stretch(1.0))
         .height(Pixels(32.0))
