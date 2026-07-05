@@ -9,9 +9,11 @@
 //! those every tick would reset cursor/focus/drag state constantly.
 //!
 //! So telemetry (spectrum, resonance/masking text, meters, relay list,
-//! snap blink) lives in one `Signal<Telemetry>` updated by a 33ms root
-//! timer (replaces the old `Message::Tick` / `RedrawRequested`
-//! subscription), and only the passive display regions (right sidebar,
+//! snap blink) lives in one `Signal<Telemetry>` updated every ~33ms by
+//! the `Ticker` View below (replaces the old `Message::Tick` /
+//! `RedrawRequested` subscription - NOT `cx.add_timer`/`cx.start_timer`,
+//! see `Ticker`'s doc comment for why), and only the passive display
+//! regions (right sidebar,
 //! center spectrum+relay-bar+analyzer text, SNAP button) are wrapped in
 //! `Binding`s keyed to it. The Name/Vault-path `Textbox`es and the
 //! Sensitivity `KnobView` are built once, outside any tick-driven Binding,
@@ -25,6 +27,7 @@ use std::sync::{Arc, atomic::Ordering};
 use std::time::{Duration, Instant};
 
 use vizia::prelude::*;
+use vizia::vg;
 
 use shared_analysis::{SharedState, SPECTRUM_BINS};
 use truce_vizia::ParamLens;
@@ -296,6 +299,62 @@ fn format_masking_text(
         .join("\n")
 }
 
+// ─── Ticker (drives `tick()` without vizia_core's buggy timer API) ──────────
+
+/// Zero-visual-footprint View whose only job is calling `tick()` roughly
+/// every 33ms, throttled internally via `last_tick`, and keeping itself
+/// redrawing forever via `cx.needs_redraw()`. See the comment at the call
+/// site in `build()` for why this replaces `cx.add_timer`/`cx.start_timer`.
+struct Ticker {
+    shared: Arc<SharedState>,
+    params: Arc<LucentParams>,
+    lens: ParamLens<LucentParams>,
+    instance_key: usize,
+    accum: Rc<RefCell<TickAccum>>,
+    telemetry: Signal<Telemetry>,
+    last_tick: RefCell<Instant>,
+}
+
+impl Ticker {
+    fn new(
+        cx: &mut Context,
+        shared: Arc<SharedState>,
+        params: Arc<LucentParams>,
+        lens: ParamLens<LucentParams>,
+        instance_key: usize,
+        accum: Rc<RefCell<TickAccum>>,
+        telemetry: Signal<Telemetry>,
+    ) -> Handle<'_, Self> {
+        Self { shared, params, lens, instance_key, accum, telemetry, last_tick: RefCell::new(Instant::now()) }
+            .build(cx, |_| {})
+    }
+}
+
+const TICK_INTERVAL: Duration = Duration::from_millis(33);
+
+impl View for Ticker {
+    fn element(&self) -> Option<&'static str> {
+        Some("ticker")
+    }
+
+    fn draw(&self, cx: &mut DrawContext, _canvas: &vg::Canvas) {
+        let now = Instant::now();
+        let due = {
+            let mut last = self.last_tick.borrow_mut();
+            if now.duration_since(*last) >= TICK_INTERVAL {
+                *last = now;
+                true
+            } else {
+                false
+            }
+        };
+        if due {
+            tick(&self.shared, &self.params, &self.lens, self.instance_key, &self.accum, self.telemetry);
+        }
+        cx.needs_redraw();
+    }
+}
+
 // ─── UI ──────────────────────────────────────────────────────────────────────
 
 pub fn build(cx: &mut Context, lens: ParamLens<LucentParams>, shared: Arc<SharedState>, params: Arc<LucentParams>) {
@@ -342,19 +401,21 @@ pub fn build(cx: &mut Context, lens: ParamLens<LucentParams>, shared: Arc<Shared
         vault_path: config.vault_path,
     }));
 
-    {
-        let shared_for_timer = shared.clone();
-        let params_for_timer = params.clone();
-        let lens_for_timer = lens.clone();
-        let accum_for_timer = accum.clone();
-        let timer = cx.add_timer(Duration::from_millis(33), None, move |_cx, action| {
-            if !matches!(action, TimerAction::Tick(_)) {
-                return;
-            }
-            tick(&shared_for_timer, &params_for_timer, &lens_for_timer, instance_key, &accum_for_timer, telemetry);
-        });
-        cx.start_timer(timer);
-    }
+    // Not using cx.add_timer()/cx.start_timer() here: vizia_core 0.4.0's
+    // Context::modify_timer has a real infinite-loop bug (peeks the
+    // running_timers BinaryHeap without popping on an id mismatch, spins
+    // forever if the target timer isn't at the heap's top - see CLAP-vault
+    // features/2026-07-04-truce-2.0-upgrade-plan.md HANDOFF, found via
+    // WinDbg). truce-vizia's own editor.rs starts a second, internal
+    // meter-refresh timer right after this setup closure returns, so any
+    // timer we start here collides with theirs in that heap and hangs the
+    // whole host on open. Ticker below drives the same 33ms cadence via
+    // draw()-triggered needs_redraw() instead - the pattern our earlier
+    // prototypes (prototypes/lucent-vizia, prototypes/truce-vizia-spike)
+    // already used, no add_timer/start_timer call at all.
+    Ticker::new(cx, shared.clone(), params.clone(), lens.clone(), instance_key, accum.clone(), telemetry)
+        .width(Pixels(1.0))
+        .height(Pixels(1.0));
 
     // ── HEADER ──────────────────────────────────────────────────────────────
     let shared_header = shared.clone();
@@ -429,22 +490,34 @@ pub fn build(cx: &mut Context, lens: ParamLens<LucentParams>, shared: Arc<Shared
         VStack::new(cx, move |cx| {
             Label::new(cx, "LX AUDIOLABS").font_size(14.0).color(Color::white());
 
-            let shared_for_snap = shared_for_snap.clone();
-            Binding::new(cx, telemetry, move |cx| {
-                let t = telemetry.get();
-                let blink = t.snap_blink > 0;
-                let label = if blink { "ANALYZING..." } else { "SNAP" };
-                let bg = if blink { col(0.55, 0.38, 0.05, 1.0) } else { col(0.18, 0.18, 0.18, 1.0) };
-                let fg = if blink { rgb(1.0, 0.85, 0.3) } else { rgb(1.0, 0.55, 0.1) };
-                let shared_press = shared_for_snap.clone();
-                Button::new(cx, move |cx| Label::new(cx, label).font_size(12.0).color(fg))
-                    .on_press(move |_cx| {
-                        shared_press.snap_active.store(true, Ordering::Relaxed);
-                    })
-                    .width(Stretch(1.0))
-                    .height(Pixels(34.0))
-                    .background_color(bg);
-            });
+            // Built once, not inside a `Binding` on `telemetry` - `tick()`
+            // calls `telemetry.update(...)` unconditionally every ~33ms
+            // (Vizia signals have no equality check, see
+            // vizia_reactive::state::State::update_value_local), so a
+            // `Binding` here would tear down and rebuild this Button every
+            // tick. A real click's MouseDown/MouseUp lands on two different
+            // rebuilt entity instances more often than not, and
+            // `WindowEvent::Press` only fires when both match the same
+            // `cx.current` - the click gets silently dropped. `Memo`
+            // instead subscribes to `telemetry` and updates the label/color
+            // properties on this same, persistent entity in place.
+            Button::new(cx, move |cx| {
+                Label::new(cx, Memo::new(move |_| {
+                    if telemetry.get().snap_blink > 0 { "ANALYZING..." } else { "SNAP" }
+                }))
+                .font_size(12.0)
+                .color(Memo::new(move |_| {
+                    if telemetry.get().snap_blink > 0 { rgb(1.0, 0.85, 0.3) } else { rgb(1.0, 0.55, 0.1) }
+                }))
+            })
+            .on_press(move |_cx| {
+                shared_for_snap.snap_active.store(true, Ordering::Relaxed);
+            })
+            .width(Stretch(1.0))
+            .height(Pixels(34.0))
+            .background_color(Memo::new(move |_| {
+                if telemetry.get().snap_blink > 0 { col(0.55, 0.38, 0.05, 1.0) } else { col(0.18, 0.18, 0.18, 1.0) }
+            }));
 
             Button::new(cx, |cx| Label::new(cx, "VAULT SETUP").font_size(12.0))
                 .on_press(move |_cx| {
@@ -485,7 +558,7 @@ pub fn build(cx: &mut Context, lens: ParamLens<LucentParams>, shared: Arc<Shared
                 VStack::new(cx, move |cx| {
                     StereoMeterView::new(cx, t.peak_l, t.peak_r, t.peak_hold_l, t.peak_hold_r, t.balance)
                         .width(Stretch(1.0))
-                        .height(Pixels(70.0));
+                        .height(Pixels(180.0));
 
                     HStack::new(cx, move |cx| {
                         Label::new(cx, fmt_db(t.peak_hold_l)).font_size(11.0).color(rgb(1.0, 0.45, 0.1));
@@ -501,13 +574,16 @@ pub fn build(cx: &mut Context, lens: ParamLens<LucentParams>, shared: Arc<Shared
                 .vertical_gap(Pixels(4.0));
             });
 
+            // Spacer pushes the goniometer block to the bottom of the sidebar.
+            Element::new(cx).height(Stretch(1.0));
+
             Label::new(cx, "GONIOMETER").font_size(10.0).color(col(0.6, 0.6, 0.6, 1.0));
 
             Binding::new(cx, telemetry, move |cx| {
                 let t = telemetry.get();
                 GoniometerView::new(cx, shared_for_gonio.scope_samples.clone(), shared_for_gonio.scope_write_pos.load(Ordering::Acquire), t.phase_correlation)
                     .width(Stretch(1.0))
-                    .height(Pixels(139.0));
+                    .height(Pixels(155.0));
             });
         })
         .width(Pixels(155.0))
@@ -654,47 +730,63 @@ fn build_main_panel(
         .height(Stretch(1.0));
     });
 
-    // Analyzer row: resonance/masking text panels (tick-driven) + sensitivity
-    // knob (built once, outside the tick Binding, so drag state survives).
+    // Analyzer row: resonance/masking text panels + sensitivity knob.
+    // Built once, not inside a `Binding` on `telemetry` - `tick()` calls
+    // `telemetry.update(...)` unconditionally every ~33ms (no equality
+    // check in vizia_reactive::state::State::update_value_local), so a
+    // `Binding` here tore down and rebuilt the ON/OFF buttons every tick.
+    // A real click's MouseDown/MouseUp then landed on two different
+    // rebuilt entity instances more often than not, and
+    // `WindowEvent::Press` only fires when both match the same
+    // `cx.current` - the click was silently dropped. `Memo` instead
+    // subscribes to `telemetry` and updates text/color on this same,
+    // persistent Button entity in place.
     HStack::new(cx, move |cx| {
-        Binding::new(cx, telemetry, move |cx| {
-            let t = telemetry.get();
-            HStack::new(cx, move |cx| {
-                VStack::new(cx, move |cx| {
-                    Label::new(cx, "RESONANCE").font_size(10.0).color(rgb(1.0, 0.55, 0.15));
-                    Label::new(cx, t.resonance_text.clone()).font_size(10.0).color(col(0.8, 0.8, 0.8, 1.0));
-                })
-                .width(Stretch(1.0));
-                let show = t.show_resonance;
-                Button::new(cx, move |cx| Label::new(cx, if show { "ON" } else { "OFF" }))
-                    .on_press(move |_cx| telemetry.update(|t| t.show_resonance = !t.show_resonance))
-                    .background_color(if show { rgb(1.0, 0.45, 0.1) } else { col(0.15, 0.15, 0.15, 1.0) });
+        HStack::new(cx, move |cx| {
+            VStack::new(cx, move |cx| {
+                Label::new(cx, "RESONANCE").font_size(10.0).color(rgb(1.0, 0.55, 0.15));
+                Label::new(cx, Memo::new(move |_| telemetry.get().resonance_text.clone()))
+                    .font_size(10.0)
+                    .color(col(0.8, 0.8, 0.8, 1.0));
             })
-            .width(Stretch(1.0))
-            .height(Pixels(88.0))
-            .padding(Pixels(6.0))
-            .background_color(rgb(0.1, 0.1, 0.1));
+            .width(Stretch(1.0));
+            Button::new(cx, move |cx| {
+                Label::new(cx, Memo::new(move |_| if telemetry.get().show_resonance { "ON" } else { "OFF" }))
+            })
+            .on_press(move |_cx| telemetry.update(|t| t.show_resonance = !t.show_resonance))
+            .background_color(Memo::new(move |_| {
+                if telemetry.get().show_resonance { rgb(1.0, 0.45, 0.1) } else { col(0.15, 0.15, 0.15, 1.0) }
+            }));
+        })
+        .width(Stretch(1.0))
+        .height(Pixels(88.0))
+        .padding(Pixels(6.0))
+        .background_color(rgb(0.1, 0.1, 0.1));
 
-            HStack::new(cx, move |cx| {
-                VStack::new(cx, move |cx| {
-                    Label::new(cx, "MASKING").font_size(10.0).color(rgb(0.95, 0.22, 0.18));
-                    Label::new(cx, t.masking_text.clone()).font_size(10.0).color(col(0.8, 0.8, 0.8, 1.0));
-                })
-                .width(Stretch(1.0));
-                let show = t.show_masking;
-                if mode == 0 {
-                    Label::new(cx, "OFF").color(col(0.35, 0.35, 0.35, 1.0));
-                } else {
-                    Button::new(cx, move |cx| Label::new(cx, if show { "ON" } else { "OFF" }))
-                        .on_press(move |_cx| telemetry.update(|t| t.show_masking = !t.show_masking))
-                        .background_color(if show { rgb(0.95, 0.22, 0.18) } else { col(0.15, 0.15, 0.15, 1.0) });
-                }
+        HStack::new(cx, move |cx| {
+            VStack::new(cx, move |cx| {
+                Label::new(cx, "MASKING").font_size(10.0).color(rgb(0.95, 0.22, 0.18));
+                Label::new(cx, Memo::new(move |_| telemetry.get().masking_text.clone()))
+                    .font_size(10.0)
+                    .color(col(0.8, 0.8, 0.8, 1.0));
             })
-            .width(Stretch(1.0))
-            .height(Pixels(88.0))
-            .padding(Pixels(6.0))
-            .background_color(rgb(0.1, 0.1, 0.1));
-        });
+            .width(Stretch(1.0));
+            if mode == 0 {
+                Label::new(cx, "OFF").color(col(0.35, 0.35, 0.35, 1.0));
+            } else {
+                Button::new(cx, move |cx| {
+                    Label::new(cx, Memo::new(move |_| if telemetry.get().show_masking { "ON" } else { "OFF" }))
+                })
+                .on_press(move |_cx| telemetry.update(|t| t.show_masking = !t.show_masking))
+                .background_color(Memo::new(move |_| {
+                    if telemetry.get().show_masking { rgb(0.95, 0.22, 0.18) } else { col(0.15, 0.15, 0.15, 1.0) }
+                }));
+            }
+        })
+        .width(Stretch(1.0))
+        .height(Pixels(88.0))
+        .padding(Pixels(6.0))
+        .background_color(rgb(0.1, 0.1, 0.1));
 
         VStack::new(cx, move |cx| {
             let lens_knob = lens.clone();

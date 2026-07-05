@@ -88,6 +88,7 @@ impl View for StereoMeterView {
 
     fn draw(&self, cx: &mut DrawContext, canvas: &vg::Canvas) {
         let b = cx.bounds();
+        canvas.translate((b.x, b.y));
         let (w, h) = (b.width(), b.height());
         let gap = 36.0;
         let bar_w = (w - gap) / 2.0;
@@ -187,6 +188,7 @@ impl View for GoniometerView {
 
     fn draw(&self, cx: &mut DrawContext, canvas: &vg::Canvas) {
         let b = cx.bounds();
+        canvas.translate((b.x, b.y));
         let (w, h) = (b.width(), b.height());
         let (cx_, cy) = (w * 0.5, h * 0.5);
         let scale = cx_.min(cy) * 0.9;
@@ -314,6 +316,7 @@ impl View for SpectrumView {
 
     fn draw(&self, cx: &mut DrawContext, canvas: &vg::Canvas) {
         let b = cx.bounds();
+        canvas.translate((b.x, b.y));
         let (width, height) = (b.width(), b.height());
         let min_db = self.config.min_db;
         let max_db = self.config.max_db;
