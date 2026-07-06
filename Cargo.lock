@@ -820,7 +820,7 @@ dependencies = [
 
 [[package]]
 name = "equilibrium"
-version = "1.6.0"
+version = "1.6.1"
 dependencies = [
  "clap-sys",
  "shared-analysis",
@@ -1547,7 +1547,7 @@ dependencies = [
 
 [[package]]
 name = "meridian"
-version = "1.9.0"
+version = "1.9.1"
 dependencies = [
  "clap-sys",
  "realfft",
