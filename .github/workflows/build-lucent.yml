@@ -1,60 +1,53 @@
-name: Build Lucent Bundle
+name: Build Lucent
 
 on:
   workflow_dispatch:
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+  build-linux:
+    name: Linux (x86_64)
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/cache@v6
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target/
-          key: ${{ runner.os }}-lucent-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-lucent-
-
-      - name: Install Linux deps
-        if: runner.os == 'Linux'
-        run: sudo apt-get update -y && sudo apt-get install -y pkg-config libfreetype6-dev libfontconfig1-dev libgles2-mesa-dev libx11-dev libx11-xcb-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev libwayland-dev libxkbcommon-dev libegl-dev libgl-dev
-
-      - name: Install cargo-truce
-        run: cargo install --git https://github.com/truce-audio/truce cargo-truce
-
-      - name: Read version
-        id: version
-        shell: bash
-        run: echo "version=$(grep '^version' plugins/lucent/Cargo.toml | head -1 | sed 's/.*\"\(.*\)\"/\1/')" >> $GITHUB_OUTPUT
-
+          key: linux-lucent-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: linux-lucent-
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -y || sudo apt-get update -y || true
+          sudo apt-get install -y \
+            pkg-config \
+            libfreetype6-dev \
+            libfontconfig1-dev \
+            libgles2-mesa-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb1-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxrandr-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libegl-dev \
+            libgl-dev
       - name: Build Lucent
-        run: cargo truce build --clap -p lucent
-
-      - name: Build Lucent Relay
-        run: cargo truce build --clap -p lucent-relay
-
-      - name: Package (Unix)
-        if: runner.os != 'Windows'
+        run: cargo build --release --package lucent --package lucent-relay
+      - name: Bundle CLAPs
         run: |
-          mkdir -p dist
-          cp -r "target/bundles/Lucent.clap" "target/bundles/Lucent Relay.clap" dist/
-
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item 'target\bundles\Lucent.clap', 'target\bundles\Lucent Relay.clap' dist\
-
-      - uses: actions/upload-artifact@v6
+          rm -rf target/bundled
+          mkdir -p target/bundled
+          cp target/release/liblucent.so target/bundled/lucent-linux.clap
+          cp target/release/liblucent_relay.so target/bundled/lucent-relay-linux.clap
+          echo "✓ Created: 2 CLAPs"
+      - uses: actions/upload-artifact@v5
         with:
-          name: Lucent-Bundle-v${{ steps.version.outputs.version }}-${{ runner.os == 'Linux' && 'linux' || (runner.os == 'macOS' && 'mac' || 'win') }}
-          path: dist/
+          name: lucent-linux
+          path: target/bundled/*.clap
           if-no-files-found: error

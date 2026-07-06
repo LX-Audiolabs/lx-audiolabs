@@ -4,86 +4,54 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+  build-linux:
+    name: Linux (x86_64)
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/cache@v6
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target/
-          key: ${{ runner.os }}-all-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-all-
-
-      - name: Install Linux deps
-        if: runner.os == 'Linux'
-        run: sudo apt-get update -y && sudo apt-get install -y pkg-config libfreetype6-dev libfontconfig1-dev libgles2-mesa-dev libx11-dev libx11-xcb-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev libwayland-dev libxkbcommon-dev libegl-dev libgl-dev
-
-      - name: Install cargo-truce
-        run: cargo install --git https://github.com/truce-audio/truce cargo-truce
-
-      - name: Read Lucent version
-        id: lucent-version
-        shell: bash
-        run: echo "version=$(grep '^version' plugins/lucent/Cargo.toml | head -1 | sed 's/.*\"\(.*\)\"/\1/')" >> $GITHUB_OUTPUT
-
+          key: linux-all-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: linux-all-
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -y || sudo apt-get update -y || true
+          sudo apt-get install -y \
+            pkg-config \
+            libfreetype6-dev \
+            libfontconfig1-dev \
+            libgles2-mesa-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb1-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxrandr-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libegl-dev \
+            libgl-dev
       - name: Build all plugins
-        run: cargo truce build --clap -p equilibrium -p meridian -p aether -p lucent -p lucent-relay -p aurum
-
-      - name: Package (Unix)
-        if: runner.os != 'Windows'
+        run: cargo build --release -p aether -p aurum -p equilibrium -p lucent -p lucent-relay -p meridian
+      - name: Bundle CLAPs
         run: |
-          mkdir -p dist/aether dist/aurum dist/lucent-bundle dist/equilibrium dist/meridian
-          cp -r target/bundles/Aether.clap dist/aether/
-          cp -r target/bundles/Aurum.clap dist/aurum/
-          cp -r "target/bundles/Lucent.clap" "target/bundles/Lucent Relay.clap" dist/lucent-bundle/
-          cp -r target/bundles/Equilibrium.clap dist/equilibrium/
-          cp -r target/bundles/Meridian.clap dist/meridian/
-
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist\aether, dist\aurum, dist\lucent-bundle, dist\equilibrium, dist\meridian | Out-Null
-          Copy-Item target\bundles\Aether.clap dist\aether\
-          Copy-Item target\bundles\Aurum.clap dist\aurum\
-          Copy-Item 'target\bundles\Lucent.clap', 'target\bundles\Lucent Relay.clap' dist\lucent-bundle\
-          Copy-Item target\bundles\Equilibrium.clap dist\equilibrium\
-          Copy-Item target\bundles\Meridian.clap dist\meridian\
-
-      - uses: actions/upload-artifact@v6
+          rm -rf target/bundled
+          mkdir -p target/bundled
+          cp target/release/libaether.so target/bundled/aether-linux.clap
+          cp target/release/libaurum.so target/bundled/aurum-linux.clap
+          cp target/release/libequilibrium.so target/bundled/equilibrium-linux.clap
+          cp target/release/liblucent.so target/bundled/lucent-linux.clap
+          cp target/release/liblucent_relay.so target/bundled/lucent-relay-linux.clap
+          cp target/release/libmeridian.so target/bundled/meridian-linux.clap
+          echo "✓ Created: $(ls target/bundled/*.clap | wc -l) CLAPs"
+      - uses: actions/upload-artifact@v5
         with:
-          name: aether-${{ runner.os == 'Linux' && 'linux' || (runner.os == 'macOS' && 'mac' || 'win') }}
-          path: dist/aether/
-          if-no-files-found: error
-
-      - uses: actions/upload-artifact@v6
-        with:
-          name: aurum-${{ runner.os == 'Linux' && 'linux' || (runner.os == 'macOS' && 'mac' || 'win') }}
-          path: dist/aurum/
-          if-no-files-found: error
-
-      - uses: actions/upload-artifact@v6
-        with:
-          name: lucent-bundle-v${{ steps.lucent-version.outputs.version }}-${{ runner.os == 'Linux' && 'linux' || (runner.os == 'macOS' && 'mac' || 'win') }}
-          path: dist/lucent-bundle/
-          if-no-files-found: error
-
-      - uses: actions/upload-artifact@v6
-        with:
-          name: equilibrium-${{ runner.os == 'Linux' && 'linux' || (runner.os == 'macOS' && 'mac' || 'win') }}
-          path: dist/equilibrium/
-          if-no-files-found: error
-
-      - uses: actions/upload-artifact@v6
-        with:
-          name: meridian-${{ runner.os == 'Linux' && 'linux' || (runner.os == 'macOS' && 'mac' || 'win') }}
-          path: dist/meridian/
+          name: all-plugins-linux
+          path: target/bundled/*.clap
           if-no-files-found: error

@@ -1,59 +1,52 @@
-name: Build Aether (CI)
+name: Build Aether
 
 on:
   workflow_dispatch:
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+  build-linux:
+    name: Linux (x86_64)
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/cache@v6
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target/
-          key: ${{ runner.os }}-aether-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-aether-
-
-      - name: Install Linux deps
-        if: runner.os == 'Linux'
-        run: sudo apt-get update -y && sudo apt-get install -y pkg-config libfreetype6-dev libfontconfig1-dev libgles2-mesa-dev libx11-dev libx11-xcb-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev libwayland-dev libxkbcommon-dev libegl-dev libgl-dev
-
-      - name: Install cargo-truce
-        run: cargo install --git https://github.com/truce-audio/truce cargo-truce
-
+          key: linux-aether-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: linux-aether-
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -y || sudo apt-get update -y || true
+          sudo apt-get install -y \
+            pkg-config \
+            libfreetype6-dev \
+            libfontconfig1-dev \
+            libgles2-mesa-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb1-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxrandr-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libegl-dev \
+            libgl-dev
       - name: Build Aether
-        run: cargo truce build --clap -p aether
-
-      - name: Read version
-        id: version
-        shell: bash
-        run: echo "version=$(grep '^version' plugins/aether/Cargo.toml | head -1 | sed 's/.*\"\(.*\)\"/\1/')" >> $GITHUB_OUTPUT
-
-      - name: Package (Unix)
-        if: runner.os != 'Windows'
+        run: cargo build --release --package aether
+      - name: Bundle CLAP
         run: |
-          mkdir -p dist
-          cp -r target/bundles/Aether.clap dist/
-          echo "Aether v${{ steps.version.outputs.version }} — ${{ runner.os }}"
-
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item target\bundles\Aether.clap dist\
-          Write-Host "Aether v${{ steps.version.outputs.version }} — Windows"
-
-      - uses: actions/upload-artifact@v6
+          rm -rf target/bundled
+          mkdir -p target/bundled
+          cp target/release/libaether.so target/bundled/aether-linux.clap
+          echo "✓ Created: aether-linux.clap"
+      - uses: actions/upload-artifact@v5
         with:
-          name: Aether-v${{ steps.version.outputs.version }}-${{ runner.os == 'Linux' && 'linux' || (runner.os == 'macOS' && 'mac' || 'win') }}
-          path: dist/
+          name: aether-linux
+          path: target/bundled/*.clap
           if-no-files-found: error
