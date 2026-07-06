@@ -3,7 +3,7 @@ name = "aether"
 version = "1.2.0"
 edition = "2024"
 description = "LX Audiolabs — Aether (Headphone monitoring corrector — Harman 5-band EQ + crossfeed)"
-license = "MIT"
+license = "GPL-3.0-or-later"
 authors = ["LX Audiolabs"]
 
 [lib]

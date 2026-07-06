@@ -3,7 +3,7 @@ name = "lucent"
 version = "0.3.0"
 edition = "2024"
 description = "LX Audiolabs — Lucent (FFT spectrum analyser — receives relay data and displays masking)"
-license = "MIT"
+license = "GPL-3.0-or-later"
 authors = ["LX Audiolabs"]
 
 [lib]

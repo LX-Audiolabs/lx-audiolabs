@@ -3,7 +3,7 @@ name = "aurum"
 version = "0.2.0"
 edition = "2024"
 description = "LX Audiolabs — Aurum (All-In-One Mastering — M/S EQ, Comp, Sat, MB Limiter, TP Limiter)"
-license = "MIT"
+license = "GPL-3.0-or-later"
 authors = ["LX Audiolabs"]
 
 [lib]

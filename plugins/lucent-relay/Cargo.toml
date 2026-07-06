@@ -3,7 +3,7 @@ name = "lucent-relay"
 version = "0.3.0"
 edition = "2024"
 description = "LX Audiolabs — Lucent Relay (FFT sender, pure pass-through)"
-license = "MIT"
+license = "GPL-3.0-or-later"
 authors = ["LX Audiolabs"]
 
 [lib]

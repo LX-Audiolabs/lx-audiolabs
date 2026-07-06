@@ -3,7 +3,7 @@ name = "equilibrium"
 version = "1.6.0"
 edition = "2024"
 description = "LX Audiolabs — Equilibrium (Pre-master spectral balancer with 5-band crossover)"
-license = "MIT"
+license = "GPL-3.0-or-later"
 authors = ["LX Audiolabs"]
 
 [lib]
