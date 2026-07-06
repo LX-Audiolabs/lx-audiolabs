@@ -43,8 +43,8 @@ jobs:
         run: |
           rm -rf target/bundled
           mkdir -p target/bundled
-          cp target/release/libmeridian.so target/bundled/meridian-linux.clap
-          echo "✓ Created: meridian-linux.clap"
+          cp target/release/libmeridian.so target/bundled/meridian.clap
+          echo "✓ Created: meridian.clap"
       - uses: actions/upload-artifact@v6
         with:
           name: meridian-linux
