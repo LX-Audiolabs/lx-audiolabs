@@ -10,7 +10,7 @@ rust-version.workspace = true
 
 [features]
 default = []
-clipboard = ["copypasta", "copypasta?/x11"]
+clipboard = ["copypasta"]
 x11 = ["copypasta?/x11"]
 wayland = ["copypasta?/wayland"]
 markdown = ["comrak", "dep:open"]
@@ -50,6 +50,7 @@ tokio = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 mundy = "0.2.3"
+copypasta = { workspace = true, optional = true, features = ["x11"] }
 
 [lib]
 doctest = false
