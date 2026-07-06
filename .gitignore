@@ -18,6 +18,10 @@ Cargo.lock.backup
 
 # Graphify knowledge graph (generated)
 /graphify-out/
+graphify-out.zip
+
+# Bug reports (local)
+truce-rightclick-bug-report.md
 
 # Custom build logs
 check.log
