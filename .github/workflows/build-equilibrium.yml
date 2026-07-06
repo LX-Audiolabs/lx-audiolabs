@@ -43,8 +43,8 @@ jobs:
         run: |
           rm -rf target/bundled
           mkdir -p target/bundled
-          cp target/release/libequilibrium.so target/bundled/equilibrium-v${{ steps.version.outputs.version }}-linux.clap
-          echo "✓ Created: equilibrium-v${{ steps.version.outputs.version }}-linux.clap"
+          cp target/release/libequilibrium.so target/bundled/equilibrium-linux.clap
+          echo "✓ Created: equilibrium-linux.clap"
       - uses: actions/upload-artifact@v6
         with:
           name: equilibrium-linux

@@ -51,12 +51,12 @@ jobs:
         run: |
           rm -rf target/bundled
           mkdir -p target/bundled
-          cp target/release/libaether.so target/bundled/aether-v${{ steps.version.outputs.aether }}-linux.clap
-          cp target/release/libaurum.so target/bundled/aurum-v${{ steps.version.outputs.aurum }}-linux.clap
-          cp target/release/libequilibrium.so target/bundled/equilibrium-v${{ steps.version.outputs.equilibrium }}-linux.clap
-          cp target/release/liblucent.so target/bundled/lucent-v${{ steps.version.outputs.lucent }}-linux.clap
-          cp target/release/liblucent_relay.so target/bundled/lucent-relay-v${{ steps.version.outputs.lucent }}-linux.clap
-          cp target/release/libmeridian.so target/bundled/meridian-v${{ steps.version.outputs.meridian }}-linux.clap
+          cp target/release/libaether.so target/bundled/aether-linux.clap
+          cp target/release/libaurum.so target/bundled/aurum-linux.clap
+          cp target/release/libequilibrium.so target/bundled/equilibrium-linux.clap
+          cp target/release/liblucent.so target/bundled/lucent-linux.clap
+          cp target/release/liblucent_relay.so target/bundled/lucent-relay-linux.clap
+          cp target/release/libmeridian.so target/bundled/meridian-linux.clap
           echo "✓ Created: $(ls target/bundled/*.clap | wc -l) CLAPs"
       - uses: actions/upload-artifact@v6
         with:

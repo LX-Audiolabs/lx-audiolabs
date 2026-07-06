@@ -46,8 +46,8 @@ jobs:
         run: |
           rm -rf target/bundled
           mkdir -p target/bundled
-          cp target/release/liblucent.so target/bundled/lucent-v${{ steps.version.outputs.version }}-linux.clap
-          cp target/release/liblucent_relay.so target/bundled/lucent-relay-v${{ steps.version.outputs.version }}-linux.clap
+          cp target/release/liblucent.so target/bundled/lucent-linux.clap
+          cp target/release/liblucent_relay.so target/bundled/lucent-relay-linux.clap
           echo "✓ Created: 2 CLAPs"
       - uses: actions/upload-artifact@v6
         with:

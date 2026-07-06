@@ -43,8 +43,8 @@ jobs:
         run: |
           rm -rf target/bundled
           mkdir -p target/bundled
-          cp target/release/libaether.so target/bundled/aether-v${{ steps.version.outputs.version }}-linux.clap
-          echo "✓ Created: aether-v${{ steps.version.outputs.version }}-linux.clap"
+          cp target/release/libaether.so target/bundled/aether-linux.clap
+          echo "✓ Created: aether-linux.clap"
       - uses: actions/upload-artifact@v6
         with:
           name: aether-linux
