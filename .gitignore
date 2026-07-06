@@ -25,8 +25,8 @@ check.log
 # MCP config (absolute Vault-Pfad, per machine)
 .mcp.json
 
-# Claude Code — local overrides (personal paths/permissions)
-.claude/settings.local.json
-.claude/worktrees/
+# Claude Code — untracked, personal per machine
+/CLAUDE.md
+/.claude/
 
 node_modules/
