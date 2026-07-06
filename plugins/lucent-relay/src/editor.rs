@@ -199,6 +199,13 @@ pub fn build(cx: &mut Context, params: Arc<LucentRelayParams>) {
         .alignment(Alignment::Center)
         .background_color(rgb(0.08, 0.08, 0.10));
 
+        // Common styling for the small form widgets.
+        const FORM_H: f32 = 22.0;
+        const FORM_BG: Color = Color::rgb(230, 230, 230);
+        const FORM_BORDER: Color = Color::rgb(140, 140, 140);
+        const FORM_TEXT: Color = Color::rgb(40, 40, 40);
+        const FORM_ARROW: Color = Color::rgb(100, 100, 100);
+
         // ── NAME INPUT ──────────────────────────────────────────────────
         let handle_for_name1 = handle.clone();
         HStack::new(cx, move |cx| {
@@ -212,8 +219,13 @@ pub fn build(cx: &mut Context, params: Arc<LucentRelayParams>) {
                     }
                 })
                 .width(Stretch(1.0))
-                .height(Pixels(20.0))
-                .font_size(11.0);
+                .height(Pixels(FORM_H))
+                .padding(Pixels(4.0))
+                .font_size(11.0)
+                .background_color(FORM_BG)
+                .border_color(FORM_BORDER)
+                .border_width(Pixels(1.0))
+                .corner_radius(Pixels(2.0));
         })
         .width(Stretch(1.0))
         .height(Pixels(32.0))
@@ -221,29 +233,95 @@ pub fn build(cx: &mut Context, params: Arc<LucentRelayParams>) {
         .alignment(Alignment::Center)
         .horizontal_gap(Pixels(8.0));
 
-        // ── TARGET DROPDOWN (ComboBox) ──────────────────────────────────
+        // ── TARGET DROPDOWN ─────────────────────────────────────────────
         let handle_for_target = handle.clone();
+        let target_opts_trigger = target_options.clone();
+        let target_opts_popup = target_options;
+        let selected_idx_trigger = selected_index.clone();
+        let selected_idx_popup = selected_index;
+        let selected_tgt_popup = selected_target;
         HStack::new(cx, move |cx| {
             Label::new(cx, "Target").font_size(11.0).color(col(0.55, 0.55, 0.55, 1.0));
 
-            let handle_for_target = handle_for_target;
-            let target_opts = target_options;
-            ComboBox::new(cx, target_opts, selected_index)
-                .on_select(move |_cx, index| {
-                    let opts = target_opts.get();
-                    let val = if index == 0 || index >= opts.len() {
-                        String::new()
-                    } else {
-                        opts[index].clone()
-                    };
-                    selected_target.set(val.clone());
-                    if let Ok(mut g) = handle_for_target.0.lock() {
-                        g.target = val;
-                    }
-                })
-                .width(Stretch(1.0))
-                .height(Pixels(20.0))
-                .font_size(11.0);
+            Dropdown::new(
+                cx,
+                // Trigger: styled box showing current target + down arrow
+                move |cx| {
+                    let trigger_text = Memo::new(move |_| {
+                        let opts = target_opts_trigger.get();
+                        let idx = selected_idx_trigger.get();
+                        opts.get(idx).cloned().unwrap_or_else(|| "(broadcast)".to_string())
+                    });
+                    HStack::new(cx, move |cx| {
+                        Label::new(cx, trigger_text)
+                            .font_size(11.0)
+                            .color(FORM_TEXT)
+                            .hoverable(false);
+                        Element::new(cx).width(Stretch(1.0)).hoverable(false);
+                        Label::new(cx, "▼")
+                            .font_size(8.0)
+                            .color(FORM_ARROW)
+                            .hoverable(false);
+                    })
+                    .width(Stretch(1.0))
+                    .height(Pixels(FORM_H))
+                    .padding(Pixels(4.0))
+                    .background_color(FORM_BG)
+                    .border_color(FORM_BORDER)
+                    .border_width(Pixels(1.0))
+                    .corner_radius(Pixels(2.0))
+                    .alignment(Alignment::Center)
+                    .on_press(|cx| cx.emit(PopupEvent::Switch));
+                },
+                // Popup: scrollable list, max ~2 visible rows
+                move |cx| {
+                    let opts = target_opts_popup.get();
+                    let sel_idx = selected_idx_popup;
+                    let sel_tgt = selected_tgt_popup;
+                    let handle = handle_for_target.clone();
+                    ScrollView::new(cx, move |cx| {
+                        VStack::new(cx, move |cx| {
+                            for (idx, name) in opts.iter().enumerate() {
+                                let name_clone = name.clone();
+                                let name_for_label = name_clone.clone();
+                                let sel_idx_c = sel_idx.clone();
+                                let sel_tgt_c = sel_tgt.clone();
+                                let handle_c = handle.clone();
+                                HStack::new(cx, move |cx| {
+                                    Label::new(cx, name_for_label)
+                                        .font_size(11.0)
+                                        .color(Color::black())
+                                        .hoverable(false);
+                                })
+                                .width(Stretch(1.0))
+                                .height(Pixels(20.0))
+                                .padding(Pixels(4.0))
+                                .background_color(Color::white())
+                                .alignment(Alignment::Center)
+                                .on_press(move |cx| {
+                                    sel_idx_c.set(idx);
+                                    let val = if idx == 0 { String::new() } else { name_clone.clone() };
+                                    sel_tgt_c.set(val.clone());
+                                    if let Ok(mut g) = handle_c.0.lock() {
+                                        g.target = val;
+                                    }
+                                    cx.emit(PopupEvent::Close);
+                                });
+                            }
+                        })
+                        .width(Pixels(190.0))
+                        .height(Auto);
+                    })
+                    .width(Pixels(190.0))
+                    .height(Auto)
+                    .max_height(Pixels(56.0))
+                    .background_color(Color::white());
+                },
+            )
+            .width(Pixels(190.0))
+            .height(Pixels(FORM_H))
+            .placement(Placement::BottomStart)
+            .should_reposition(false);
         })
         .width(Stretch(1.0))
         .height(Pixels(32.0))

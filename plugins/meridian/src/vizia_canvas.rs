@@ -26,7 +26,7 @@ impl View for CompressorEnvelopeView {
         let b = cx.bounds();
         canvas.translate((b.x, b.y));
         let (w, h) = (b.width(), b.height());
-        let max_gr = 24.0f32;
+        let max_gr = 12.0f32;
         let margin = 2.0f32;
 
         canvas.draw_rect(vg::Rect::new(0.0, 0.0, w, h), &fill_paint(rgb(0.08, 0.08, 0.08)));

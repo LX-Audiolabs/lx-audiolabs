@@ -303,7 +303,6 @@ pub fn build(cx: &mut Context, lens: ParamLens<AetherParams>, params: Arc<Aether
     }
     let preset_names_init: Vec<String> = presets.iter().map(|(n,_,_)|n.clone()).collect();
     let preset_names_for_signal = preset_names_init.clone();
-    let selected_index = config.last_preset.as_ref().and_then(|n|preset_names_init.iter().position(|x|x==n)).unwrap_or(0);
 
     let preset_name_signal = Signal::new(config.last_preset.clone().unwrap_or_default());
 
@@ -348,34 +347,109 @@ pub fn build(cx: &mut Context, lens: ParamLens<AetherParams>, params: Arc<Aether
 
             Element::new(cx).width(Stretch(1.0));
 
-            // Preset ComboBox + Textbox
-            let preset_opts = Signal::new(preset_names_init);
-            let sel_idx = Signal::new(selected_index);
+            // Preset Dropdown with arrow + Textbox
+            let preset_opts = Signal::new(preset_names_init.clone());
+            let names_for_popup = preset_opts.clone();
+            let selected_preset_name = preset_name_signal;
             let lens_preset = lens.clone();
             let params_preset = params.clone();
             let vp_p = vault_path_signal;
-            ComboBox::new(cx, preset_opts, sel_idx)
-                .on_select(move |_cx, idx| {
-                    let names = preset_opts.get();
-                    if idx < names.len() {
-                        let name = names[idx].clone();
-                        if let Some(pf) = find_profile(&name, &vp_p.get()) {
-                            apply_profile(&params_preset, &lens_preset, &pf);
-                        }
-                        preset_name_signal.set(name.clone());
-                        save_last_preset(&vp_p.get(), &name);
-                    }
-                })
-                .width(Pixels(140.0))
-                .height(Pixels(20.0))
-                .padding(Pixels(0.0))
-                .font_size(11.0);
+            // Common look for the preset dropdown trigger and the adjacent name textbox.
+            const PRESET_W: f32 = 130.0;
+            const PRESET_H: f32 = 22.0;
+            const PRESET_BG: Color = Color::rgb(230, 230, 230);
+            const PRESET_BORDER: Color = Color::rgb(140, 140, 140);
+            const PRESET_TEXT: Color = Color::rgb(40, 40, 40);
+            const PRESET_ARROW: Color = Color::rgb(100, 100, 100);
 
+            Dropdown::new(
+                cx,
+                // Trigger: styled box showing current preset name + down arrow
+                move |cx| {
+                    let trigger_text = Memo::new(move |_| {
+                        let n = selected_preset_name.get();
+                        if n.is_empty() { "Select preset".to_string() } else { n }
+                    });
+                    HStack::new(cx, move |cx| {
+                        Label::new(cx, trigger_text)
+                            .font_size(11.0)
+                            .color(PRESET_TEXT)
+                            .hoverable(false);
+                        Element::new(cx).width(Stretch(1.0)).hoverable(false);
+                        Label::new(cx, "▼")
+                            .font_size(8.0)
+                            .color(PRESET_ARROW)
+                            .hoverable(false);
+                    })
+                    .width(Pixels(PRESET_W))
+                    .height(Pixels(PRESET_H))
+                    .padding(Pixels(4.0))
+                    .background_color(PRESET_BG)
+                    .border_color(PRESET_BORDER)
+                    .border_width(Pixels(1.0))
+                    .corner_radius(Pixels(2.0))
+                    .alignment(Alignment::Center)
+                    .on_press(|cx| cx.emit(PopupEvent::Switch));
+                },
+                // Popup: scrollable list of presets
+                move |cx| {
+                    let names = names_for_popup.get();
+                    let vp = vp_p;
+                    let params = params_preset.clone();
+                    let lens = lens_preset.clone();
+                    let sel_name = selected_preset_name;
+                    ScrollView::new(cx, move |cx| {
+                        VStack::new(cx, move |cx| {
+                            for name in &names {
+                                let name_clone = name.clone();
+                                let vp_c = vp.clone();
+                                let params_c = params.clone();
+                                let lens_c = lens.clone();
+                                let sel_c = sel_name;
+                                let name_for_press = name_clone.clone();
+                                HStack::new(cx, move |cx| {
+                                    Label::new(cx, name_clone)
+                                        .font_size(11.0)
+                                        .color(Color::black())
+                                        .hoverable(false);
+                                })
+                                .width(Pixels(PRESET_W))
+                                .height(Pixels(20.0))
+                                .padding(Pixels(4.0))
+                                .background_color(Color::white())
+                                .alignment(Alignment::Center)
+                                .on_press(move |cx| {
+                                    let n = name_for_press.clone();
+                                    if let Some(pf) = find_profile(&n, &vp_c.get()) {
+                                        apply_profile(&params_c, &lens_c, &pf);
+                                    }
+                                    sel_c.set(n.clone());
+                                    save_last_preset(&vp_c.get(), &n);
+                                    cx.emit(PopupEvent::Close);
+                                });
+                            }
+                        })
+                        .width(Auto)
+                        .height(Auto);
+                    })
+                    .width(Pixels(PRESET_W + 16.0))
+                    .height(Auto)
+                    .max_height(Pixels(160.0))
+                    .background_color(Color::white());
+                },
+            )
+            .width(Pixels(PRESET_W))
+            .height(Pixels(PRESET_H));
+
+            let preset_name_edit = preset_name_signal;
             Textbox::new(cx, preset_name_signal)
-                .width(Pixels(120.0))
-                .height(Pixels(20.0))
-                .padding(Pixels(0.0))
-                .font_size(11.0);
+                .on_edit(move |_cx, text| preset_name_edit.set(text))
+                .width(Pixels(PRESET_W))
+                .height(Pixels(PRESET_H))
+                .padding(Pixels(4.0))
+                .font_size(11.0)
+                .background_color(PRESET_BG)
+                .border_color(PRESET_BORDER);
 
             Element::new(cx).width(Pixels(6.0));
 
@@ -399,7 +473,7 @@ pub fn build(cx: &mut Context, lens: ParamLens<AetherParams>, params: Arc<Aether
                             names.push(name.clone());
                             preset_opts.set(names.clone());
                         }
-                        if let Some(idx) = names.iter().position(|n| n == &name) { sel_idx.set(idx); }
+                        if let Some(idx) = names.iter().position(|n| n == &name) { preset_name_signal.set(names[idx].clone()); }
                     }
                 }
             });
