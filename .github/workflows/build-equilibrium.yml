@@ -8,9 +8,9 @@ jobs:
     name: Linux (x86_64)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index
@@ -45,7 +45,7 @@ jobs:
           mkdir -p target/bundled
           cp target/release/libequilibrium.so target/bundled/equilibrium-linux.clap
           echo "✓ Created: equilibrium-linux.clap"
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: equilibrium-linux
           path: target/bundled/*.clap
