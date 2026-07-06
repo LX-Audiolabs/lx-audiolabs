@@ -15,13 +15,13 @@ members = [
 resolver = "3"
 
 [workspace.dependencies]
-truce           = { version = "2.0.0", default-features = false }
-truce-core      = "2.0.0"
-truce-params    = "2.0.0"
-truce-clap      = "2.0.0"
-truce-vst3      = "2.0.0"
-truce-loader    = "2.0.0"
-truce-test      = "2.0.0"
+truce           = { version = "3.0.0", default-features = false }
+truce-core      = "3.0.0"
+truce-params    = "3.0.0"
+truce-clap      = "3.0.0"
+truce-vst3      = "3.0.0"
+truce-loader    = "3.0.0"
+truce-test      = "3.0.0"
 clap-sys        = "0.5"
 
 [profile.release]
@@ -61,8 +61,8 @@ truce-clap = { path = "truce-clap-local" }
 # `unit = "%"` param (Equilibrium/Meridian/Aether/Aurum/Lucent) now shows
 # the wrong percentage until the fix is re-applied via an upstream PR/
 # fork branch that truce-vizia's git tag can also point at.
-truce-params = { git = "https://github.com/truce-audio/truce", tag = "v2.0.0" }
-truce-core = { git = "https://github.com/truce-audio/truce", tag = "v2.0.0" }
+truce-params = { git = "https://github.com/truce-audio/truce", tag = "v3.0.0" }
+truce-core = { git = "https://github.com/truce-audio/truce", tag = "v3.0.0" }
 
 # ponytail: tried patching baseview to truce-audio's `baseview-truce-vizia`
 # fork here (same mechanism as the truce-params/truce-core fix above -

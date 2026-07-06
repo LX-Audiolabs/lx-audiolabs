@@ -55,15 +55,15 @@ pub struct EquilibriumParams {
     pub high_gain: FloatParam,
 
     // 5 Band Widths
-    #[param(name = "Sub Width", default = 100.0, range = "linear(0.0, 150.0)", unit = "%", smooth = "linear(20)", group = "Width")]
+    #[param(name = "Sub Width", default = 100.0, range = "linear(0.0, 150.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Width")]
     pub low_width: FloatParam,
-    #[param(name = "Bass Width", default = 100.0, range = "linear(0.0, 150.0)", unit = "%", smooth = "linear(20)", group = "Width")]
+    #[param(name = "Bass Width", default = 100.0, range = "linear(0.0, 150.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Width")]
     pub bass_width: FloatParam,
-    #[param(name = "Mid Width", default = 100.0, range = "linear(0.0, 150.0)", unit = "%", smooth = "linear(20)", group = "Width")]
+    #[param(name = "Mid Width", default = 100.0, range = "linear(0.0, 150.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Width")]
     pub mid_width: FloatParam,
-    #[param(name = "Pres Width", default = 100.0, range = "linear(0.0, 150.0)", unit = "%", smooth = "linear(20)", group = "Width")]
+    #[param(name = "Pres Width", default = 100.0, range = "linear(0.0, 150.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Width")]
     pub high_mid_width: FloatParam,
-    #[param(name = "Air Width", default = 100.0, range = "linear(0.0, 150.0)", unit = "%", smooth = "linear(20)", group = "Width")]
+    #[param(name = "Air Width", default = 100.0, range = "linear(0.0, 150.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Width")]
     pub high_width: FloatParam,
 
     // 5 Band Pans (-1.0 L to +1.0 R)
@@ -118,6 +118,17 @@ pub struct EquilibriumParams {
 
     #[skip]
     pub shared: Arc<SharedState>,
+}
+
+impl EquilibriumParams {
+    /// Real value display for `unit = "%"` params: our plain values are
+    /// already the percent number (e.g. `100.0` means `100%`), not a
+    /// 0.0-1.0 fraction. `truce_params::format_param_value`'s built-in
+    /// Percent case multiplies by 100 assuming the latter, so it would
+    /// show `10000%` for a real 100% value without this override.
+    fn fmt_pct(&self, value: f64) -> String {
+        format!("{value:.1}%")
+    }
 }
 
 // ─── Plugin ──────────────────────────────────────────────────────────────────
@@ -240,6 +251,8 @@ impl Equilibrium {
 // ─── PluginLogic ─────────────────────────────────────────────────────────────
 
 impl PluginLogic for Equilibrium {
+    type Params = EquilibriumParams;
+
     fn reset(&mut self, sr: f64, _max: usize) {
         let sr = sr as f32;
         self.cached_sample_rate = sr;
@@ -897,16 +910,15 @@ impl PluginLogic for Equilibrium {
     }
     fn state_changed(&mut self) {}
 
-    fn editor(&self) -> Box<dyn Editor> {
+    fn editor(params: Arc<Self::Params>) -> Box<dyn Editor> {
         // Vizia port (CLAP-vault features/2026-07-04-truce-2.0-upgrade-plan.md).
         // `shared` is captured directly into the setup closure rather than
         // read through `ParamLens` - the band meters/goniometer/preset data
         // live in `EquilibriumParams::shared` (atomics + mutexes written by
         // `process()`), not in the param store `ParamLens` binds to.
-        let shared = self.params.shared.clone();
-        let params = self.params.clone();
+        let shared = params.shared.clone();
         ViziaEditor::<EquilibriumParams>::new(
-            self.params.clone(),
+            params.clone(),
             (WINDOW_W, WINDOW_H),
             move |cx, lens| editor::build(cx, lens, shared.clone(), params.clone()),
         )

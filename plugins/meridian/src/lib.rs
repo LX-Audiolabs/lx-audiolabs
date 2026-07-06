@@ -135,13 +135,13 @@ pub struct MeridianParams {
     // Warmth (tube saturation)
     #[param(name = "Warmth Drive", default = 0.0, range = "linear(0.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "Saturator")]
     pub warmth_drive: FloatParam,
-    #[param(name = "Warmth Mix", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)", group = "Saturator")]
+    #[param(name = "Warmth Mix", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Saturator")]
     pub warmth_mix: FloatParam,
 
     // Exciter (HF saturation)
-    #[param(name = "Excite Amount", default = 0.0, range = "linear(0.0, 30.0)", unit = "%", smooth = "linear(20)", group = "Exciter")]
+    #[param(name = "Excite Amount", default = 0.0, range = "linear(0.0, 30.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Exciter")]
     pub excite_amount: FloatParam,
-    #[param(name = "Excite Blend", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)", group = "Exciter")]
+    #[param(name = "Excite Blend", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Exciter")]
     pub excite_blend: FloatParam,
     #[param(name = "Excite Freq", default = 8000.0, range = "log(6000.0, 12000.0)", unit = "Hz", group = "Exciter")]
     pub excite_freq: FloatParam,
@@ -149,7 +149,7 @@ pub struct MeridianParams {
     // Compressor
     #[param(name = "Comp Threshold", default = 0.0, range = "linear(-30.0, 0.0)", unit = "dB", smooth = "linear(20)", group = "Compressor")]
     pub comp_threshold: FloatParam,
-    #[param(name = "Comp Mix", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)", group = "Compressor")]
+    #[param(name = "Comp Mix", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Compressor")]
     pub comp_mix: FloatParam,
     #[param(name = "Comp Attack", default = 15.0, range = "linear(5.0, 50.0)", unit = "ms", smooth = "linear(20)", group = "Compressor")]
     pub comp_attack: FloatParam,
@@ -161,7 +161,7 @@ pub struct MeridianParams {
     pub comp_makeup: FloatParam,
 
     // Inflate (Oxford-Inflator-inspired loudness/density waveshaper)
-    #[param(name = "Inflate Effect", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)", group = "Inflate")]
+    #[param(name = "Inflate Effect", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Inflate")]
     pub inflate_effect: FloatParam,
     #[param(name = "Inflate Curve", default = 0.0, range = "linear(-50.0, 50.0)", smooth = "linear(20)", group = "Inflate")]
     pub inflate_curve: FloatParam,
@@ -171,7 +171,7 @@ pub struct MeridianParams {
     pub inflate_clip: BoolParam,
 
     // Stereo Width
-    #[param(name = "Stereo Width", default = 100.0, range = "linear(0.0, 200.0)", unit = "%", smooth = "linear(20)", group = "Stereo/Routing")]
+    #[param(name = "Stereo Width", default = 100.0, range = "linear(0.0, 200.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Stereo/Routing")]
     pub stereo_width: FloatParam,
     // Pan
     #[param(name = "Pan", default = 0.0, range = "linear(-1.0, 1.0)", smooth = "linear(20)", group = "Stereo/Routing")]
@@ -190,6 +190,17 @@ pub struct MeridianParams {
 
     #[skip]
     pub shared: Arc<SharedState>,
+}
+
+impl MeridianParams {
+    /// Real value display for `unit = "%"` params: our plain values are
+    /// already the percent number (e.g. `100.0` means `100%`), not a
+    /// 0.0-1.0 fraction. `truce_params::format_param_value`'s built-in
+    /// Percent case multiplies by 100 assuming the latter, so it would
+    /// show `10000%` for a real 100% value without this override.
+    fn fmt_pct(&self, value: f64) -> String {
+        format!("{value:.1}%")
+    }
 }
 
 // ─── Plugin ──────────────────────────────────────────────────────────────────
@@ -329,6 +340,8 @@ impl Meridian {
 // ─── PluginLogic ─────────────────────────────────────────────────────────────
 
 impl PluginLogic for Meridian {
+    type Params = MeridianParams;
+
     fn reset(&mut self, sr: f64, _max: usize) {
         let sr = sr as f32;
 
@@ -1002,10 +1015,9 @@ impl PluginLogic for Meridian {
     }
     fn state_changed(&mut self) {}
 
-    fn editor(&self) -> Box<dyn Editor> {
-        let shared = self.params.shared.clone();
-        let params = self.params.clone();
-        ViziaEditor::<MeridianParams>::new(self.params.clone(), (WINDOW_W, WINDOW_H), move |cx, lens| {
+    fn editor(params: Arc<Self::Params>) -> Box<dyn Editor> {
+        let shared = params.shared.clone();
+        ViziaEditor::<MeridianParams>::new(params.clone(), (WINDOW_W, WINDOW_H), move |cx, lens| {
             editor::build(cx, lens, shared.clone(), params.clone())
         })
         .into_editor()

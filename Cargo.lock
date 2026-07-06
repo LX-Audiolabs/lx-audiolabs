@@ -851,7 +851,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1242,7 +1242,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.56.0",
+ "windows-core",
 ]
 
 [[package]]
@@ -1694,7 +1694,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2531,7 +2531,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2544,7 +2544,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2911,7 +2911,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3141,9 +3141,9 @@ dependencies = [
 
 [[package]]
 name = "truce"
-version = "2.0.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "075a79e394c08d0ea3926d1200a23b8d67c83ba5c5304b4e23a32c23137ff173"
+checksum = "239b61e4637a290ac256b028817956b756b59b3d91d4bb189807875559cb79a3"
 dependencies = [
  "truce-core",
  "truce-derive",
@@ -3155,19 +3155,19 @@ dependencies = [
 
 [[package]]
 name = "truce-build"
-version = "2.0.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab6f5b5a903e33fd13587762b93a95fee4a609ea56b101844791def90a4e1564"
+checksum = "0bca1bfa31fc5bb3c67490a0e1f1bacaed45fceed75f2140c6fb97c00537bf55"
 dependencies = [
  "base64",
  "serde",
  "toml",
- "truce-utils 2.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "truce-utils 3.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "truce-clap"
-version = "2.0.0"
+version = "3.0.0"
 dependencies = [
  "clap-sys",
  "crossbeam-queue",
@@ -3179,19 +3179,20 @@ dependencies = [
 
 [[package]]
 name = "truce-core"
-version = "2.0.0"
-source = "git+https://github.com/truce-audio/truce?tag=v2.0.0#cf4b4bd13a8c71bb4da4aa1d4118451751623292"
+version = "3.0.0"
+source = "git+https://github.com/truce-audio/truce?tag=v3.0.0#1e851c6375f61c26b480d8bbc2e2cd3e0053994f"
 dependencies = [
+ "libc",
  "png",
  "truce-params",
- "truce-utils 2.0.0 (git+https://github.com/truce-audio/truce?tag=v2.0.0)",
+ "truce-utils 3.0.0 (git+https://github.com/truce-audio/truce?tag=v3.0.0)",
 ]
 
 [[package]]
 name = "truce-derive"
-version = "2.0.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0582db2ae7dca5129121f826e557c710ed54936251f442b250bfbc3918552e00"
+checksum = "df23f0ca526135c69bfc422f5be156d8b55a127d72da43a2039cdb0c56bd435d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3199,14 +3200,14 @@ dependencies = [
  "toml",
  "truce-build",
  "truce-params",
- "truce-utils 2.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "truce-utils 3.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "truce-driver"
-version = "2.0.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7b25e63cd3dbc491d728615b7b4539ef94a05405a134afc12eb9eea3448b851"
+checksum = "78d6aeda2ae88d8383798a65470135e7d30218c499e1b4bc56041dae2ca2084a"
 dependencies = [
  "truce-core",
  "truce-params",
@@ -3214,14 +3215,14 @@ dependencies = [
 
 [[package]]
 name = "truce-font"
-version = "2.0.0"
-source = "git+https://github.com/truce-audio/truce?tag=v2.0.0#cf4b4bd13a8c71bb4da4aa1d4118451751623292"
+version = "3.0.0"
+source = "git+https://github.com/truce-audio/truce?tag=v3.0.0#1e851c6375f61c26b480d8bbc2e2cd3e0053994f"
 
 [[package]]
 name = "truce-gui-types"
-version = "2.0.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2d3b4659ef72b5c1b81bba148fe07d6c030dbf1005dc5e29e62d4c49b4823e8"
+checksum = "04a28f63d4c23c0a9bd722fec02f3b4bbc374f1bd22598cd8c9686a633e4eb33"
 dependencies = [
  "objc2 0.6.4",
  "truce-core",
@@ -3229,8 +3230,8 @@ dependencies = [
 
 [[package]]
 name = "truce-gui-utils"
-version = "2.0.0"
-source = "git+https://github.com/truce-audio/truce?tag=v2.0.0#cf4b4bd13a8c71bb4da4aa1d4118451751623292"
+version = "3.0.0"
+source = "git+https://github.com/truce-audio/truce?tag=v3.0.0#1e851c6375f61c26b480d8bbc2e2cd3e0053994f"
 dependencies = [
  "objc",
  "raw-window-handle 0.5.2",
@@ -3239,9 +3240,9 @@ dependencies = [
 
 [[package]]
 name = "truce-loader"
-version = "2.0.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5ac2e20a3b5985f2422c288f1a090fe5c1872f30358e53b4df128c04bb797b5"
+checksum = "72f2faf5c7985750c9d9b53d2c7d00f7de0c3b30fd65917bc7e6a863d8eb460b"
 dependencies = [
  "crc32fast",
  "libloading 0.9.0",
@@ -3255,17 +3256,17 @@ dependencies = [
 
 [[package]]
 name = "truce-params"
-version = "2.0.0"
-source = "git+https://github.com/truce-audio/truce?tag=v2.0.0#cf4b4bd13a8c71bb4da4aa1d4118451751623292"
+version = "3.0.0"
+source = "git+https://github.com/truce-audio/truce?tag=v3.0.0#1e851c6375f61c26b480d8bbc2e2cd3e0053994f"
 dependencies = [
  "bitflags 2.13.0",
 ]
 
 [[package]]
 name = "truce-plugin"
-version = "2.0.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "312f76aec9f657a56a63a66037422c81b1c917634321f73b3b14ff8524e2e507"
+checksum = "7aaec9f6439abaa113f6199f15819f28b2da39973f0a434bd8ea78632a5a6577"
 dependencies = [
  "truce-core",
  "truce-gui-types",
@@ -3274,9 +3275,9 @@ dependencies = [
 
 [[package]]
 name = "truce-test"
-version = "2.0.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90313a540433087319a9dccbee8b38868003750ad27e4bdb6a86cbca33aff08d"
+checksum = "acd5d46d5b1a979be551028fe780eb1e28906f96edb378e6a404025b8d217f47"
 dependencies = [
  "png",
  "toml",
@@ -3288,19 +3289,19 @@ dependencies = [
 
 [[package]]
 name = "truce-utils"
-version = "2.0.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06f45e9595a82108244c24105d7698147ec9280dd0a1a25f7fc8794c72bbd35b"
+checksum = "20e2be0ac6e37e2d97f181ad4cabd3b331d39960ce220ac5be197a1f906f958b"
 
 [[package]]
 name = "truce-utils"
-version = "2.0.0"
-source = "git+https://github.com/truce-audio/truce?tag=v2.0.0#cf4b4bd13a8c71bb4da4aa1d4118451751623292"
+version = "3.0.0"
+source = "git+https://github.com/truce-audio/truce?tag=v3.0.0#1e851c6375f61c26b480d8bbc2e2cd3e0053994f"
 
 [[package]]
 name = "truce-vizia"
-version = "2.0.0"
-source = "git+https://github.com/truce-audio/truce?tag=v2.0.0#cf4b4bd13a8c71bb4da4aa1d4118451751623292"
+version = "3.0.0"
+source = "git+https://github.com/truce-audio/truce?tag=v3.0.0#1e851c6375f61c26b480d8bbc2e2cd3e0053994f"
 dependencies = [
  "log",
  "raw-window-handle 0.5.2",
@@ -3313,9 +3314,9 @@ dependencies = [
 
 [[package]]
 name = "truce-vst3"
-version = "2.0.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c03c9ae4ab1d9165ca0f4ba56436c85b492eae388965ab38e8fed4e42bed433f"
+checksum = "29a0d234dbd0875d42d859305ff8558456796b832dcd34d82b2c4e548fc8b809"
 dependencies = [
  "cc",
  "crossbeam-queue",
@@ -3684,7 +3685,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3713,7 +3714,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "527fadee13e0c05939a6a05d5bd6eec6cd2e3dbd648b9f8e447c6518133d8580"
 dependencies = [
  "windows-collections",
- "windows-core 0.62.2",
+ "windows-core",
  "windows-future",
  "windows-numerics",
 ]
@@ -3724,19 +3725,7 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b2d95af1a8a14a3c7367e1ed4fc9c20e0a26e79551b1454d72583c97cc6610"
 dependencies = [
- "windows-core 0.62.2",
-]
-
-[[package]]
-name = "windows-core"
-version = "0.56.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4698e52ed2d08f8658ab0c39512a7c00ee5fe2688c65f8c0a4f06750d729f2a6"
-dependencies = [
- "windows-implement 0.56.0",
- "windows-interface 0.56.0",
- "windows-result 0.1.2",
- "windows-targets 0.52.6",
+ "windows-core",
 ]
 
 [[package]]
@@ -3745,10 +3734,10 @@ version = "0.62.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb"
 dependencies = [
- "windows-implement 0.60.2",
- "windows-interface 0.59.3",
+ "windows-implement",
+ "windows-interface",
  "windows-link",
- "windows-result 0.4.1",
+ "windows-result",
  "windows-strings",
 ]
 
@@ -3758,20 +3747,9 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1d6f90251fe18a279739e78025bd6ddc52a7e22f921070ccdc67dde84c605cb"
 dependencies = [
- "windows-core 0.62.2",
+ "windows-core",
  "windows-link",
  "windows-threading",
-]
-
-[[package]]
-name = "windows-implement"
-version = "0.56.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6fc35f58ecd95a9b71c4f2329b911016e6bec66b3f2e6a4aad86bd2e99e2f9b"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -3779,17 +3757,6 @@ name = "windows-implement"
 version = "0.60.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "053e2e040ab57b9dc951b72c264860db7eb3b0200ba345b4e4c3b14f67855ddf"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "windows-interface"
-version = "0.56.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08990546bf4edef8f431fa6326e032865f27138718c587dc21bc0265bbcb57cc"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3819,17 +3786,8 @@ version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e2e40844ac143cdb44aead537bbf727de9b044e107a0f1220392177d15b0f26"
 dependencies = [
- "windows-core 0.62.2",
+ "windows-core",
  "windows-link",
-]
-
-[[package]]
-name = "windows-result"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e383302e8ec8515204254685643de10811af0ed97ea37210dc26fb0032647f8"
-dependencies = [
- "windows-targets 0.52.6",
 ]
 
 [[package]]
@@ -3852,20 +3810,11 @@ dependencies = [
 
 [[package]]
 name = "windows-sys"
-version = "0.48.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "677d2418bec65e3338edb076e806bc1ec15693c5d0104683f2efe857f61056a9"
-dependencies = [
- "windows-targets 0.48.5",
-]
-
-[[package]]
-name = "windows-sys"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
 dependencies = [
- "windows-targets 0.52.6",
+ "windows-targets",
 ]
 
 [[package]]
@@ -3874,7 +3823,7 @@ version = "0.59.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
 dependencies = [
- "windows-targets 0.52.6",
+ "windows-targets",
 ]
 
 [[package]]
@@ -3888,32 +3837,17 @@ dependencies = [
 
 [[package]]
 name = "windows-targets"
-version = "0.48.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a2fa6e2155d7247be68c096456083145c183cbbbc2764150dda45a87197940c"
-dependencies = [
- "windows_aarch64_gnullvm 0.48.5",
- "windows_aarch64_msvc 0.48.5",
- "windows_i686_gnu 0.48.5",
- "windows_i686_msvc 0.48.5",
- "windows_x86_64_gnu 0.48.5",
- "windows_x86_64_gnullvm 0.48.5",
- "windows_x86_64_msvc 0.48.5",
-]
-
-[[package]]
-name = "windows-targets"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b724f72796e036ab90c1021d4780d4d3d648aca59e491e6b98e725b84e99973"
 dependencies = [
- "windows_aarch64_gnullvm 0.52.6",
+ "windows_aarch64_gnullvm",
  "windows_aarch64_msvc 0.52.6",
  "windows_i686_gnu 0.52.6",
  "windows_i686_gnullvm",
  "windows_i686_msvc 0.52.6",
  "windows_x86_64_gnu 0.52.6",
- "windows_x86_64_gnullvm 0.52.6",
+ "windows_x86_64_gnullvm",
  "windows_x86_64_msvc 0.52.6",
 ]
 
@@ -3925,12 +3859,6 @@ checksum = "3949bd5b99cafdf1c7ca86b43ca564028dfe27d66958f2470940f73d86d75b37"
 dependencies = [
  "windows-link",
 ]
-
-[[package]]
-name = "windows_aarch64_gnullvm"
-version = "0.48.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b38e32f0abccf9987a4e3079dfb67dcd799fb61361e53e2882c3cbaf0d905d8"
 
 [[package]]
 name = "windows_aarch64_gnullvm"
@@ -3946,12 +3874,6 @@ checksum = "17cffbe740121affb56fad0fc0e421804adf0ae00891205213b5cecd30db881d"
 
 [[package]]
 name = "windows_aarch64_msvc"
-version = "0.48.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc35310971f3b2dbbf3f0690a219f40e2d9afcf64f9ab7cc1be722937c26b4bc"
-
-[[package]]
-name = "windows_aarch64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09ec2a7bb152e2252b53fa7803150007879548bc709c039df7627cabbd05d469"
@@ -3961,12 +3883,6 @@ name = "windows_i686_gnu"
 version = "0.34.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2564fde759adb79129d9b4f54be42b32c89970c18ebf93124ca8870a498688ed"
-
-[[package]]
-name = "windows_i686_gnu"
-version = "0.48.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a75915e7def60c94dcef72200b9a8e58e5091744960da64ec734a6c6e9b3743e"
 
 [[package]]
 name = "windows_i686_gnu"
@@ -3988,12 +3904,6 @@ checksum = "9cd9d32ba70453522332c14d38814bceeb747d80b3958676007acadd7e166956"
 
 [[package]]
 name = "windows_i686_msvc"
-version = "0.48.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f55c233f70c4b27f66c523580f78f1004e8b5a8b659e05a4eb49d4166cca406"
-
-[[package]]
-name = "windows_i686_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "240948bc05c5e7c6dabba28bf89d89ffce3e303022809e73deaefe4f6ec56c66"
@@ -4006,21 +3916,9 @@ checksum = "cfce6deae227ee8d356d19effc141a509cc503dfd1f850622ec4b0f84428e1f4"
 
 [[package]]
 name = "windows_x86_64_gnu"
-version = "0.48.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53d40abd2583d23e4718fddf1ebec84dbff8381c07cae67ff7768bbf19c6718e"
-
-[[package]]
-name = "windows_x86_64_gnu"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "147a5c80aabfbf0c7d901cb5895d1de30ef2907eb21fbbab29ca94c5b08b1a78"
-
-[[package]]
-name = "windows_x86_64_gnullvm"
-version = "0.48.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b7b52767868a23d5bab768e390dc5f5c55825b6d30b86c844ff2dc7414044cc"
 
 [[package]]
 name = "windows_x86_64_gnullvm"
@@ -4033,12 +3931,6 @@ name = "windows_x86_64_msvc"
 version = "0.34.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d19538ccc21819d01deaf88d6a17eae6596a12e9aafdbb97916fb49896d89de9"
-
-[[package]]
-name = "windows_x86_64_msvc"
-version = "0.48.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed94fce61571a4006852b7389a063ab983c02eb1bb37b47f8272ce92d06d9538"
 
 [[package]]
 name = "windows_x86_64_msvc"

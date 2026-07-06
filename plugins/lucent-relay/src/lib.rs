@@ -198,6 +198,8 @@ impl LucentRelay {
 }
 
 impl PluginLogic for LucentRelay {
+    type Params = LucentRelayParams;
+
     fn reset(&mut self, _sr: f64, _max: usize) {
         self.claim_slot();
         self.spawn_liveness_thread();
@@ -280,13 +282,12 @@ impl PluginLogic for LucentRelay {
         }
     }
 
-    fn editor(&self) -> Box<dyn Editor> {
+    fn editor(params: Arc<Self::Params>) -> Box<dyn Editor> {
         // Vizia migration (2026-07-05). Relais has no params to bind -
         // editor::build only needs the RelayHandle (via registry) and
         // polls relay_hub for consumer list + connection status.
-        let params = self.params.clone();
         ViziaEditor::<LucentRelayParams>::new(
-            self.params.clone(),
+            params.clone(),
             (WINDOW_W, WINDOW_H),
             move |cx, _lens| editor::build(cx, params.clone()),
         )

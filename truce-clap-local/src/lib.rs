@@ -96,7 +96,7 @@ use truce_core::bus::ChannelConfig;
 use truce_core::cast::{len_u32, size_of_u32};
 use truce_core::chunked_process::{ChunkedProcess, process_chunked};
 use truce_core::editor::{
-    ClosureBridge, Editor, PluginContext, RawWindowHandle, SendPtr, fit_logical_size,
+    ClosureBridge, Editor, EditorBuilder, PluginContext, RawWindowHandle, SendPtr, fit_logical_size,
 };
 use truce_core::events::{EVENT_LIST_PREALLOC, Event, EventBody, EventList, TransportInfo};
 use truce_core::export::PluginExport;
@@ -110,11 +110,13 @@ use truce_core::midi::{
 use truce_core::plugin::PluginRuntime;
 use truce_core::presets::parse_preset_file;
 use truce_core::process::ProcessStatus;
+use truce_core::snapshot::SnapshotSlot;
 use truce_core::state;
 use truce_core::state::PluginFormat;
 use truce_core::ump::decode_ump_channel_voice_2;
 use truce_core::wrapper::{
-    SharedPlugin, lock_plugin, run_audio_block_with, run_extern_callback_with, shared_plugin,
+    SharedPlugin, lock_plugin, run_audio_block_with, run_extern_callback_with, save_extra,
+    shared_plugin,
 };
 use truce_core::{Float, Sample};
 use truce_params::Params;
@@ -176,6 +178,14 @@ struct ClapPluginData<P: PluginExport> {
     /// editor's `get_meter` closure reads these atomic slots instead
     /// of the plugin instance.
     meter_store: Arc<MeterStore>,
+    /// Lock-free custom-state slot the audio thread publishes into, read
+    /// by `save_state` so a snapshot-capable plugin's save never takes
+    /// the plugin lock. Cached here, outside the lock, like `params_arc`.
+    snapshot: Arc<SnapshotSlot>,
+    /// Lock-free editor factory, cached at creation. Building the editor
+    /// through this never takes the plugin lock (`--shell` builds rebuild
+    /// from the reloaded dylib, so GUI edits hot-reload).
+    editor_builder: EditorBuilder<P::Params>,
     /// Atomic snapshots of the plugin's most recent `latency()` /
     /// `tail()`. Updated by the audio thread (or `init`/`reset`) so
     /// `latency_get` / `tail_get` read the value without touching
@@ -225,6 +235,14 @@ struct ClapPluginData<P: PluginExport> {
     /// transfer race-free: no GUI-thread `&mut plugin` is ever
     /// constructed.
     pending_state: Arc<StateLoadQueue>,
+    /// `true` between `activate` and `deactivate`. `state_load` reads it
+    /// to decide whether the audio thread will drain `pending_state`: if
+    /// inactive, no `process` runs, so it applies the custom-state blob
+    /// synchronously instead of leaving it stranded in the queue (which
+    /// would let a following `get_state` re-serialize stale extra
+    /// state). Main-thread-only (`activate` / `deactivate` / `state_load`
+    /// are serialized by the host).
+    active: AtomicBool,
     /// Flag: GUI changed params, need rescan on main thread.
     needs_rescan: Arc<AtomicBool>,
     /// Shared transport slot: audio thread writes each block, editor reads.
@@ -560,12 +578,17 @@ unsafe extern "C" fn clap_plugin_activate<P: PluginExport>(
             }
         }
 
+        data.active.store(true, Ordering::Relaxed);
         true
     }
 }
 
-unsafe extern "C" fn clap_plugin_deactivate<P: PluginExport>(_plugin: *const clap_plugin) {
-    // Nothing to do.
+unsafe extern "C" fn clap_plugin_deactivate<P: PluginExport>(plugin: *const clap_plugin) {
+    unsafe {
+        data_from_plugin::<P>(plugin)
+            .active
+            .store(false, Ordering::Relaxed);
+    }
 }
 
 unsafe extern "C" fn clap_plugin_start_processing<P: PluginExport>(
@@ -2267,7 +2290,7 @@ unsafe extern "C" fn state_save<P: PluginExport>(
         // holds the lock, so this waits for the block boundary and
         // `save_state` never runs concurrently with `process` - plain
         // (non-atomic) plugin fields are safe to read here.
-        let extra = lock_plugin(&data.plugin).save_state();
+        let extra = save_extra(&data.snapshot, &data.plugin);
         let blob = state::serialize_state(data.plugin_id_hash, &ids, &values, &extra);
 
         // Write to the CLAP output stream
@@ -2348,11 +2371,22 @@ unsafe extern "C" fn state_load<P: PluginExport>(
         // immediately after a load round-trip.
         state::apply_params(&*data.params_arc, &deserialized);
 
-        // Hand the deserialized state to the audio thread for
-        // application. `force_push` overwrites any older pending blob
-        // - see the `pending_state` field comment for why "newest
-        // wins" is the right policy here.
-        let _ = data.pending_state.force_push(deserialized);
+        if data.active.load(Ordering::Relaxed) {
+            // Active: the audio thread will drain `pending_state` at the
+            // top of the next block and apply the custom-state blob
+            // under its exclusive `&mut plugin`. `force_push` overwrites
+            // any older pending blob - see the `pending_state` field
+            // comment for why "newest wins" is right.
+            let _ = data.pending_state.force_push(deserialized);
+        } else {
+            // Inactive: no `process` will run, so the queue would never
+            // drain and the plugin's custom state would stay stale until
+            // the next activate. Apply the full state (params + extra)
+            // synchronously under the plugin lock - uncontended here
+            // since no audio thread is processing.
+            let mut instance = lock_plugin(&data.plugin);
+            state::apply_state(&mut *instance, &deserialized);
+        }
 
         if let Some(ref mut editor) = data.editor {
             editor.state_changed();
@@ -2699,9 +2733,10 @@ unsafe extern "C" fn gui_create<P: PluginExport>(
         if data.gui_created {
             return true;
         }
-        // Editor construction needs `&mut P`; the lock waits out
-        // at most one in-flight audio block.
-        data.editor = lock_plugin(&data.plugin).editor();
+        // Built through the cached lock-free editor factory, so opening
+        // the GUI never stalls the audio thread (and `--shell` rebuilds
+        // from the reloaded dylib).
+        data.editor = (data.editor_builder)(data.params_arc.clone());
         data.gui_created = data.editor.is_some();
         data.gui_created
     }
@@ -2841,6 +2876,7 @@ unsafe fn gui_set_parent_inner<P: PluginExport>(
         let params = Arc::clone(&data.params_arc);
         let meter_store = Arc::clone(&data.meter_store);
         let plugin_lock = Arc::clone(&data.plugin);
+        let snapshot = Arc::clone(&data.snapshot);
         let gui_changes = data.gui_changes.clone();
         let gui_changes2 = data.gui_changes.clone();
         let gui_changes3 = data.gui_changes.clone();
@@ -2924,14 +2960,13 @@ unsafe fn gui_set_parent_inner<P: PluginExport>(
                 }),
                 get_meter: Box::new(move |id| meter_store.read(id)),
                 get_state: Box::new(move || {
-                    // Editor state read. Blocking here is safe and
-                    // bounded: the GUI thread holds nothing the audio
-                    // thread waits on, and the audio thread releases
-                    // the plugin lock at every block end - single-
-                    // digit ms worst case. A try_lock's empty fallback
-                    // was ambiguous with "no custom state", so a lost
-                    // race silently kept stale editor state.
-                    lock_plugin(&plugin_lock).save_state()
+                    // Prefer the lock-free snapshot; a snapshot-capable
+                    // plugin's editor read never touches the plugin lock.
+                    // The fallback lock is safe and bounded: the GUI
+                    // thread holds nothing the audio thread waits on, and
+                    // the audio thread releases the plugin lock at every
+                    // block end - single-digit ms worst case.
+                    save_extra(&snapshot, &plugin_lock)
                 }),
                 set_state: Box::new(move |bytes| {
                     // The editor sends RAW custom-state bytes - exactly
@@ -3419,6 +3454,8 @@ pub unsafe fn create_plugin_instance<P: PluginExport>(
     let param_infos = instance.params().param_infos();
     let params_arc = instance.params_arc();
     let meter_store = instance.meter_store();
+    let snapshot = instance.snapshot_slot();
+    let editor_builder = instance.editor_builder();
     let latency_cache = AtomicU32::new(instance.latency());
     let tail_cache = AtomicU32::new(instance.tail());
 
@@ -3443,6 +3480,8 @@ pub unsafe fn create_plugin_instance<P: PluginExport>(
         plugin: shared_plugin(instance),
         params_arc,
         meter_store,
+        snapshot,
+        editor_builder,
         latency_cache,
         tail_cache,
         event_list: EventList::with_capacity(EVENT_LIST_PREALLOC),
@@ -3460,6 +3499,7 @@ pub unsafe fn create_plugin_instance<P: PluginExport>(
         host_params: ptr::null(),
         gui_changes: Arc::new(GuiChangeQueue::new(GUI_QUEUE_CAPACITY)),
         pending_state: Arc::new(StateLoadQueue::new(1)),
+        active: AtomicBool::new(false),
         needs_rescan: Arc::new(AtomicBool::new(false)),
         transport_slot: TransportSlot::new(),
         host_scale: 1.0,

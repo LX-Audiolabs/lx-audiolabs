@@ -453,12 +453,23 @@ pub struct LucentParams {
     /// How deep the resonance/masking detectors dig: 0% = shallow (only
     /// strong, sustained findings), 100% = deep (surfaces weaker, shorter
     /// ones too). 50% reproduces the previously hand-tuned thresholds.
-    #[param(name = "Sensitivity", default = 50.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)", group = "Lucent")]
+    #[param(name = "Sensitivity", default = 50.0, range = "linear(0.0, 100.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Lucent")]
     pub sensitivity: FloatParam,
     #[skip]
     pub name: RwLock<String>,
     #[skip]
     pub shared: Arc<SharedState>,
+}
+
+impl LucentParams {
+    /// Real value display for `unit = "%"` params: our plain values are
+    /// already the percent number (e.g. `50.0` means `50%`), not a
+    /// 0.0-1.0 fraction. `truce_params::format_param_value`'s built-in
+    /// Percent case multiplies by 100 assuming the latter, so it would
+    /// show `5000%` for a real 50% value without this override.
+    fn fmt_pct(&self, value: f64) -> String {
+        format!("{value:.1}%")
+    }
 }
 
 // ─── Persistent state ────────────────────────────────────────────────────────
@@ -540,6 +551,8 @@ fn gain_to_db(amp: f32) -> f32 {
 }
 
 impl PluginLogic for Lucent {
+    type Params = LucentParams;
+
     fn reset(&mut self, sr: f64, _max: usize) {
         self.sample_rate = sr as f32;
         self.params.shared.sample_rate.store(sr as f32, Ordering::Release);
@@ -898,16 +911,15 @@ impl PluginLogic for Lucent {
         }
     }
 
-    fn editor(&self) -> Box<dyn Editor> {
+    fn editor(params: Arc<Self::Params>) -> Box<dyn Editor> {
         // Vizia pilot (CLAP-vault features/2026-07-04-truce-2.0-upgrade-plan.md).
         // `shared` is captured directly into the setup closure rather than
         // read through `ParamLens` - the goniometer/spectrum/meter data
         // lives in `LucentParams::shared` (atomics + mutexes written by
         // `process()`), not in the param store `ParamLens` binds to.
-        let shared = self.params.shared.clone();
-        let params = self.params.clone();
+        let shared = params.shared.clone();
         ViziaEditor::<LucentParams>::new(
-            self.params.clone(),
+            params.clone(),
             (WINDOW_W, WINDOW_H),
             move |cx, lens| editor::build(cx, lens, shared.clone(), params.clone()),
         )

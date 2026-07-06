@@ -75,12 +75,12 @@ pub struct AetherParams {
     #[param(name = "EQ5 Type", default = 3, range = "discrete(0, 3)")]
     pub eq5_type: IntParam,
 
-    #[param(name = "Blend", default = 100.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)", group = "Aether")]
+    #[param(name = "Blend", default = 100.0, range = "linear(0.0, 100.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Aether")]
     pub blend: FloatParam,
 
     #[param(name = "Crossfeed Angle", default = 60.0, range = "linear(30.0, 75.0)", unit = "deg", smooth = "linear(20)", group = "Aether")]
     pub cf_angle:  FloatParam,
-    #[param(name = "Crossfeed Amount", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)", group = "Aether")]
+    #[param(name = "Crossfeed Amount", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Aether")]
     pub cf_amount: FloatParam,
     #[param(name = "Crossfeed Realism", default = 0, range = "discrete(0, 2)", group = "Aether")]
     pub cf_realism: IntParam,
@@ -93,6 +93,17 @@ pub struct AetherParams {
 
     #[skip]
     pub shared: Arc<SharedState>,
+}
+
+impl AetherParams {
+    /// Real value display for `unit = "%"` params: our plain values are
+    /// already the percent number (e.g. `100.0` means `100%`), not a
+    /// 0.0-1.0 fraction. `truce_params::format_param_value`'s built-in
+    /// Percent case multiplies by 100 assuming the latter, so it would
+    /// show `10000%` for a real 100% value without this override.
+    fn fmt_pct(&self, value: f64) -> String {
+        format!("{value:.1}%")
+    }
 }
 
 // ─── Plugin ───────────────────────────────────────────────────────────────────
@@ -189,6 +200,8 @@ pub fn parse_autoeq(content: &str) -> AutoEqProfile {
 // ─── PluginLogic ──────────────────────────────────────────────────────────────
 
 impl PluginLogic for Aether {
+    type Params = AetherParams;
+
     fn reset(&mut self, sr: f64, _max: usize) {
         self.sample_rate = sr as f32;
         self.params.shared.sample_rate.store(sr as f32, std::sync::atomic::Ordering::Release);
@@ -302,12 +315,11 @@ impl PluginLogic for Aether {
     }
     fn state_changed(&mut self) {}
 
-    fn editor(&self) -> Box<dyn Editor> {
+    fn editor(params: Arc<Self::Params>) -> Box<dyn Editor> {
         // Vizia migration (2026-07-05).
-        let shared = self.params.shared.clone();
-        let params = self.params.clone();
+        let shared = params.shared.clone();
         ViziaEditor::<AetherParams>::new(
-            self.params.clone(),
+            params.clone(),
             (WINDOW_W, WINDOW_H),
             move |cx, lens| editor::build(cx, lens, params.clone(), shared.clone()),
         )

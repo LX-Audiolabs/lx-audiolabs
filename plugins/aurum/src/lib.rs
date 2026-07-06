@@ -54,7 +54,7 @@ pub struct AurumParams {
     // Analogue Tolerance
     #[param(name = "AT", default = 0)]
     pub at_active: BoolParam,
-    #[param(name = "AT Amount", default = 50.0, range = "linear(0.0, 100.0)", unit = "%", group = "Output")]
+    #[param(name = "AT Amount", default = 50.0, range = "linear(0.0, 100.0)", unit = "%", format = "fmt_pct", group = "Output")]
     pub at_amount: FloatParam,
 
     // Output
@@ -68,7 +68,7 @@ pub struct AurumParams {
     // Clipper
     #[param(name = "Clip Ceiling", default = -1.0, range = "linear(-6.0, -0.1)", unit = "dB", smooth = "linear(20)", group = "Limiter")]
     pub clip_ceiling: FloatParam,
-    #[param(name = "Clip Softness", default = 50.0, range = "linear(0.0, 100.0)", unit = "%", smooth = "linear(20)", group = "Limiter")]
+    #[param(name = "Clip Softness", default = 50.0, range = "linear(0.0, 100.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Limiter")]
     pub clip_softness: FloatParam,
     #[param(name = "Clip M/S Mode", default = 0)]
     pub clip_ms_mode: BoolParam,
@@ -108,7 +108,7 @@ pub struct AurumParams {
     pub comp_attack: FloatParam,
     #[param(name = "Comp Release", default = 150.0, range = "linear(50.0, 500.0)", unit = "ms", group = "Compressor")]
     pub comp_release: FloatParam,
-    #[param(name = "Comp Mix", default = 50.0, range = "linear(0.0, 100.0)", unit = "%", group = "Compressor")]
+    #[param(name = "Comp Mix", default = 50.0, range = "linear(0.0, 100.0)", unit = "%", format = "fmt_pct", group = "Compressor")]
     pub comp_mix: FloatParam,
 
     // Sweetening EQ
@@ -172,7 +172,7 @@ pub struct AurumParams {
     pub sat_drive_mid: FloatParam,
     #[param(name = "Drive Side", default = 0.0, range = "linear(0.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "Saturator")]
     pub sat_drive_side: FloatParam,
-    #[param(name = "Sat Mix", default = 20.0, range = "linear(0.0, 60.0)", unit = "%", smooth = "linear(20)", group = "Saturator")]
+    #[param(name = "Sat Mix", default = 20.0, range = "linear(0.0, 60.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Saturator")]
     pub sat_mix: FloatParam,
     #[param(name = "Sat Harmonics", default = 2, range = "discrete(0, 2)", group = "Saturator")] // 0=Even, 1=Odd, 2=Mixed
     pub sat_harmonics: IntParam,
@@ -190,6 +190,17 @@ pub struct AurumParams {
     #[cfg(test)]
     #[skip]
     pub test_initial_tab: std::sync::atomic::AtomicUsize,
+}
+
+impl AurumParams {
+    /// Real value display for `unit = "%"` params: our plain values are
+    /// already the percent number (e.g. `45.0` means `45%`), not a
+    /// 0.0-1.0 fraction. `truce_params::format_param_value`'s built-in
+    /// Percent case multiplies by 100 assuming the latter, so it would
+    /// show `4500%` for a real 45% value without this override.
+    fn fmt_pct(&self, value: f64) -> String {
+        format!("{value:.1}%")
+    }
 }
 
 // ─── Plugin ───────────────────────────────────────────────────────────────────
@@ -246,6 +257,8 @@ impl Drop for Aurum {
 // ─── PluginLogic ──────────────────────────────────────────────────────────────
 
 impl PluginLogic for Aurum {
+    type Params = AurumParams;
+
     fn reset(&mut self, sr: f64, _max: usize) {
         let sr = sr as f32;
         self.sample_rate = sr;
@@ -493,11 +506,10 @@ impl PluginLogic for Aurum {
     fn load_state(&mut self, _: &[u8]) -> Result<(), StateLoadError> { Ok(()) }
     fn state_changed(&mut self) {}
 
-    fn editor(&self) -> Box<dyn Editor> {
-        let shared = self.params.shared.clone();
-        let params = self.params.clone();
+    fn editor(params: Arc<Self::Params>) -> Box<dyn Editor> {
+        let shared = params.shared.clone();
         ViziaEditor::<AurumParams>::new(
-            self.params.clone(),
+            params.clone(),
             (WINDOW_W, WINDOW_H),
             move |cx, lens| editor::build(cx, lens, params.clone(), shared.clone()),
         )
