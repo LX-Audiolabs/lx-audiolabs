@@ -39,16 +39,24 @@ jobs:
             libgl-dev
       - name: Build all plugins
         run: cargo build --release -p aether -p aurum -p equilibrium -p lucent -p lucent-relay -p meridian
+      - name: Read versions
+        id: version
+        run: |
+          echo "aether=$(grep '^version' plugins/aether/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
+          echo "aurum=$(grep '^version' plugins/aurum/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
+          echo "equilibrium=$(grep '^version' plugins/equilibrium/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
+          echo "lucent=$(grep '^version' plugins/lucent/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
+          echo "meridian=$(grep '^version' plugins/meridian/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
       - name: Bundle CLAPs
         run: |
           rm -rf target/bundled
           mkdir -p target/bundled
-          cp target/release/libaether.so target/bundled/aether-linux.clap
-          cp target/release/libaurum.so target/bundled/aurum-linux.clap
-          cp target/release/libequilibrium.so target/bundled/equilibrium-linux.clap
-          cp target/release/liblucent.so target/bundled/lucent-linux.clap
-          cp target/release/liblucent_relay.so target/bundled/lucent-relay-linux.clap
-          cp target/release/libmeridian.so target/bundled/meridian-linux.clap
+          cp target/release/libaether.so target/bundled/aether-v${{ steps.version.outputs.aether }}-linux.clap
+          cp target/release/libaurum.so target/bundled/aurum-v${{ steps.version.outputs.aurum }}-linux.clap
+          cp target/release/libequilibrium.so target/bundled/equilibrium-v${{ steps.version.outputs.equilibrium }}-linux.clap
+          cp target/release/liblucent.so target/bundled/lucent-v${{ steps.version.outputs.lucent }}-linux.clap
+          cp target/release/liblucent_relay.so target/bundled/lucent-relay-v${{ steps.version.outputs.lucent }}-linux.clap
+          cp target/release/libmeridian.so target/bundled/meridian-v${{ steps.version.outputs.meridian }}-linux.clap
           echo "✓ Created: $(ls target/bundled/*.clap | wc -l) CLAPs"
       - uses: actions/upload-artifact@v6
         with:

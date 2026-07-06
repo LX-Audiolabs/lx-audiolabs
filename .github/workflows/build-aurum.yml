@@ -43,8 +43,8 @@ jobs:
         run: |
           rm -rf target/bundled
           mkdir -p target/bundled
-          cp target/release/libaurum.so target/bundled/aurum-linux.clap
-          echo "✓ Created: aurum-linux.clap"
+          cp target/release/libaurum.so target/bundled/aurum-v${{ steps.version.outputs.version }}-linux.clap
+          echo "✓ Created: aurum-v${{ steps.version.outputs.version }}-linux.clap"
       - uses: actions/upload-artifact@v6
         with:
           name: aurum-linux

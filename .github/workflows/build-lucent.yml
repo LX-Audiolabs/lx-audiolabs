@@ -39,15 +39,18 @@ jobs:
             libgl-dev
       - name: Build Lucent
         run: cargo build --release --package lucent --package lucent-relay
+      - name: Read version
+        id: version
+        run: echo "version=$(grep '^version' plugins/lucent/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
       - name: Bundle CLAPs
         run: |
           rm -rf target/bundled
           mkdir -p target/bundled
-          cp target/release/liblucent.so target/bundled/lucent-linux.clap
-          cp target/release/liblucent_relay.so target/bundled/lucent-relay-linux.clap
+          cp target/release/liblucent.so target/bundled/lucent-v${{ steps.version.outputs.version }}-linux.clap
+          cp target/release/liblucent_relay.so target/bundled/lucent-relay-v${{ steps.version.outputs.version }}-linux.clap
           echo "✓ Created: 2 CLAPs"
       - uses: actions/upload-artifact@v6
         with:
-          name: lucent-linux
+          name: lucent-v${{ steps.version.outputs.version }}-linux
           path: target/bundled/*.clap
           if-no-files-found: error
