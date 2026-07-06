@@ -2818,7 +2818,6 @@ dependencies = [
  "percent-encoding",
  "skia-bindings",
  "skia-svg-macros",
- "windows 0.62.2",
 ]
 
 [[package]]
