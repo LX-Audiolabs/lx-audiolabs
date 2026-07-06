@@ -80,7 +80,7 @@ rayon = "1.11"
 reqwest = { version = "0.13", features = ["json", "query"] }
 selectors = "0.38"
 serde = { version = "1.0", features = ["derive"] }
-skia-safe = { version = "0.97", features = ["gl", "textlayout", "svg"] }
+skia-safe = { version = "0.97", features = ["gl", "textlayout"] }
 sys-locale = "0.3"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "time"] }
 unic-langid = { version = "0.9.6", features = ["macros"] }
