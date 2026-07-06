@@ -29,4 +29,7 @@ check.log
 /CLAUDE.md
 /.claude/
 
+# Editor — personal per machine
+/.vscode/
+
 node_modules/
