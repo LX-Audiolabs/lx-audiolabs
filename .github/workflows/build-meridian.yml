@@ -24,7 +24,7 @@ jobs:
 
       - name: Install Linux deps
         if: runner.os == 'Linux'
-        run: sudo apt-get update -y && sudo apt-get install -y pkg-config libx11-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev libwayland-dev libxkbcommon-dev libegl-dev libgl-dev
+        run: sudo apt-get update -y && sudo apt-get install -y pkg-config libx11-dev libx11-xcb-dev libxcb1-dev libxcursor-dev libxi-dev libxrandr-dev libwayland-dev libxkbcommon-dev libegl-dev libgl-dev
 
       - name: Install cargo-truce
         run: cargo install --git https://github.com/truce-audio/truce cargo-truce
