@@ -1,21 +1,21 @@
-# LX AudioLabs — Audio Plugins
+# LX AudioLabs — CLAP Audio Plugins
 
 Open-source audio effect plugins in [CLAP](https://cleveraudio.org/) format, built with [truce](https://github.com/truce-audio/truce) and Rust.
 
 ## Plugins
 
-| Plugin | Type | Status |
-|--------|------|--------|
-| **Equilibrium** | Spectral balance processor | Stable |
-| **Meridian** | Stereo field processor | Stable |
-| **Aether** | Reverb | Stable |
-| **Aurum** | Saturation / distortion | Pre-production |
-| **Lucent** | Visualizer | Pre-production |
-| **Lucent Relay** | Visualizer companion | Pre-production |
+| Plugin | Type | Role | Status |
+|--------|------|------|--------|
+| **Equilibrium** | 5-Band Spectral Balancer | Master Bus — precision band correction | Stable |
+| **Meridian** | Group Track Sculptor | Tracks & Buses — EQ, compressor, saturation | Stable |
+| **Aether** | Headphone Correction | Monitoring FX — Harman target curve + crossover | Stable |
+| **Aurum** | All-In-One Mastering | Mastering desk — SHAPE, COLOR, LIMIT | Pre-production |
+| **Lucent** | FFT Analyzer | Spectrum analysis with SHM relay | Pre-production |
+| **Lucent Relay** | SHM Relay | Companion for Lucent — shared memory IPC | Pre-production |
 
 ## Download
 
-Pre-built CLAP binaries: [lxndrbe.github.io](https://lxndrbe.github.io/plugins/)
+Pre-built CLAP binaries: [lx-audiolabs.github.io](https://lx-audiolabs.github.io/plugins/)
 
 ## Build from Source
 
@@ -40,7 +40,7 @@ Output: `target/bundles/<PluginName>.clap`
 
 ## License
 
-[Apache License 2.0](LICENSE) — Copyright 2024-2026 LX AudioLabs
+[GNU General Public License v3.0](LICENSE) — Copyright 2024–2026 LX AudioLabs
 
 ## Contributing
 
