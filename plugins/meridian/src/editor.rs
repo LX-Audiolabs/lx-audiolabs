@@ -446,7 +446,6 @@ struct Telemetry {
 struct TickAccum {
     presets: Vec<(String, PathBuf, MeridianProfile)>,
     vault_path: Option<String>,
-    preset_refresh_counter: u32,
     gr_peak_hold_ticks: u32,
     /// params_gen is only bumped on discrete user actions (preset load/save,
     /// RESET ALL, Auto Loud, vault-path save) so slider/knob Bindings rebuild
@@ -501,12 +500,6 @@ fn tick(shared: &SharedState, params: &MeridianParams, accum: &Arc<Mutex<TickAcc
         }
     }
 
-    acc.preset_refresh_counter = acc.preset_refresh_counter.wrapping_add(1);
-    let refresh_presets = acc.preset_refresh_counter.is_multiple_of(150);
-    if refresh_presets {
-        acc.presets = list_meridian_presets(acc.vault_path.as_deref());
-    }
-
     let snap_now = shared.snap_active.load(Ordering::Acquire);
     let vault_path = acc.vault_path.clone();
     let sr = shared.sample_rate.load(Ordering::Acquire);
@@ -521,8 +514,12 @@ fn tick(shared: &SharedState, params: &MeridianParams, accum: &Arc<Mutex<TickAcc
     // `Binding::new(cx, params_gen, ...)` so they rebuild and re-read fresh
     // values on ResetAll / SelectPreset / SavePreset / vault-path save /
     // Auto Loud. A periodic bump here made them rebuild during a drag and
-    // stutter.
-    if auto_loud_applied || refresh_presets {
+    // stutter - this used to also fire from a ~5s vault-rescan timer;
+    // removed rather than routed to a second signal, since the preset list
+    // already refreshes on every discrete list-touching action (Save,
+    // vault-path Save, RESET, Select) and a session-long stale list between
+    // those is an acceptable trade-off for never rebuilding knobs off a timer.
+    if auto_loud_applied {
         params_gen.update(|g| *g = g.wrapping_add(1));
     }
 
@@ -691,7 +688,6 @@ pub fn build(cx: &mut Context, lens: ParamLens<MeridianParams>, shared: Arc<Shar
     let accum = Arc::new(Mutex::new(TickAccum {
         presets,
         vault_path: config.vault_path,
-        preset_refresh_counter: 0,
         gr_peak_hold_ticks: 0,
         _reserved: 0,
     }));
@@ -1059,8 +1055,18 @@ fn build_main_panel(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamL
                             KnobView::new(cx, ((hpf.ln() - 2.0f32.ln()) / (2000.0f32.ln() - 2.0f32.ln())).clamp(0.0, 1.0), 0.0, 2.0, 2000.0, false, move |_cx, g| match g {
                                 Gesture::Start => lens_hpf.begin_edit(K::HpfFreq),
                                 Gesture::Change(v) => {
-                                    lens_hpf.set(K::HpfFreq, params_hpf.hpf_freq.info.range.normalize(v as f64));
-                                    hpf_display.set(v);
+                                    // `KnobView`'s internal drag math is linear
+                                    // (`min + norm*(max-min)`), but the `value_norm`
+                                    // fed into `KnobView::new` above is log-mapped
+                                    // (HPF needs a log frequency scale) - `v` here is
+                                    // garbage, not real Hz. Invert the same linear
+                                    // formula (same min/max as above) to recover the
+                                    // log-fraction, then apply the actual log formula
+                                    // to get the real Hz value.
+                                    let norm = ((v - 2.0) / (2000.0 - 2.0)).clamp(0.0, 1.0);
+                                    let real_hz = (2.0f32.ln() + norm * (2000.0f32.ln() - 2.0f32.ln())).exp();
+                                    lens_hpf.set(K::HpfFreq, params_hpf.hpf_freq.info.range.normalize(real_hz as f64));
+                                    hpf_display.set(real_hz);
                                 }
                                 Gesture::End => lens_hpf.end_edit(K::HpfFreq),
                             })
@@ -1082,8 +1088,15 @@ fn build_main_panel(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamL
                             KnobView::new(cx, ((lpf.ln() - 200.0f32.ln()) / (35000.0f32.ln() - 200.0f32.ln())).clamp(0.0, 1.0), 1.0, 200.0, 35000.0, false, move |_cx, g| match g {
                                 Gesture::Start => lens_lpf.begin_edit(K::LpfFreq),
                                 Gesture::Change(v) => {
-                                    lens_lpf.set(K::LpfFreq, params_lpf.lpf_freq.info.range.normalize(v as f64));
-                                    lpf_display.set(v);
+                                    // Same log/linear mismatch as the HPF knob above -
+                                    // invert KnobView's internal linear formula (same
+                                    // min/max as passed to `KnobView::new` above) to
+                                    // recover the log-fraction, then apply the log
+                                    // formula to get the real Hz value.
+                                    let norm = ((v - 200.0) / (35000.0 - 200.0)).clamp(0.0, 1.0);
+                                    let real_hz = (200.0f32.ln() + norm * (35000.0f32.ln() - 200.0f32.ln())).exp();
+                                    lens_lpf.set(K::LpfFreq, params_lpf.lpf_freq.info.range.normalize(real_hz as f64));
+                                    lpf_display.set(real_hz);
                                 }
                                 Gesture::End => lens_lpf.end_edit(K::LpfFreq),
                             })
@@ -1519,7 +1532,7 @@ fn build_footer(
                                     peak_hold: t.gr_peak_hold,
                                 })
                                 .width(Pixels(110.0))
-                                .height(Pixels(24.0));
+                                .height(Pixels(48.0));
                                 VStack::new(cx, move |cx| {
                                     Label::new(cx, format!("PK: {:.1}", t.gr_peak_hold)).font_size(9.0).color(rgb(1.0, 0.6, 0.2));
                                     Label::new(cx, format!("GR: {:.1}", t.gain_reduction)).font_size(8.0).color(rgb(1.0, 0.3, 0.3));

@@ -131,12 +131,11 @@ struct Telemetry {
 struct TickAccum {
     presets: Vec<(String, Option<PathBuf>, EqPreset)>,
     vault_path: Option<String>,
-    preset_refresh_counter: u32,
 }
 
 #[allow(clippy::too_many_arguments)]
 fn tick(shared: &SharedState, params: &EquilibriumParams, accum: &Arc<Mutex<TickAccum>>, telemetry: Signal<Telemetry>, params_gen: Signal<u32>) {
-    let mut acc = accum.lock().unwrap();
+    let acc = accum.lock().unwrap();
 
     let mut band_levels = [0.0f32; 5];
     let mut target_levels = [0.0f32; 5];
@@ -163,12 +162,6 @@ fn tick(shared: &SharedState, params: &EquilibriumParams, accum: &Arc<Mutex<Tick
     let peak_hold = shared.peak_hold.load(Ordering::Acquire);
     let balance = shared.balance.load(Ordering::Acquire);
 
-    acc.preset_refresh_counter = acc.preset_refresh_counter.wrapping_add(1);
-    let refresh_presets = acc.preset_refresh_counter.is_multiple_of(60);
-    if refresh_presets {
-        acc.presets = load_presets(acc.vault_path.as_deref());
-    }
-
     let measuring = shared.auto_loud_measuring.load(Ordering::Acquire);
     let mut auto_loud_applied = false;
     if !measuring {
@@ -189,18 +182,11 @@ fn tick(shared: &SharedState, params: &EquilibriumParams, accum: &Arc<Mutex<Tick
     // self-deadlocks the UI thread on this same non-reentrant Mutex.
     drop(acc);
 
-    if refresh_presets {
-        // Low-frequency (~2s), not the 33ms tick itself - the sidebar's
-        // preset list is keyed off this, not `telemetry`, so its Buttons
-        // never see the tick-driven rebuild-drops-clicks issue documented
-        // on `Ticker`/`build_main_panel`.
-        params_gen.update(|g| *g = g.wrapping_add(1));
-    }
     // set_value() is an atomic store only (no UI notify) - bump params_gen
     // so the Output Gain knob's Binding re-reads it (Auto Loud moves this
     // param from outside any knob drag). Placed after `drop(acc)` for the
-    // same self-deadlock reason as the preset-refresh bump above.
-    if auto_loud_applied && !refresh_presets {
+    // same self-deadlock reason noted on `params_gen` elsewhere in this file.
+    if auto_loud_applied {
         params_gen.update(|g| *g = g.wrapping_add(1));
     }
     // params_gen is intentionally NOT bumped on a timer. Slider/knob
@@ -393,7 +379,6 @@ pub fn build(cx: &mut Context, lens: ParamLens<EquilibriumParams>, shared: Arc<S
     let accum = Arc::new(Mutex::new(TickAccum {
         presets,
         vault_path: config.vault_path,
-        preset_refresh_counter: 0,
     }));
 
     Ticker::new(cx, shared.clone(), params.clone(), accum.clone(), telemetry, params_gen).width(Pixels(1.0)).height(Pixels(1.0));
