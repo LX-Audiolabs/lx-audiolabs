@@ -10,7 +10,7 @@ rust-version.workspace = true
 
 [features]
 default = []
-clipboard = ["copypasta"]
+clipboard = ["copypasta", "copypasta?/x11"]
 x11 = ["copypasta?/x11"]
 wayland = ["copypasta?/wayland"]
 markdown = ["comrak", "dep:open"]
