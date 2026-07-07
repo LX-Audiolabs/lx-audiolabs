@@ -316,6 +316,7 @@ pub fn build(cx: &mut Context, lens: ParamLens<AetherParams>, params: Arc<Aether
 
     let telemetry = Signal::new(Telemetry { curve_points: Vec::new(), in_peak: -90.0, in_peak_hold: -90.0, preset_names: preset_names_for_signal });
     let accum = Rc::new(RefCell::new(TickAccum { in_peak_hold: -90.0, in_peak_hold_ticks: 0, preset_refresh_counter: 0 }));
+    let ui_gen = Signal::new(0u32);
 
     Ticker::new(cx, params.clone(), shared.clone(), telemetry, accum, vault_path_signal)
         .width(Pixels(1.0)).height(Pixels(1.0));
@@ -323,6 +324,7 @@ pub fn build(cx: &mut Context, lens: ParamLens<AetherParams>, params: Arc<Aether
     let lens_for_body = lens.clone();
     let params_for_body = params.clone();
     let shared_for_body = shared.clone();
+    let bypass_sig = lens.value_signal(AetherParamsParamId::Bypass);
     VStack::new(cx, move |cx| {
         // ── HEADER ──────────────────────────────────────────────────────────
         HStack::new(cx, move |cx| {
@@ -482,7 +484,7 @@ pub fn build(cx: &mut Context, lens: ParamLens<AetherParams>, params: Arc<Aether
 
             // BYPASS — standard shared-ui toggle, amber when active
             {
-                let sig = lens.value_signal(AetherParamsParamId::Bypass);
+                let sig = bypass_sig;
                 let lens_bypass = lens.clone();
                 Binding::new(cx, sig, move |cx| {
                     let active = lens_bypass.get(AetherParamsParamId::Bypass) > 0.5;
@@ -500,9 +502,19 @@ pub fn build(cx: &mut Context, lens: ParamLens<AetherParams>, params: Arc<Aether
         .alignment(Alignment::Center).background_color(rgb(0.08,0.08,0.08)).horizontal_gap(Pixels(4.0));
 
         // Setup or main
+        let ui_gen_for_binding = ui_gen.clone();
         Binding::new(cx, show_setup, move |cx| {
             if show_setup.get() { build_setup(cx, vault_path_input, vault_path_signal, show_setup); }
-            else { build_main(cx, telemetry, lens_for_body.clone(), params_for_body.clone(), shared_for_body.clone()); }
+            else {
+                let telemetry_c = telemetry.clone();
+                let lens_c = lens_for_body.clone();
+                let params_c = params_for_body.clone();
+                let shared_c = shared_for_body.clone();
+                let ui_gen_c = ui_gen.clone();
+                Binding::new(cx, ui_gen_for_binding, move |cx| {
+                    build_main(cx, telemetry_c.clone(), lens_c.clone(), params_c.clone(), shared_c.clone(), ui_gen_c.clone(), bypass_sig);
+                });
+            }
         });
     })
     .width(Pixels(720.0)).height(Pixels(395.0)).background_color(rgb(0.09,0.09,0.09));
@@ -515,6 +527,7 @@ fn build_setup(cx: &mut Context, vault_input: Signal<String>, vault_path: Signal
             Label::new(cx, "Configure your Vault path for Aether:").font_size(12.0).color(Color::white());
             Textbox::new(cx, vault_input)
                 .placeholder("Enter Vault absolute path...")
+                .on_edit(move |_cx, text| vault_input.set(text))
                 .width(Stretch(1.0));
             HStack::new(cx, move |cx| {
                 small_button(cx, "SAVE", move |_cx| {
@@ -546,7 +559,7 @@ fn build_setup(cx: &mut Context, vault_input: Signal<String>, vault_path: Signal
     .background_color(rgb(0.08,0.08,0.08));
 }
 
-fn build_main(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamLens<AetherParams>, params: Arc<AetherParams>, _shared: Arc<SharedState>) {
+fn build_main(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamLens<AetherParams>, params: Arc<AetherParams>, _shared: Arc<SharedState>, ui_gen: Signal<u32>, bypass_sig: Signal<f32>) {
     VStack::new(cx, move |cx| {
         // EQ curve
         Binding::new(cx, telemetry, move |cx| {
@@ -559,7 +572,7 @@ fn build_main(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamLens<Ae
         HStack::new(cx, move |cx| {
             build_eq_section(cx, &lens, &params);
             separator(cx);
-            build_blend_reset(cx, &lens, &params);
+            build_blend_reset(cx, &lens, &params, ui_gen, bypass_sig);
             separator(cx);
             build_crossfeed(cx, &lens, &params);
             separator(cx);
@@ -616,7 +629,7 @@ fn build_band_column(cx: &mut Context, i: usize, lens: &ParamLens<AetherParams>,
     }).width(Auto).height(Auto).vertical_gap(Pixels(2.0)).alignment(Alignment::Center);
 }
 
-fn build_blend_reset(cx: &mut Context, lens: &ParamLens<AetherParams>, params: &Arc<AetherParams>) {
+fn build_blend_reset(cx: &mut Context, lens: &ParamLens<AetherParams>, params: &Arc<AetherParams>, ui_gen: Signal<u32>, bypass_sig: Signal<f32>) {
     let l = lens.clone(); let p = params.clone();
     VStack::new(cx, move |cx| {
         Label::new(cx, "HARMAN BLEND").font_size(9.0).color(col(0.7,0.7,0.7,1.0));
@@ -642,6 +655,9 @@ fn build_blend_reset(cx: &mut Context, lens: &ParamLens<AetherParams>, params: &
             lr.automate(AetherParamsParamId::CfAmount, 0.0);
             lr.automate(AetherParamsParamId::CfRealism, 0.0);
             lr.automate(AetherParamsParamId::Gain, 0.5);
+            lr.automate(AetherParamsParamId::Bypass, 0.0);
+            bypass_sig.set(0.0);
+            ui_gen.update(|g| *g = g.wrapping_add(1));
         })
         .width(Pixels(60.0));
     }).width(Pixels(104.0)).height(Auto).vertical_gap(Pixels(4.0)).alignment(Alignment::Center);

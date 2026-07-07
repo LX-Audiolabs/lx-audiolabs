@@ -61,6 +61,16 @@ fn slope_char(s: i32) -> &'static str {
     match s { 0 => "A", 1 => "B", _ => "C" }
 }
 
+/// Holds the per-param `Signal<f32>` handles for boolean/toggle parameters so
+/// that RESET can push the new value into them and the UI buttons repaint.
+struct BoolSignals {
+    mono: Signal<f32>,
+    delta: Signal<f32>,
+    bypass: Signal<f32>,
+    inflate_split: Signal<f32>,
+    inflate_clip: Signal<f32>,
+}
+
 /// Plain fn-pointer field accessors, not closures - `Copy`/`'static` with no
 /// borrow to escape, so they can cross into the `'static` `on_gesture`
 /// closures `KnobView`/`HSliderView`/`slope_selector` require. The
@@ -694,6 +704,17 @@ pub fn build(cx: &mut Context, lens: ParamLens<MeridianParams>, shared: Arc<Shar
 
     Ticker::new(cx, shared.clone(), params.clone(), accum.clone(), telemetry, params_gen).width(Pixels(1.0)).height(Pixels(1.0));
 
+    // Cache the bool param signals so RESET can push into them and force the
+    // toggle buttons to repaint. `value_signal()` returns the same handle that
+    // `styled_toggle`/`styled_toggle_small` will use below.
+    let bool_sigs = BoolSignals {
+        mono: lens.value_signal(K::MonoActive),
+        delta: lens.value_signal(K::DeltaActive),
+        bypass: lens.value_signal(K::BypassActive),
+        inflate_split: lens.value_signal(K::InflateBandSplit),
+        inflate_clip: lens.value_signal(K::InflateClip),
+    };
+
     // ── HEADER ──
     let lens_header = lens.clone();
     HStack::new(cx, move |cx| {
@@ -764,7 +785,7 @@ pub fn build(cx: &mut Context, lens: ParamLens<MeridianParams>, shared: Arc<Shar
     .width(Stretch(1.0))
     .height(Stretch(1.0));
 
-    build_footer(cx, telemetry, lens, params, shared, accum, params_gen);
+    build_footer(cx, telemetry, lens, params, shared, accum, params_gen, bool_sigs);
 }
 
 // ─── Sidebar (VAULT PRESETS) ─────────────────────────────────────────────────
@@ -1052,7 +1073,9 @@ fn build_main_panel(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamL
                         let lens_hpf = lens.clone();
                         let params_hpf = params.clone();
                         VStack::new(cx, move |cx| {
-                            KnobView::new(cx, ((hpf.ln() - 2.0f32.ln()) / (2000.0f32.ln() - 2.0f32.ln())).clamp(0.0, 1.0), 0.0, 2.0, 2000.0, false, move |_cx, g| match g {
+                            let hpf_default = params_hpf.hpf_freq.info.default_plain as f32;
+                            let hpf_default_norm = ((hpf_default.ln() - 2.0f32.ln()) / (2000.0f32.ln() - 2.0f32.ln())).clamp(0.0, 1.0);
+                            KnobView::new(cx, ((hpf.ln() - 2.0f32.ln()) / (2000.0f32.ln() - 2.0f32.ln())).clamp(0.0, 1.0), hpf_default_norm, 2.0, 2000.0, false, move |_cx, g| match g {
                                 Gesture::Start => lens_hpf.begin_edit(K::HpfFreq),
                                 Gesture::Change(v) => {
                                     // `KnobView`'s internal drag math is linear
@@ -1078,14 +1101,16 @@ fn build_main_panel(cx: &mut Context, telemetry: Signal<Telemetry>, lens: ParamL
                         .alignment(Alignment::Center)
                         .width(Pixels(40.0));
 
-                        slope_selector(cx, lens.clone(), params.clone(), |p| &p.cut_slope, K::CutSlope, 2);
+                        cut_slope_selector(cx, lens.clone(), params.clone(), K::CutSlope);
 
                         let lpf = lens.get_plain(K::LpfFreq);
                         let lpf_display = Signal::new(lpf);
                         let lens_lpf = lens.clone();
                         let params_lpf = params.clone();
                         VStack::new(cx, move |cx| {
-                            KnobView::new(cx, ((lpf.ln() - 200.0f32.ln()) / (35000.0f32.ln() - 200.0f32.ln())).clamp(0.0, 1.0), 1.0, 200.0, 35000.0, false, move |_cx, g| match g {
+                            let lpf_default = params_lpf.lpf_freq.info.default_plain as f32;
+                            let lpf_default_norm = ((lpf_default.ln() - 200.0f32.ln()) / (35000.0f32.ln() - 200.0f32.ln())).clamp(0.0, 1.0);
+                            KnobView::new(cx, ((lpf.ln() - 200.0f32.ln()) / (35000.0f32.ln() - 200.0f32.ln())).clamp(0.0, 1.0), lpf_default_norm, 200.0, 35000.0, false, move |_cx, g| match g {
                                 Gesture::Start => lens_lpf.begin_edit(K::LpfFreq),
                                 Gesture::Change(v) => {
                                     // Same log/linear mismatch as the HPF knob above -
@@ -1277,10 +1302,12 @@ fn linear_knob_group<'a>(cx: &'a mut Context, lens: &ParamLens<MeridianParams>, 
                 let lens = lens.clone();
                 let params = params.clone();
                 let value = lens.get_plain(id);
+                let default = field(&params).info.default_plain as f32;
                 let display = Signal::new(value);
                 let norm = ((value - min) / (max - min)).clamp(0.0, 1.0);
+                let default_norm = ((default - min) / (max - min)).clamp(0.0, 1.0);
                 VStack::new(cx, move |cx| {
-                    KnobView::new(cx, norm, 0.0, min, max, false, move |_cx, g| match g {
+                    KnobView::new(cx, norm, default_norm, min, max, false, move |_cx, g| match g {
                         Gesture::Start => lens.begin_edit(id),
                         Gesture::Change(v) => {
                             lens.set(id, field(&params).info.range.normalize(v as f64));
@@ -1312,10 +1339,12 @@ fn plain_knob(cx: &mut Context, lens: &ParamLens<MeridianParams>, params: &Arc<M
     let lens = lens.clone();
     let params = params.clone();
     let value = lens.get_plain(id);
+    let default = field(&params).info.default_plain as f32;
     let display = Signal::new(value);
     let norm = ((value - min) / (max - min)).clamp(0.0, 1.0);
+    let default_norm = ((default - min) / (max - min)).clamp(0.0, 1.0);
     VStack::new(cx, move |cx| {
-        KnobView::new(cx, norm, 0.0, min, max, false, move |_cx, g| match g {
+        KnobView::new(cx, norm, default_norm, min, max, false, move |_cx, g| match g {
             Gesture::Start => lens.begin_edit(id),
             Gesture::Change(v) => {
                 lens.set(id, field(&params).info.range.normalize(v as f64));
@@ -1464,6 +1493,7 @@ fn build_footer(
     shared: Arc<SharedState>,
     accum: Arc<Mutex<TickAccum>>,
     params_gen: Signal<u32>,
+    bool_sigs: BoolSignals,
 ) {
     HStack::new(cx, move |cx| {
         // Compressor: knobs in a row, GR envelope below
@@ -1485,21 +1515,22 @@ fn build_footer(
                                     let lens = lens.clone();
                                     let params = params.clone();
                                     move |cx| {
-                                        for (label, id, field, min, max) in [
-                                            ("THRESH", K::CompThreshold, (|p: &MeridianParams| &p.comp_threshold) as FloatField, -30.0f32, 0.0f32),
-                                            ("MIX", K::CompMix, (|p: &MeridianParams| &p.comp_mix) as FloatField, 0.0, 100.0),
-                                            ("ATTACK", K::CompAttack, (|p: &MeridianParams| &p.comp_attack) as FloatField, 5.0, 50.0),
-                                            ("RELEASE", K::CompRelease, (|p: &MeridianParams| &p.comp_release) as FloatField, 50.0, 300.0),
-                                            ("RATIO", K::CompCharacter, (|p: &MeridianParams| &p.comp_character) as FloatField, 1.5, 4.0),
-                                            ("MAKEUP", K::CompMakeup, (|p: &MeridianParams| &p.comp_makeup) as FloatField, 0.0, 12.0),
+                                        for (label, id, field, min, max, default) in [
+                                            ("THRESH", K::CompThreshold, (|p: &MeridianParams| &p.comp_threshold) as FloatField, -30.0f32, 0.0f32, 0.0f32),
+                                            ("MIX", K::CompMix, (|p: &MeridianParams| &p.comp_mix) as FloatField, 0.0, 100.0, 0.0),
+                                            ("ATTACK", K::CompAttack, (|p: &MeridianParams| &p.comp_attack) as FloatField, 5.0, 50.0, 15.0),
+                                            ("RELEASE", K::CompRelease, (|p: &MeridianParams| &p.comp_release) as FloatField, 50.0, 300.0, 120.0),
+                                            ("RATIO", K::CompCharacter, (|p: &MeridianParams| &p.comp_character) as FloatField, 1.5, 4.0, 2.0),
+                                            ("MAKEUP", K::CompMakeup, (|p: &MeridianParams| &p.comp_makeup) as FloatField, 0.0, 12.0, 0.0),
                                         ] {
                                             let lens = lens.clone();
                                             let params = params.clone();
                                             let value = lens.get_plain(id);
                                             let display = Signal::new(value);
                                             let norm = ((value - min) / (max - min)).clamp(0.0, 1.0);
+                                            let default_norm = ((default - min) / (max - min)).clamp(0.0, 1.0);
                                             VStack::new(cx, move |cx| {
-                                                KnobView::new(cx, norm, 0.0, min, max, false, move |_cx, g| match g {
+                                                KnobView::new(cx, norm, default_norm, min, max, false, move |_cx, g| match g {
                                                     Gesture::Start => lens.begin_edit(id),
                                                     Gesture::Change(v) => {
                                                         lens.set(id, field(&params).info.range.normalize(v as f64));
@@ -1650,7 +1681,7 @@ fn build_footer(
 
         vsep(cx);
 
-        shared_ui::danger_button_big(cx, "RESET", move |_cx| reset_all(&lens, &params, &shared, &accum, params_gen))
+        shared_ui::danger_button_big(cx, "RESET", move |_cx| reset_all(&lens, &params, &shared, &accum, params_gen, &bool_sigs))
             .width(Pixels(60.0));
     })
     .width(Stretch(1.0))
@@ -1659,6 +1690,30 @@ fn build_footer(
     .alignment(Alignment::Center)
     .horizontal_gap(Pixels(15.0))
     .background_color(rgb(0.08, 0.08, 0.08));
+}
+
+/// Vertical 12 dB / 24 dB selector for the HPF/LPF cut slope.
+fn cut_slope_selector(cx: &mut Context, lens: ParamLens<MeridianParams>, params: Arc<MeridianParams>, id: K) {
+    let sig = lens.value_signal(id);
+    let step_norms: Vec<f64> = (0..2).map(|s| params.cut_slope.info.range.normalize(s as f64)).collect();
+    let params_cur = params.clone();
+    Binding::new(cx, sig, move |cx| {
+        let current = params_cur.cut_slope.value() as i32;
+        VStack::new(cx, |cx| {
+            for (s, label) in [(0, "12 dB"), (1, "24 dB")] {
+                let is_sel = current == s;
+                let lens = lens.clone();
+                let norm = step_norms[s as usize];
+                shared_ui::toggle_button_small(cx, label, is_sel, move |_cx| {
+                    lens.automate(id, norm);
+                    sig.set(norm as f32);
+                });
+            }
+        })
+        .vertical_gap(Pixels(4.0))
+        .height(Auto)
+        .width(Auto);
+    });
 }
 
 fn styled_toggle_small(cx: &mut Context, lens: ParamLens<MeridianParams>, id: K, label: &'static str) {
@@ -1676,9 +1731,23 @@ fn styled_toggle_small(cx: &mut Context, lens: ParamLens<MeridianParams>, id: K,
     });
 }
 
-fn reset_all(lens: &ParamLens<MeridianParams>, params: &MeridianParams, shared: &SharedState, accum: &Arc<Mutex<TickAccum>>, params_gen: Signal<u32>) {
+fn reset_all(lens: &ParamLens<MeridianParams>, params: &MeridianParams, shared: &SharedState, accum: &Arc<Mutex<TickAccum>>, params_gen: Signal<u32>, bool_sigs: &BoolSignals) {
     let default = MeridianProfile::default();
     apply_profile(lens, params, &default);
+
+    // Reset bool/toggle parameters explicitly (they are not part of the profile).
+    let bool_resets = [
+        (K::MonoActive, bool_sigs.mono),
+        (K::DeltaActive, bool_sigs.delta),
+        (K::BypassActive, bool_sigs.bypass),
+        (K::InflateBandSplit, bool_sigs.inflate_split),
+        (K::InflateClip, bool_sigs.inflate_clip),
+    ];
+    for (id, sig) in bool_resets {
+        lens.automate(id, 0.0);
+        sig.set(0.0);
+    }
+
     shared.reset_analysis.store(true, Ordering::Release);
     let mut acc = accum.lock().unwrap();
     acc.gr_peak_hold_ticks = 0;

@@ -50,6 +50,11 @@ impl View for EqSpectrumView {
         let listen_avg = listen_sum / 5.0;
         let band_avg = band_sum / 5.0;
 
+        // Target profiles are user-defined reference shapes; they should not be
+        // affected by the pink-noise display tilt that is applied to the live signal.
+        let target_sum: f32 = (0..5).map(|i| self.target_levels[i].max(-30.0)).sum();
+        let target_avg = target_sum / 5.0;
+
         let min_db = -30.0f32;
         let max_db = 12.0f32;
         let db_range = max_db - min_db;
@@ -87,9 +92,7 @@ impl View for EqSpectrumView {
             }
 
             if self.listen_samples <= 100.0 {
-                let target_db = self.target_levels[b].max(-30.0) + TILT[b];
-                let target_sum: f32 = (0..5).map(|i| self.target_levels[i].max(-30.0) + TILT[i]).sum();
-                let target_avg = target_sum / 5.0;
+                let target_db = self.target_levels[b].max(-30.0);
                 let norm_target_db = target_db - target_avg;
                 let tolerance = self.target_tolerances[b];
 

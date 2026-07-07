@@ -325,6 +325,17 @@ fn styled_toggle_dyn(cx: &mut Context, lens: ParamLens<EquilibriumParams>, id: K
     });
 }
 
+/// Holds the per-param `Signal<f32>` handles for boolean/toggle parameters so
+/// that RESET can push the new value into them and the UI buttons repaint.
+struct BoolSignals {
+    mono: Signal<f32>,
+    delta: Signal<f32>,
+    bypass: Signal<f32>,
+    pre_master: Signal<f32>,
+    listen: Signal<f32>,
+    solos: [Signal<f32>; 5],
+}
+
 // ─── UI ──────────────────────────────────────────────────────────────────────
 
 pub fn build(cx: &mut Context, lens: ParamLens<EquilibriumParams>, shared: Arc<SharedState>, params: Arc<EquilibriumParams>) {
@@ -375,6 +386,24 @@ pub fn build(cx: &mut Context, lens: ParamLens<EquilibriumParams>, shared: Arc<S
     // rebuild and re-read the freshly-written param/preset values. Never
     // bumped from `tick()` at 33ms - see module doc.
     let params_gen = Signal::new(0u32);
+
+    // Cache the bool param signals so RESET can push into them and force the
+    // toggle buttons to repaint. `value_signal()` returns the same handle that
+    // the toggle helpers below will use.
+    let bool_sigs = BoolSignals {
+        mono: lens.value_signal(K::MonoActive),
+        delta: lens.value_signal(K::DeltaActive),
+        bypass: lens.value_signal(K::BypassActive),
+        pre_master: lens.value_signal(K::PreMasterActive),
+        listen: lens.value_signal(K::ListenActive),
+        solos: [
+            lens.value_signal(K::SoloLow),
+            lens.value_signal(K::SoloBass),
+            lens.value_signal(K::SoloMid),
+            lens.value_signal(K::SoloHighMid),
+            lens.value_signal(K::SoloHigh),
+        ],
+    };
 
     let accum = Arc::new(Mutex::new(TickAccum {
         presets,
@@ -450,7 +479,7 @@ pub fn build(cx: &mut Context, lens: ParamLens<EquilibriumParams>, shared: Arc<S
     .width(Stretch(1.0))
     .height(Stretch(1.0));
 
-    build_footer(cx, telemetry, lens, shared, accum, selected_preset, params_gen);
+    build_footer(cx, telemetry, lens, shared, accum, selected_preset, params_gen, bool_sigs);
 }
 
 // ─── Sidebar (TARGET PROFILES) ───────────────────────────────────────────────
@@ -974,6 +1003,7 @@ fn build_footer(
     accum: Arc<Mutex<TickAccum>>,
     selected_preset: Signal<Option<usize>>,
     params_gen: Signal<u32>,
+    bool_sigs: BoolSignals,
 ) {
     let lens_analyze = lens.clone();
     let shared_analyze = shared.clone();
@@ -984,7 +1014,7 @@ fn build_footer(
             HStack::new(cx, move |cx| {
                 // LISTEN: big toggle, amber text always (even when inactive)
                 {
-                    let sig = lens_analyze.value_signal(K::ListenActive);
+                    let sig = bool_sigs.listen;
                     let lens_listen = lens_analyze.clone();
                     Binding::new(cx, sig, move |cx| {
                         let active = lens_listen.get(K::ListenActive) > 0.5;
@@ -1074,7 +1104,7 @@ fn build_footer(
         .width(Auto)
         .padding(Pixels(5.0));
 
-        shared_ui::danger_button_big(cx, "RESET", move |_cx| reset_all(&lens, &shared, &accum, selected_preset, params_gen));
+        shared_ui::danger_button_big(cx, "RESET", move |_cx| reset_all(&lens, &shared, &accum, selected_preset, params_gen, &bool_sigs));
     })
     .width(Stretch(1.0))
     .height(Pixels(110.0))
@@ -1147,7 +1177,7 @@ fn do_save_preset(accum: &Arc<Mutex<TickAccum>>, telemetry: &Signal<Telemetry>, 
     }
 }
 
-fn reset_all(lens: &ParamLens<EquilibriumParams>, shared: &SharedState, accum: &Arc<Mutex<TickAccum>>, selected_preset: Signal<Option<usize>>, params_gen: Signal<u32>) {
+fn reset_all(lens: &ParamLens<EquilibriumParams>, shared: &SharedState, accum: &Arc<Mutex<TickAccum>>, selected_preset: Signal<Option<usize>>, params_gen: Signal<u32>, bool_sigs: &BoolSignals) {
     for (id, val) in [
         (K::LowGain, 0.0f64),
         (K::BassGain, 0.0),
@@ -1171,10 +1201,24 @@ fn reset_all(lens: &ParamLens<EquilibriumParams>, shared: &SharedState, accum: &
         let norm = param_norm(id, val);
         lens.automate(id, norm);
     }
-    for id in [K::SoloLow, K::SoloBass, K::SoloMid, K::SoloHighMid, K::SoloHigh, K::PreMasterActive] {
-        if lens.get(id) > 0.5 {
-            lens.automate(id, 0.0);
-        }
+
+    // Reset all bool/toggle parameters to false and push into their Signals so
+    // the UI buttons repaint.
+    let bool_resets = [
+        (K::MonoActive, bool_sigs.mono),
+        (K::DeltaActive, bool_sigs.delta),
+        (K::BypassActive, bool_sigs.bypass),
+        (K::PreMasterActive, bool_sigs.pre_master),
+        (K::ListenActive, bool_sigs.listen),
+        (K::SoloLow, bool_sigs.solos[0]),
+        (K::SoloBass, bool_sigs.solos[1]),
+        (K::SoloMid, bool_sigs.solos[2]),
+        (K::SoloHighMid, bool_sigs.solos[3]),
+        (K::SoloHigh, bool_sigs.solos[4]),
+    ];
+    for (id, sig) in bool_resets {
+        lens.automate(id, 0.0);
+        sig.set(0.0);
     }
 
     let acc = accum.lock().unwrap();

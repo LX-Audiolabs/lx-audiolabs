@@ -44,14 +44,16 @@ impl View for EqCurveView {
             h - norm * h
         };
 
-        for db in [-12, -9, -6, -3, 0, 3, 6, 9, 12] {
+        // Only label a subset of grid lines so the bottom dB text does not overlap
+        // the Hz labels and parameter section directly below the curve.
+        for db in [6, 3, 0, -3, -6, -9] {
             let y = db_to_y(db as f32);
             let alpha = if db == 0 { 0.25 } else { 0.10 };
             let grid = stroke_paint(col(1.0, 1.0, 1.0, alpha), 0.6);
             canvas.draw_line((0.0, y), (w, y), &grid);
 
             // Keep the top label inside the canvas; for all others baseline sits just above the grid line.
-            let label_y = if db == 12 { 8.0 } else { y - 2.0 };
+            let label_y = if db == 6 { 8.0 } else { y - 2.0 };
             fill_text(canvas, &format!("{db:+}"), 2.0, label_y, 9.0, col(1.0, 1.0, 1.0, 0.35));
         }
 
