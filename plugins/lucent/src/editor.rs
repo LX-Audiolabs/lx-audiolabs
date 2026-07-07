@@ -516,7 +516,7 @@ pub fn build(cx: &mut Context, lens: ParamLens<LucentParams>, shared: Arc<Shared
                 })
                 .width(Stretch(1.0))
                 .height(Pixels(34.0))
-                .background_color(col(0.18, 0.18, 0.18, 1.0));
+                .class("lx-btn");
         })
         .width(Pixels(180.0))
         .height(Stretch(1.0))
@@ -611,10 +611,10 @@ fn build_setup_form(cx: &mut Context, vault_path_input: Signal<String>, setup_vi
                     let _ = shared_analysis::save_config("Lucent", &cfg);
                     setup_visible.set(false);
                 })
-                .background_color(col(0.15, 0.15, 0.15, 1.0));
+                .class("lx-btn");
             Button::new(cx, |cx| Label::new(cx, "CANCEL"))
                 .on_press(move |_cx| setup_visible.set(false))
-                .background_color(col(0.15, 0.15, 0.15, 1.0));
+                .class("lx-btn");
         })
         .horizontal_gap(Pixels(10.0))
         .height(Auto);

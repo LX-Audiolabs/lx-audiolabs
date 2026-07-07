@@ -75,7 +75,7 @@ fn load_presets(vault_path: Option<&str>) -> Vec<(String, Option<PathBuf>, EqPre
         "Pink Noise".to_string(),
         None,
         EqPreset {
-            bands: [3.0, 0.0, -3.0, -6.0, -9.0],
+            bands: [1.5, 0.0, -1.5, -3.0, -4.5],
             tolerances: shared_analysis::DEFAULT_TOLERANCES,
             pans: [0.0; 5],
             widths: [100.0; 5],
@@ -339,6 +339,7 @@ struct BoolSignals {
 // ─── UI ──────────────────────────────────────────────────────────────────────
 
 pub fn build(cx: &mut Context, lens: ParamLens<EquilibriumParams>, shared: Arc<SharedState>, params: Arc<EquilibriumParams>) {
+    shared_ui::load_theme(cx);
     let config = shared_analysis::load_config("Equilibrium");
     let presets = load_presets(config.vault_path.as_deref());
     let selected_idx = Some(0usize);
@@ -555,7 +556,7 @@ fn build_sidebar(
                 })
                 .width(Stretch(1.0))
                 .height(Pixels(34.0))
-                .background_color(col(0.18, 0.18, 0.18, 1.0));
+                .class("lx-btn");
         })
         .width(Stretch(1.0))
         .height(Auto)
@@ -565,7 +566,7 @@ fn build_sidebar(
             .on_press(move |_cx| show_setup.set(!show_setup.get()))
             .width(Stretch(1.0))
             .height(Pixels(34.0))
-            .background_color(col(0.18, 0.18, 0.18, 1.0));
+            .class("lx-btn");
 
         let accum_list = accum.clone();
         let lens_list = lens.clone();
@@ -689,8 +690,8 @@ fn build_setup_form(cx: &mut Context, vault_path_input: Signal<String>, show_set
                         show_setup.set(false);
                     }
                 })
-                .background_color(col(0.15, 0.15, 0.15, 1.0));
-            Button::new(cx, |cx| Label::new(cx, "CANCEL")).on_press(move |_cx| show_setup.set(false)).background_color(col(0.15, 0.15, 0.15, 1.0));
+                .class("lx-btn");
+            Button::new(cx, |cx| Label::new(cx, "CANCEL")).on_press(move |_cx| show_setup.set(false)).class("lx-btn");
         })
         .horizontal_gap(Pixels(10.0))
         .height(Auto);

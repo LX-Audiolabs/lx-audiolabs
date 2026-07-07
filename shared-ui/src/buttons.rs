@@ -23,6 +23,57 @@ pub const IDLE_BG: Color = Color::rgb(38, 38, 38);
 pub const DANGER_BG: Color = Color::rgb(51, 20, 20);
 pub const DANGER_TEXT: Color = Color::rgb(230, 128, 128);
 
+/// CSS theme for the shared button builders.
+///
+/// Inline `background_color`/`color` modifiers override CSS pseudo-states in
+/// Vizia, so these builders rely on classes for idle/hover/active states.
+/// Load once per `Context` with [`load_theme`].
+const BUTTON_CSS: &str = r#"
+.lx-btn {
+    background-color: #262626;
+    color: #ffffff;
+    transition: background-color 100ms;
+}
+.lx-btn:hover {
+    background-color: #404040;
+}
+.lx-btn:active {
+    background-color: #555555;
+}
+.lx-btn.active {
+    background-color: #ff731a;
+    color: #ffffff;
+}
+.lx-btn.active:hover {
+    background-color: #ff8c3f;
+}
+.lx-btn.active:active {
+    background-color: #ffa05a;
+}
+.lx-btn.danger {
+    background-color: #331414;
+    color: #e68080;
+}
+.lx-btn.danger:hover {
+    background-color: #4a1c1c;
+}
+.lx-btn.danger:active {
+    background-color: #5c2020;
+}
+.lx-btn.amber-text {
+    color: #ff731a;
+}
+.lx-btn.active.amber-text {
+    color: #ffffff;
+}
+"#;
+
+/// Add the shared button stylesheet to the current `Context`.
+/// Call once at the top of each plugin editor's `build()` function.
+pub fn load_theme(cx: &mut Context) {
+    let _ = cx.add_stylesheet(BUTTON_CSS);
+}
+
 /// Amber-when-active, dark-grey-when-inactive toggle — Bypass, Mono, Delta,
 /// Solo, Listen, Pre-Master, EQ band-type, mode-cycle buttons, etc.
 pub fn toggle_button<'a>(
@@ -34,7 +85,8 @@ pub fn toggle_button<'a>(
     Button::new(cx, move |cx| Label::new(cx, label).font_size(11.0))
         .on_press(on_press)
         .height(Pixels(BUTTON_HEIGHT))
-        .background_color(if active { AMBER } else { IDLE_BG })
+        .class("lx-btn")
+        .toggle_class("active", active)
 }
 
 /// Same colors, smaller footprint — slope selectors (A/B/C), SPLIT/CLIP.
@@ -47,7 +99,8 @@ pub fn toggle_button_small<'a>(
     Button::new(cx, move |cx| Label::new(cx, label).font_size(9.0))
         .on_press(on_press)
         .height(Pixels(BUTTON_HEIGHT_SMALL))
-        .background_color(if active { AMBER } else { IDLE_BG })
+        .class("lx-btn")
+        .toggle_class("active", active)
 }
 
 /// Dark-red — RESET is the one button that's deliberately not amber-when-active.
@@ -56,10 +109,11 @@ pub fn danger_button<'a>(
     label: &'static str,
     on_press: impl Fn(&mut EventContext) + 'static + Send + Sync,
 ) -> Handle<'a, impl View> {
-    Button::new(cx, move |cx| Label::new(cx, label).font_size(11.0).color(DANGER_TEXT))
+    Button::new(cx, move |cx| Label::new(cx, label).font_size(11.0))
         .on_press(on_press)
         .height(Pixels(BUTTON_HEIGHT))
-        .background_color(DANGER_BG)
+        .class("lx-btn")
+        .class("danger")
 }
 
 /// Big amber-when-active toggle — LISTEN, SOLO (footer / main panel).
@@ -72,21 +126,25 @@ pub fn toggle_button_big<'a>(
     Button::new(cx, move |cx| Label::new(cx, label).font_size(12.0))
         .on_press(on_press)
         .height(Pixels(BUTTON_HEIGHT_BIG))
-        .background_color(if active { AMBER } else { IDLE_BG })
+        .class("lx-btn")
+        .toggle_class("active", active)
 }
 
-/// Big amber-text-always toggle — LISTEN in footer: text stays amber even
-/// when inactive so it's visually distinct from the other analysis buttons.
+/// Big amber-text-always toggle — LISTEN in footer: text stays amber when
+/// inactive so it's visually distinct, but switches to white when active so
+/// it doesn't disappear against the amber background.
 pub fn toggle_button_big_amber_text<'a>(
     cx: &'a mut Context,
     label: &'static str,
     active: bool,
     on_press: impl Fn(&mut EventContext) + 'static + Send + Sync,
 ) -> Handle<'a, impl View> {
-    Button::new(cx, move |cx| Label::new(cx, label).font_size(12.0).color(AMBER))
+    Button::new(cx, move |cx| Label::new(cx, label).font_size(12.0))
         .on_press(on_press)
         .height(Pixels(BUTTON_HEIGHT_BIG))
-        .background_color(if active { AMBER } else { IDLE_BG })
+        .class("lx-btn")
+        .class("amber-text")
+        .toggle_class("active", active)
 }
 
 /// Big plain push-button — APPLY ANALYSIS, RESET ANALYSIS, SAVE, VAULT SETUP.
@@ -98,7 +156,7 @@ pub fn push_button_big<'a>(
     Button::new(cx, |cx| Label::new(cx, label).font_size(12.0))
         .on_press(on_press)
         .height(Pixels(BUTTON_HEIGHT_BIG))
-        .background_color(IDLE_BG)
+        .class("lx-btn")
 }
 
 /// Big dark-red danger button — RESET in footer.
@@ -107,8 +165,9 @@ pub fn danger_button_big<'a>(
     label: &'static str,
     on_press: impl Fn(&mut EventContext) + 'static + Send + Sync,
 ) -> Handle<'a, impl View> {
-    Button::new(cx, move |cx| Label::new(cx, label).font_size(12.0).color(DANGER_TEXT))
+    Button::new(cx, move |cx| Label::new(cx, label).font_size(12.0))
         .on_press(on_press)
         .height(Pixels(BUTTON_HEIGHT_BIG))
-        .background_color(DANGER_BG)
+        .class("lx-btn")
+        .class("danger")
 }

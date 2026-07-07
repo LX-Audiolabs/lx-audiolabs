@@ -11,7 +11,7 @@ pub use canvas::{
 };
 pub use buttons::{
     toggle_button, toggle_button_small, toggle_button_big, toggle_button_big_amber_text,
-    push_button_big, danger_button, danger_button_big,
+    push_button_big, danger_button, danger_button_big, load_theme,
     AMBER, IDLE_BG, DANGER_BG, DANGER_TEXT,
     BUTTON_HEIGHT, BUTTON_HEIGHT_SMALL, BUTTON_HEIGHT_BIG,
     KNOB_SIZE, SLIDER_HEIGHT, STEREO_METER_HEIGHT,

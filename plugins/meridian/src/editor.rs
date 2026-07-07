@@ -668,6 +668,7 @@ fn slope_selector(cx: &mut Context, lens: ParamLens<MeridianParams>, params: Arc
 // ─── UI ──────────────────────────────────────────────────────────────────────
 
 pub fn build(cx: &mut Context, lens: ParamLens<MeridianParams>, shared: Arc<SharedState>, params: Arc<MeridianParams>) {
+    shared_ui::load_theme(cx);
     let config = shared_analysis::load_config("Meridian");
     let presets = list_meridian_presets(config.vault_path.as_deref());
     let selected_preset_idx = None::<usize>;
@@ -859,7 +860,7 @@ fn build_sidebar(
                 })
                 .width(Stretch(1.0))
                 .height(Pixels(34.0))
-                .background_color(col(0.18, 0.18, 0.18, 1.0));
+                .class("lx-btn");
         })
         .width(Stretch(1.0))
         .height(Auto)
@@ -869,7 +870,7 @@ fn build_sidebar(
             .on_press(move |_cx| show_setup.set(!show_setup.get()))
             .width(Stretch(1.0))
             .height(Pixels(34.0))
-            .background_color(col(0.18, 0.18, 0.18, 1.0));
+            .class("lx-btn");
 
         let accum_list = accum.clone();
         let lens_list = lens.clone();
@@ -1027,8 +1028,8 @@ fn build_setup_form(cx: &mut Context, vault_path_input: Signal<String>, show_set
                         show_setup.set(false);
                     }
                 })
-                .background_color(col(0.15, 0.15, 0.15, 1.0));
-            Button::new(cx, |cx| Label::new(cx, "CANCEL")).on_press(move |_cx| show_setup.set(false)).background_color(col(0.15, 0.15, 0.15, 1.0));
+                .class("lx-btn");
+            Button::new(cx, |cx| Label::new(cx, "CANCEL")).on_press(move |_cx| show_setup.set(false)).class("lx-btn");
         })
         .horizontal_gap(Pixels(10.0))
         .height(Auto);

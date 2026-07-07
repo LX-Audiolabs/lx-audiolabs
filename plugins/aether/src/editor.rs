@@ -289,11 +289,12 @@ impl View for Ticker {
 /// Small push button used by the SETUP form only (CANCEL).
 fn small_button(cx: &mut Context, label: &'static str, on_press: impl Fn(&mut EventContext) + 'static + Send + Sync) {
     Button::new(cx, move |cx| Label::new(cx, label).font_size(11.0))
-        .on_press(on_press).width(Pixels(60.0)).height(Pixels(26.0));
+        .on_press(on_press).width(Pixels(60.0)).height(Pixels(26.0)).class("lx-btn");
 }
 
 #[allow(clippy::too_many_arguments)]
 pub fn build(cx: &mut Context, lens: ParamLens<AetherParams>, params: Arc<AetherParams>, shared: Arc<SharedState>) {
+    shared_ui::load_theme(cx);
     let config = shared_analysis::load_config("Aether");
     let mut presets = default_presets();
     let vault_path_init = config.vault_path.clone();
@@ -602,9 +603,8 @@ fn build_band_column(cx: &mut Context, i: usize, lens: &ParamLens<AetherParams>,
         })
             .on_press(move |_cx| { let n = (type_signal.get() + 1) % 4; set_eq_type(&l1, i, n); type_signal.set(n); })
             .width(Pixels(56.0)).height(Pixels(shared_ui::BUTTON_HEIGHT))
-            .background_color(Memo::new(move |_| {
-                if type_signal.get() != 0 { shared_ui::AMBER } else { shared_ui::IDLE_BG }
-            }));
+            .class("lx-btn")
+            .toggle_class("active", Memo::new(move |_| type_signal.get() != 0));
 
         Label::new(cx, "FREQ").font_size(8.0).color(col(0.6,0.6,0.6,1.0));
         let l2 = l.clone();
@@ -713,9 +713,8 @@ fn build_crossfeed(cx: &mut Context, lens: &ParamLens<AetherParams>, params: &Ar
         })
             .on_press(move |_cx| { let n = (realism_signal.get() + 1) % 3; l3.automate(AetherParamsParamId::CfRealism, n as f64 / 2.0); realism_signal.set(n); })
             .width(Pixels(110.0)).height(Pixels(shared_ui::BUTTON_HEIGHT))
-            .background_color(Memo::new(move |_| {
-                if realism_signal.get() != 0 { shared_ui::AMBER } else { shared_ui::IDLE_BG }
-            }));
+            .class("lx-btn")
+            .toggle_class("active", Memo::new(move |_| realism_signal.get() != 0));
     }).width(Pixels(131.0)).height(Auto).vertical_gap(Pixels(4.0)).alignment(Alignment::Center);
 }
 
