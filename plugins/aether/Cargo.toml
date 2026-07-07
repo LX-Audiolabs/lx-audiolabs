@@ -22,7 +22,7 @@ truce-params = { workspace = true }
 truce-clap   = { workspace = true, optional = true }
 truce-vst3   = { workspace = true, optional = true }
 truce-loader = { workspace = true }
-truce-vizia  = { git = "https://github.com/truce-audio/truce", tag = "v3.0.0" }
+truce-vizia  = { git = "https://github.com/truce-audio/truce", tag = "v3.1.2" }
 vizia        = { git = "https://github.com/vizia/vizia.git", rev = "24c47433098fcc8e29668a22fcb71771807d86d6", default-features = false, features = ["baseview", "clipboard"] }
 clap-sys     = { workspace = true, optional = true }
 

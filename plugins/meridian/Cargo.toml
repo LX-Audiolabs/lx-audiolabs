@@ -26,7 +26,7 @@ truce-params = { workspace = true }
 truce-clap   = { workspace = true, optional = true }
 truce-vst3   = { workspace = true, optional = true }
 truce-loader = { workspace = true }
-truce-vizia  = { git = "https://github.com/truce-audio/truce", tag = "v3.0.0" }
+truce-vizia  = { git = "https://github.com/truce-audio/truce", tag = "v3.1.2" }
 # Same git rev truce-vizia itself pins - must be identical so `Context`/
 # `Canvas`/etc are the same type, not just the same version number from a
 # different source (crates.io vs this git rev would be distinct types).
