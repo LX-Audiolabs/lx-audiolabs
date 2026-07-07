@@ -50,6 +50,15 @@ vst3_subcategory = "Equalizer"
 description = "Pre-master spectral balancer with 5-band crossover and per-band stereo control"
 
 [[plugin]]
+name = "Equilibrium Egui Proto"
+bundle_id = "equilibrium-egui-proto"
+crate = "equilibrium-egui"
+category = "effect"
+fourcc = "EqEg"
+vst3_subcategory = "Equalizer"
+description = "PROTOTYPE - egui port of Equilibrium, evaluating truce-egui vs shared-ui/vizia compatibility. Not shipped."
+
+[[plugin]]
 name = "Meridian"
 bundle_id = "meridian"
 crate = "meridian"

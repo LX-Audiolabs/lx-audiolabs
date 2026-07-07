@@ -10,6 +10,7 @@ members = [
     "plugins/aether",
     "plugins/aurum",
     "plugins/equilibrium",
+    "plugins/equilibrium-egui",
     "plugins/meridian",
 ]
 resolver = "3"
@@ -83,6 +84,22 @@ truce-core = { git = "https://github.com/truce-audio/truce", tag = "v3.1.2" }
 # process that already set its own DPI awareness at its own startup.
 # Root-caused via source review (features/2026-07-04-truce-2.0-upgrade-plan.md
 # HANDOFF section has the full trail); not yet DAW-verified.
+# truce-local: flat single-crate vendors (crates.io-normalized style,
+# like truce-clap-local above - no `workspace = true` inheritance, so no
+# need to drag in the rest of the truce-audio/truce monorepo) of
+# truce-gui + truce-gpu at v3.1.2. Patches `editor_wgpu_backends()` in
+# truce-gui/src/platform.rs: Windows was hard-pinned to DX12-only with no
+# fallback (same failure class as the old iced/tiny-skia GL breakage -
+# see ui/gui-framework-evaluation.md in the vault) - now falls back to GL
+# when no DX12 adapter exists. Also adds the `gles` wgpu feature to
+# truce-gui/truce-gpu's Windows target deps (the fallback backend has to
+# be compiled in, not just requested at runtime). Submitted upstream as
+# truce-audio/truce PR from branch fix/editor-wgpu-windows-gl-fallback
+# (based on upstream dev/v3.1.3) - drop this patch once merged/released.
+[patch."https://github.com/truce-audio/truce"]
+truce-gui = { path = "truce-local/truce-gui" }
+truce-gpu = { path = "truce-local/truce-gpu" }
+
 [patch."https://github.com/vizia/baseview.git"]
 baseview = { path = "baseview-local" }
 

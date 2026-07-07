@@ -1,0 +1,43 @@
+[package]
+name = "equilibrium-egui"
+version = "0.0.0"
+edition = "2024"
+description = "PROTOTYPE - egui port of Equilibrium, evaluating truce-egui vs truce-vizia/shared-ui compatibility. Not shipped."
+license = "GPL-3.0-or-later"
+authors = ["LX Audiolabs"]
+publish = false
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[[bin]]
+name = "equilibrium-egui-standalone"
+path = "src/main.rs"
+required-features = ["standalone"]
+
+[features]
+default = ["clap"]
+clap = ["dep:truce-clap", "dep:clap-sys"]
+vst3 = ["dep:truce-vst3"]
+standalone = ["dep:truce-standalone"]
+shell = ["truce/shell", "clap"]
+
+[dependencies]
+truce        = { workspace = true }
+truce-core   = { workspace = true }
+truce-params = { workspace = true }
+truce-clap   = { workspace = true, optional = true }
+truce-vst3   = { workspace = true, optional = true }
+truce-loader = { workspace = true }
+truce-standalone = { git = "https://github.com/truce-audio/truce", tag = "v3.1.2", features = ["gui"], optional = true }
+truce-egui   = { git = "https://github.com/truce-audio/truce", tag = "v3.1.2" }
+truce-font   = { git = "https://github.com/truce-audio/truce", tag = "v3.1.2" }
+egui         = "0.34"
+clap-sys     = { workspace = true, optional = true }
+
+shared-dsp      = { path = "../../shared-dsp" }
+shared-analysis = { path = "../../shared-analysis" }
+tracing         = "0.1"
+
+[dev-dependencies]
+truce-test = { workspace = true }

@@ -1,0 +1,47 @@
+[package]
+name = "truce-gpu"
+version = "3.1.2"
+repository = "https://github.com/truce-audio/truce"
+homepage = "https://github.com/truce-audio/truce"
+edition = "2024"
+license = "LicenseRef-TruceLicense-1.0"
+rust-version = "1.92"
+description = "GPU rendering backend (wgpu) for truce plugins"
+
+[dependencies]
+truce-core = { version = "3.1.2" }
+truce-font = { version = "3.1.2", features = ["raster"] }
+truce-gui-types = { version = "3.1.2" }
+truce-params = { version = "3.1.2" }
+wgpu = { version = "29", default-features = false, features = ["wgsl"] }
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.4"
+lyon_tessellation = "1"
+raw-window-handle = "0.5"
+log = "0.4"
+
+# baseview is the macOS/Windows/Linux windowing layer; iOS embeds
+# wgpu surfaces directly in a UIView attached to the AUv3 view
+# controller, so the baseview-bound editor here is gated off the
+# iOS build. `truce-gpu` only uses baseview indirectly through
+# `WgpuBackend::from_window` (a baseview::Window parameter).
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+baseview = { package = "baseview-truce", version = "0.1.1-truce.12" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+wgpu = { version = "29", default-features = false, features = ["wgsl", "metal"] }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+wgpu = { version = "29", default-features = false, features = ["wgsl", "metal"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# gles = GL fallback for adapters with no DX12 (old GPUs/drivers) - see
+# `editor_wgpu_backends()` in `truce-gui/src/platform.rs`.
+wgpu = { version = "29", default-features = false, features = ["wgsl", "dx12", "gles"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wgpu = { version = "29", default-features = false, features = ["wgsl", "vulkan", "gles"] }
+
+[features]
+default = []
+hot-debug = []
