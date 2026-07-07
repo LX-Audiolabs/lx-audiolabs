@@ -28,8 +28,8 @@ use shared_analysis::{SharedState, SCOPE_BUFFER_LEN, SnapFFT, SnapMode};
 mod editor;
 
 const BAND_COUNT: usize = 5;
-const WINDOW_W: u32 = 1180;
-const WINDOW_H: u32 = 500;
+const WINDOW_W: u32 = 990;
+const WINDOW_H: u32 = 660;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -916,11 +916,10 @@ impl PluginLogic for Equilibrium {
     fn state_changed(&mut self) {}
 
     fn editor(params: Arc<Self::Params>) -> Box<dyn Editor> {
-        EguiEditor::new(params.clone(), (WINDOW_W, WINDOW_H), editor::build)
+        EguiEditor::with_ui(params.clone(), (WINDOW_W, WINDOW_H), editor::EditorState::new(params))
             .with_visuals(truce_egui::theme::dark())
             .with_font(JETBRAINS_MONO)
-            .resizable(true)
-            .min_size((WINDOW_W, WINDOW_H))
+            .resizable(false)
             .into_editor()
     }
 }
