@@ -40,7 +40,7 @@ Output: `target/bundles/<PluginName>.clap`
 
 ## License
 
-[GNU General Public License v3.0](LICENSE) — Copyright 2024–2026 LX AudioLabs
+[GNU General Public License v3.0 or later](LICENSE) — Copyright 2024–2026 LX AudioLabs
 
 ## Contributing
 

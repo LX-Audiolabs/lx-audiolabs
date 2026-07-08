@@ -46,8 +46,8 @@ jobs:
         run: |
           rm -rf target/bundled
           mkdir -p target/bundled
-          cp target/release/libmeridian.so target/bundled/meridian.clap
-          echo "✓ Created: meridian.clap"
+          cp target/release/libmeridian.so target/bundled/Meridian.clap
+          echo "✓ Created: Meridian.clap"
       - uses: actions/upload-artifact@v6
         with:
           name: meridian-v${{ steps.version.outputs.version }}-linux
@@ -78,10 +78,44 @@ jobs:
         run: |
           rm -rf target/bundled
           mkdir -p target/bundled
-          cp target/release/libmeridian.dylib target/bundled/meridian.clap
-          echo "✓ Created: meridian.clap"
+          cp target/release/libmeridian.dylib target/bundled/Meridian.clap
+          echo "✓ Created: Meridian.clap"
       - uses: actions/upload-artifact@v6
         with:
           name: meridian-v${{ steps.version.outputs.version }}-macos
+          path: target/bundled/*.clap
+          if-no-files-found: error
+
+  build-windows:
+    name: Windows (x86_64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target/
+          key: windows-meridian-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: windows-meridian-
+      - name: Build Meridian
+        run: cargo build --release --package meridian
+      - name: Read version
+        id: version
+        shell: bash
+        run: echo "version=$(grep '^version' plugins/meridian/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
+      - name: Bundle CLAP
+        shell: bash
+        run: |
+          rm -rf target/bundled
+          mkdir -p target/bundled
+          cp target/release/meridian.dll target/bundled/Meridian.clap
+          echo "✓ Created: Meridian.clap"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: meridian-v${{ steps.version.outputs.version }}-win
           path: target/bundled/*.clap
           if-no-files-found: error

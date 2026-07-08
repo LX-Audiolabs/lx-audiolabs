@@ -46,8 +46,8 @@ jobs:
         run: |
           rm -rf target/bundled
           mkdir -p target/bundled
-          cp target/release/libaurum.so target/bundled/aurum.clap
-          echo "✓ Created: aurum.clap"
+          cp target/release/libaurum.so target/bundled/Aurum.clap
+          echo "✓ Created: Aurum.clap"
       - uses: actions/upload-artifact@v6
         with:
           name: aurum-v${{ steps.version.outputs.version }}-linux
@@ -78,10 +78,44 @@ jobs:
         run: |
           rm -rf target/bundled
           mkdir -p target/bundled
-          cp target/release/libaurum.dylib target/bundled/aurum.clap
-          echo "✓ Created: aurum.clap"
+          cp target/release/libaurum.dylib target/bundled/Aurum.clap
+          echo "✓ Created: Aurum.clap"
       - uses: actions/upload-artifact@v6
         with:
           name: aurum-v${{ steps.version.outputs.version }}-macos
+          path: target/bundled/*.clap
+          if-no-files-found: error
+
+  build-windows:
+    name: Windows (x86_64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target/
+          key: windows-aurum-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: windows-aurum-
+      - name: Build Aurum
+        run: cargo build --release --package aurum
+      - name: Read version
+        id: version
+        shell: bash
+        run: echo "version=$(grep '^version' plugins/aurum/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
+      - name: Bundle CLAP
+        shell: bash
+        run: |
+          rm -rf target/bundled
+          mkdir -p target/bundled
+          cp target/release/aurum.dll target/bundled/Aurum.clap
+          echo "✓ Created: Aurum.clap"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: aurum-v${{ steps.version.outputs.version }}-win
           path: target/bundled/*.clap
           if-no-files-found: error

@@ -46,8 +46,8 @@ jobs:
         run: |
           rm -rf target/bundled
           mkdir -p target/bundled
-          cp target/release/libequilibrium.so target/bundled/equilibrium.clap
-          echo "✓ Created: equilibrium.clap"
+          cp target/release/libequilibrium.so target/bundled/Equilibrium.clap
+          echo "✓ Created: Equilibrium.clap"
       - uses: actions/upload-artifact@v6
         with:
           name: equilibrium-v${{ steps.version.outputs.version }}-linux
@@ -78,10 +78,44 @@ jobs:
         run: |
           rm -rf target/bundled
           mkdir -p target/bundled
-          cp target/release/libequilibrium.dylib target/bundled/equilibrium.clap
-          echo "✓ Created: equilibrium.clap"
+          cp target/release/libequilibrium.dylib target/bundled/Equilibrium.clap
+          echo "✓ Created: Equilibrium.clap"
       - uses: actions/upload-artifact@v6
         with:
           name: equilibrium-v${{ steps.version.outputs.version }}-macos
+          path: target/bundled/*.clap
+          if-no-files-found: error
+
+  build-windows:
+    name: Windows (x86_64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target/
+          key: windows-equilibrium-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: windows-equilibrium-
+      - name: Build Equilibrium
+        run: cargo build --release --package equilibrium
+      - name: Read version
+        id: version
+        shell: bash
+        run: echo "version=$(grep '^version' plugins/equilibrium/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
+      - name: Bundle CLAP
+        shell: bash
+        run: |
+          rm -rf target/bundled
+          mkdir -p target/bundled
+          cp target/release/equilibrium.dll target/bundled/Equilibrium.clap
+          echo "✓ Created: Equilibrium.clap"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: equilibrium-v${{ steps.version.outputs.version }}-win
           path: target/bundled/*.clap
           if-no-files-found: error

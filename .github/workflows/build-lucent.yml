@@ -46,8 +46,8 @@ jobs:
         run: |
           rm -rf target/bundled
           mkdir -p target/bundled
-          cp target/release/liblucent.so target/bundled/lucent.clap
-          cp target/release/liblucent_relay.so target/bundled/lucent-relay.clap
+          cp target/release/liblucent.so target/bundled/Lucent.clap
+          cp target/release/liblucent_relay.so target/bundled/Lucent-Relay.clap
           echo "✓ Created: 2 CLAPs"
       - uses: actions/upload-artifact@v6
         with:
@@ -79,11 +79,46 @@ jobs:
         run: |
           rm -rf target/bundled
           mkdir -p target/bundled
-          cp target/release/liblucent.dylib target/bundled/lucent.clap
-          cp target/release/liblucent_relay.dylib target/bundled/lucent-relay.clap
+          cp target/release/liblucent.dylib target/bundled/Lucent.clap
+          cp target/release/liblucent_relay.dylib target/bundled/Lucent-Relay.clap
           echo "✓ Created: 2 CLAPs"
       - uses: actions/upload-artifact@v6
         with:
           name: lucent-v${{ steps.version.outputs.version }}-macos
+          path: target/bundled/*.clap
+          if-no-files-found: error
+
+  build-windows:
+    name: Windows (x86_64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target/
+          key: windows-lucent-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: windows-lucent-
+      - name: Build Lucent
+        run: cargo build --release --package lucent --package lucent-relay
+      - name: Read version
+        id: version
+        shell: bash
+        run: echo "version=$(grep '^version' plugins/lucent/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
+      - name: Bundle CLAPs
+        shell: bash
+        run: |
+          rm -rf target/bundled
+          mkdir -p target/bundled
+          cp target/release/lucent.dll target/bundled/Lucent.clap
+          cp target/release/lucent_relay.dll target/bundled/Lucent-Relay.clap
+          echo "✓ Created: 2 CLAPs"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: lucent-v${{ steps.version.outputs.version }}-win
           path: target/bundled/*.clap
           if-no-files-found: error
