@@ -26,12 +26,12 @@ If you can, attach a minimal CLAP host log or audio sample.
 
 ### Contributor License Grant
 
-This project is licensed under **Apache License 2.0** ([LICENSE](LICENSE)).
+This project is licensed under **GNU General Public License v3.0 or later** ([LICENSE](LICENSE)).
 
 By opening a pull request, you agree:
 
 1. You wrote the contribution or have the legal right to submit it.
-2. The contribution is licensed under Apache License 2.0.
+2. The contribution is licensed under GPL-3.0-or-later.
 3. You retain copyright; this is a license grant, not a transfer.
 
 ## Code Style
