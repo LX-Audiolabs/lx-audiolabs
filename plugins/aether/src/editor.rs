@@ -231,6 +231,8 @@ struct TickAccum {
     in_peak_hold: f32,
     in_peak_hold_ticks: u32,
     preset_refresh_counter: u32,
+    /// Last vault path we scanned, so a path change refreshes the preset list immediately.
+    last_vault_path: Option<String>,
 }
 
 // ─── Ticker ────────────────────────────────────────────────────────────────
@@ -253,6 +255,7 @@ impl Ticker {
 }
 
 const TICK_MS: Duration = Duration::from_millis(33);
+const PRESET_REFRESH_INTERVAL_TICKS: u32 = 60; // ~2 s at 33 ms/tick
 
 impl View for Ticker {
     fn element(&self) -> Option<&'static str> { Some("ticker") }
@@ -266,18 +269,24 @@ impl View for Ticker {
             if in_peak > acc.in_peak_hold { acc.in_peak_hold = in_peak; acc.in_peak_hold_ticks = 90; }
             else if acc.in_peak_hold_ticks > 0 { acc.in_peak_hold_ticks -= 1; }
             else { acc.in_peak_hold = (acc.in_peak_hold - 0.5).max(in_peak); }
+            let current_vp = self.vault_path.get();
+            let vault_changed = acc.last_vault_path != current_vp;
+            let refresh_due = acc.preset_refresh_counter % PRESET_REFRESH_INTERVAL_TICKS == 0;
+            if vault_changed || refresh_due {
+                acc.last_vault_path = current_vp.clone();
+                let mut preset_names: Vec<String> = default_presets().into_iter().map(|(n,_,_)|n).collect();
+                if let Some(ref vp) = current_vp {
+                    for (name, _, _) in scan_aether_presets(std::path::Path::new(&vp)) { preset_names.push(name); }
+                }
+                self.telemetry.update(|t| { t.preset_names = preset_names; });
+            }
             acc.preset_refresh_counter += 1;
 
             let sr = self.shared.sample_rate.load(Ordering::Relaxed).max(1.0);
             let curve = eq_curve_points(&self.params, sr);
 
-            let mut preset_names: Vec<String> = default_presets().into_iter().map(|(n,_,_)|n).collect();
-            if let Some(ref vp) = self.vault_path.get() {
-                for (name, _, _) in scan_aether_presets(std::path::Path::new(&vp)) { preset_names.push(name); }
-            }
-
             self.telemetry.update(|t| {
-                t.curve_points = curve; t.in_peak = in_peak; t.in_peak_hold = acc.in_peak_hold; t.preset_names = preset_names;
+                t.curve_points = curve; t.in_peak = in_peak; t.in_peak_hold = acc.in_peak_hold;
             });
         }
         cx.needs_redraw();
@@ -316,7 +325,12 @@ pub fn build(cx: &mut Context, lens: ParamLens<AetherParams>, params: Arc<Aether
     let vault_path_input = Signal::new(config.vault_path.unwrap_or_default());
 
     let telemetry = Signal::new(Telemetry { curve_points: Vec::new(), in_peak: -90.0, in_peak_hold: -90.0, preset_names: preset_names_for_signal });
-    let accum = Rc::new(RefCell::new(TickAccum { in_peak_hold: -90.0, in_peak_hold_ticks: 0, preset_refresh_counter: 0 }));
+    let accum = Rc::new(RefCell::new(TickAccum {
+        in_peak_hold: -90.0,
+        in_peak_hold_ticks: 0,
+        preset_refresh_counter: 0,
+        last_vault_path: vault_path_init.clone(),
+    }));
     let ui_gen = Signal::new(0u32);
 
     Ticker::new(cx, params.clone(), shared.clone(), telemetry, accum, vault_path_signal)

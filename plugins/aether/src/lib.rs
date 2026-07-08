@@ -14,7 +14,7 @@ use truce_core::editor::Editor;
 use truce_core::state::StateLoadError;
 use truce_vizia::ViziaEditor;
 use std::sync::Arc;
-use shared_dsp::{Biquad, state_migration};
+use shared_dsp::{Biquad, FtzDazGuard, state_migration};
 use shared_analysis::SharedState;
 
 mod editor;
@@ -218,9 +218,7 @@ impl PluginLogic for Aether {
         _events: &EventList,
         _ctx: &mut ProcessContext,
     ) -> ProcessStatus {
-        #[cfg(target_arch = "x86_64")]
-        #[allow(deprecated)]
-        unsafe { let csr = std::arch::x86_64::_mm_getcsr(); std::arch::x86_64::_mm_setcsr(csr | 0x8040); }
+        let _ftz = FtzDazGuard::new();
 
         if buffer.num_input_channels() < 2 { return ProcessStatus::Normal; }
         let num_samples = buffer.num_samples();

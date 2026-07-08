@@ -16,7 +16,7 @@ use std::sync::Arc;
 use shared_dsp::state_migration;
 use std::f32::consts::FRAC_PI_4;
 
-use shared_dsp::{Biquad, LR2Crossover, AutoLoudMeter, DBTP_CEILING};
+use shared_dsp::{Biquad, LR2Crossover, AutoLoudMeter, DBTP_CEILING, FtzDazGuard};
 use shared_analysis::{SharedState, SCOPE_BUFFER_LEN, SnapFFT, SnapMode};
 
 mod editor;
@@ -310,9 +310,7 @@ impl PluginLogic for Equilibrium {
         _events: &EventList,
         _ctx: &mut ProcessContext,
     ) -> ProcessStatus {
-        #[cfg(target_arch = "x86_64")]
-        #[allow(deprecated)]
-        unsafe { let csr = std::arch::x86_64::_mm_getcsr(); std::arch::x86_64::_mm_setcsr(csr | 0x8040); }
+        let _ftz = FtzDazGuard::new();
 
         if buffer.num_input_channels() < 2 { return ProcessStatus::Normal; }
 

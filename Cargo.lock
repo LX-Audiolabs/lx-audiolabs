@@ -19,7 +19,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "aether"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "clap-sys",
  "shared-analysis",
@@ -798,7 +798,7 @@ dependencies = [
 
 [[package]]
 name = "equilibrium"
-version = "1.6.2"
+version = "1.6.3"
 dependencies = [
  "clap-sys",
  "shared-analysis",
@@ -1485,7 +1485,7 @@ dependencies = [
 
 [[package]]
 name = "meridian"
-version = "1.9.2"
+version = "1.9.3"
 dependencies = [
  "clap-sys",
  "realfft",
@@ -2636,7 +2636,7 @@ dependencies = [
 
 [[package]]
 name = "shared-dsp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ebur128",
  "serde_json",

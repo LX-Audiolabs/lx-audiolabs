@@ -1008,3 +1008,42 @@ impl MsBandLimiter {
         )
     }
 }
+
+// =============================================================================
+// CPU floating-point helper: set FTZ/DAZ inside a block, restore MXCSR on exit.
+// =============================================================================
+
+/// RAII guard that enables Flush-To-Zero and Denormals-Are-Zero on x86_64
+/// for the duration of the current scope and restores the previous MXCSR
+/// value when dropped. On non-x86_64 targets it is a zero-cost no-op.
+pub struct FtzDazGuard {
+    #[cfg(target_arch = "x86_64")]
+    old_csr: u32,
+}
+
+impl FtzDazGuard {
+    /// Capture the current MXCSR, set FTZ/DAZ, and return the guard.
+    #[allow(deprecated)]
+    pub fn new() -> Self {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let old_csr = unsafe { std::arch::x86_64::_mm_getcsr() };
+            unsafe { std::arch::x86_64::_mm_setcsr(old_csr | 0x8040) };
+            Self { old_csr }
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            Self {}
+        }
+    }
+}
+
+impl Drop for FtzDazGuard {
+    #[allow(deprecated)]
+    fn drop(&mut self) {
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            std::arch::x86_64::_mm_setcsr(self.old_csr);
+        }
+    }
+}

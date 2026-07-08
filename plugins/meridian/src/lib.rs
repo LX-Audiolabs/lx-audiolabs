@@ -17,7 +17,7 @@ use std::sync::atomic::Ordering;
 use shared_dsp::state_migration;
 use realfft::RealFftPlanner;
 
-use shared_dsp::{Biquad, LR2Crossover, TiltEq, Compressor, AutoLoudMeter, DBTP_CEILING};
+use shared_dsp::{Biquad, LR2Crossover, TiltEq, Compressor, AutoLoudMeter, DBTP_CEILING, FtzDazGuard};
 use shared_analysis::{SharedState, SPECTRUM_BINS, SCOPE_BUFFER_LEN, SnapFFT, SnapMode};
 
 mod editor;
@@ -380,9 +380,7 @@ impl PluginLogic for Meridian {
         _events: &EventList,
         _ctx: &mut ProcessContext,
     ) -> ProcessStatus {
-        #[cfg(target_arch = "x86_64")]
-        #[allow(deprecated)]
-        unsafe { let csr = std::arch::x86_64::_mm_getcsr(); std::arch::x86_64::_mm_setcsr(csr | 0x8040); }
+        let _ftz = FtzDazGuard::new();
 
         if buffer.num_input_channels() < 2 { return ProcessStatus::Normal; }
 
