@@ -5,24 +5,6 @@ url = "https://lx-audiolabs.be"
 au_manufacturer = "LxAL"
 
 [[plugin]]
-name = "Lucent Relay"
-bundle_id = "lucentrelay"
-crate = "lucent-relay"
-category = "effect"
-fourcc = "LRly"
-vst3_subcategory = "Analyzer"
-description = "FFT spectrum relay — sends track analysis to Lucent"
-
-[[plugin]]
-name = "Lucent"
-bundle_id = "lucent"
-crate = "lucent"
-category = "effect"
-fourcc = "Lcnt"
-vst3_subcategory = "Analyzer"
-description = "FFT spectrum analyser — receives relay data and displays masking"
-
-[[plugin]]
 name = "Aether"
 bundle_id = "aether"
 crate = "aether"
@@ -32,15 +14,6 @@ vst3_subcategory = "Equalizer"
 description = "Headphone monitoring corrector — Harman 5-band EQ + crossfeed"
 
 [[plugin]]
-name = "Aurum"
-bundle_id = "aurum"
-crate = "aurum"
-category = "effect"
-fourcc = "Aurm"
-vst3_subcategory = "Mastering"
-description = "All-In-One Mastering — M/S EQ, Comp, Sat, MB Limiter, TP Limiter"
-
-[[plugin]]
 name = "Equilibrium"
 bundle_id = "equilibrium"
 crate = "equilibrium"
@@ -48,15 +21,6 @@ category = "effect"
 fourcc = "Eqlb"
 vst3_subcategory = "Equalizer"
 description = "Pre-master spectral balancer with 5-band crossover and per-band stereo control"
-
-[[plugin]]
-name = "Equilibrium Egui Proto"
-bundle_id = "equilibrium-egui-proto"
-crate = "equilibrium-egui"
-category = "effect"
-fourcc = "EqEg"
-vst3_subcategory = "Equalizer"
-description = "PROTOTYPE - egui port of Equilibrium, evaluating truce-egui vs shared-ui/vizia compatibility. Not shipped."
 
 [[plugin]]
 name = "Meridian"

@@ -245,29 +245,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "62af46d040ba9df09edc6528dae9d8e49f5f3e82f55b7d2ec31a733c38dbc49d"
 
 [[package]]
-name = "aurum"
-version = "0.2.0"
-dependencies = [
- "clap-sys",
- "realfft",
- "serde",
- "serde_json",
- "shared-analysis",
- "shared-dsp",
- "shared-ui",
- "tracing",
- "truce",
- "truce-clap",
- "truce-core",
- "truce-loader",
- "truce-params",
- "truce-test",
- "truce-vizia",
- "truce-vst3",
- "vizia",
-]
-
-[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1463,46 +1440,6 @@ name = "log"
 version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
-
-[[package]]
-name = "lucent"
-version = "0.3.0"
-dependencies = [
- "clap-sys",
- "realfft",
- "shared-analysis",
- "shared-dsp",
- "shared-ui",
- "tracing",
- "truce",
- "truce-clap",
- "truce-core",
- "truce-loader",
- "truce-params",
- "truce-test",
- "truce-vizia",
- "truce-vst3",
- "vizia",
-]
-
-[[package]]
-name = "lucent-relay"
-version = "0.3.0"
-dependencies = [
- "clap-sys",
- "realfft",
- "shared-analysis",
- "tracing",
- "truce",
- "truce-clap",
- "truce-core",
- "truce-loader",
- "truce-params",
- "truce-test",
- "truce-vizia",
- "truce-vst3",
- "vizia",
-]
 
 [[package]]
 name = "malloc_buf"

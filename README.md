@@ -9,9 +9,6 @@ Open-source audio effect plugins in [CLAP](https://cleveraudio.org/) format, bui
 | **Equilibrium** | 5-Band Spectral Balancer | Master Bus — precision band correction | Stable |
 | **Meridian** | Group Track Sculptor | Tracks & Buses — EQ, compressor, saturation | Stable |
 | **Aether** | Headphone Correction | Monitoring FX — Harman target curve + crossover | Stable |
-| **Aurum** | All-In-One Mastering | Mastering desk — SHAPE, COLOR, LIMIT | Pre-production |
-| **Lucent** | FFT Analyzer | Spectrum analysis with SHM relay | Pre-production |
-| **Lucent Relay** | SHM Relay | Companion for Lucent — shared memory IPC | Pre-production |
 
 ## Download
 

@@ -5,10 +5,7 @@ members = [
     "shared-vault",
     "shared-ui",
     "shm-hub",
-    "plugins/lucent",
-    "plugins/lucent-relay",
     "plugins/aether",
-    "plugins/aurum",
     "plugins/equilibrium",
     "plugins/meridian",
 ]
