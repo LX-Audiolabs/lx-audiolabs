@@ -1,0 +1,85 @@
+name: Build All Plugins (Windows)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Windows (x86_64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target/
+          key: windows-all-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: windows-all-
+      - name: Build all plugins
+        run: cargo build --release -p aether -p aurum -p equilibrium -p lucent -p lucent-relay -p meridian
+      - name: Read versions
+        id: version
+        shell: bash
+        run: |
+          echo "aether=$(grep '^version' plugins/aether/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
+          echo "aurum=$(grep '^version' plugins/aurum/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
+          echo "equilibrium=$(grep '^version' plugins/equilibrium/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
+          echo "lucent=$(grep '^version' plugins/lucent/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
+          echo "meridian=$(grep '^version' plugins/meridian/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
+      - name: Bundle CLAPs
+        shell: bash
+        run: |
+          rm -rf target/bundled
+          mkdir -p target/bundled
+          cp target/release/aether.dll target/bundled/Aether.clap
+          cp target/release/aurum.dll target/bundled/Aurum.clap
+          cp target/release/equilibrium.dll target/bundled/Equilibrium.clap
+          cp target/release/lucent.dll target/bundled/Lucent.clap
+          cp target/release/lucent_relay.dll target/bundled/Lucent-Relay.clap
+          cp target/release/meridian.dll target/bundled/Meridian.clap
+          echo "✓ Created: $(ls target/bundled/*.clap | wc -l) CLAPs"
+      - name: Create ZIP archives
+        shell: bash
+        run: |
+          mkdir -p release
+          cd target/bundled
+          7z a ../../release/Aether-v${{ steps.version.outputs.aether }}-win.zip Aether.clap
+          7z a ../../release/Aurum-v${{ steps.version.outputs.aurum }}-win.zip Aurum.clap
+          7z a ../../release/Equilibrium-v${{ steps.version.outputs.equilibrium }}-win.zip Equilibrium.clap
+          7z a ../../release/Lucent-v${{ steps.version.outputs.lucent }}-win.zip Lucent.clap
+          7z a ../../release/Lucent-Relay-v${{ steps.version.outputs.lucent }}-win.zip Lucent-Relay.clap
+          7z a ../../release/Meridian-v${{ steps.version.outputs.meridian }}-win.zip Meridian.clap
+      - uses: actions/upload-artifact@v6
+        with:
+          name: aether-v${{ steps.version.outputs.aether }}-win
+          path: release/Aether-v${{ steps.version.outputs.aether }}-win.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v6
+        with:
+          name: aurum-v${{ steps.version.outputs.aurum }}-win
+          path: release/Aurum-v${{ steps.version.outputs.aurum }}-win.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v6
+        with:
+          name: equilibrium-v${{ steps.version.outputs.equilibrium }}-win
+          path: release/Equilibrium-v${{ steps.version.outputs.equilibrium }}-win.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v6
+        with:
+          name: lucent-v${{ steps.version.outputs.lucent }}-win
+          path: release/Lucent-v${{ steps.version.outputs.lucent }}-win.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v6
+        with:
+          name: lucent-relay-v${{ steps.version.outputs.lucent }}-win
+          path: release/Lucent-Relay-v${{ steps.version.outputs.lucent }}-win.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v6
+        with:
+          name: meridian-v${{ steps.version.outputs.meridian }}-win
+          path: release/Meridian-v${{ steps.version.outputs.meridian }}-win.zip
+          if-no-files-found: error
