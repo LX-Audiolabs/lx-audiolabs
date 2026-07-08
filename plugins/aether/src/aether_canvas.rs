@@ -3,13 +3,13 @@
 //! frequency grid. Stateless draw-only View: all data arrives via struct
 //! fields reinstantiated by the caller inside a `Binding`.
 //!
-//! ponytail: inline helpers instead of pulling in vizia_canvas.rs from Lucent
-//! — Aether only needs this one simple curve view, not spectrum/goniometer.
+//! Inline helpers instead of pulling in vizia_canvas.rs from Lucent — Aether
+//! only needs this one simple curve view, not spectrum/goniometer.
 
 use vizia::prelude::*;
 use vizia::vg;
 
-use shared_ui::{col, stroke_paint, fill_paint, fill_text};
+use shared_ui::{col, fill_paint, fill_text, stroke_paint};
 
 pub struct EqCurveView {
     pub points: Vec<(f32, f32)>, // (x_norm 0..1, db) — 240 points
@@ -19,7 +19,12 @@ pub struct EqCurveView {
 
 impl EqCurveView {
     pub fn new(cx: &mut Context, points: Vec<(f32, f32)>) -> Handle<'_, Self> {
-        Self { points, db_min: -12.0, db_max: 12.0 }.build(cx, |_| {})
+        Self {
+            points,
+            db_min: -12.0,
+            db_max: 12.0,
+        }
+        .build(cx, |_| {})
     }
 }
 
@@ -30,12 +35,17 @@ impl View for EqCurveView {
 
     fn draw(&self, cx: &mut DrawContext, canvas: &vg::Canvas) {
         let b = cx.bounds();
-        if self.points.is_empty() || b.width() < 2.0 { return; }
+        if self.points.is_empty() || b.width() < 2.0 {
+            return;
+        }
         canvas.translate((b.x, b.y));
         let (w, h) = (b.width(), b.height());
 
         // Background
-        canvas.draw_rect(vg::Rect::new(0.0, 0.0, w, h), &fill_paint(col(0.08, 0.08, 0.08, 1.0)));
+        canvas.draw_rect(
+            vg::Rect::new(0.0, 0.0, w, h),
+            &fill_paint(col(0.08, 0.08, 0.08, 1.0)),
+        );
 
         // Grid lines
         let db_range = self.db_max - self.db_min;
@@ -54,7 +64,14 @@ impl View for EqCurveView {
 
             // Keep the top label inside the canvas; for all others baseline sits just above the grid line.
             let label_y = if db == 6 { 8.0 } else { y - 2.0 };
-            fill_text(canvas, &format!("{db:+}"), 2.0, label_y, 9.0, col(1.0, 1.0, 1.0, 0.35));
+            fill_text(
+                canvas,
+                &format!("{db:+}"),
+                2.0,
+                label_y,
+                9.0,
+                col(1.0, 1.0, 1.0, 0.35),
+            );
         }
 
         // Frequency labels
@@ -67,12 +84,23 @@ impl View for EqCurveView {
             } else {
                 x - 8.0
             };
-            fill_text(canvas, &format!("{label}Hz"), text_x, h - 3.0, 8.0, col(1.0, 1.0, 1.0, 0.35));
+            fill_text(
+                canvas,
+                &format!("{label}Hz"),
+                text_x,
+                h - 3.0,
+                8.0,
+                col(1.0, 1.0, 1.0, 0.35),
+            );
         }
 
         // Zero-db line
         let zero_y = db_to_y(0.0);
-        canvas.draw_line((0.0, zero_y), (w, zero_y), &stroke_paint(col(1.0, 1.0, 1.0, 0.18), 0.8));
+        canvas.draw_line(
+            (0.0, zero_y),
+            (w, zero_y),
+            &stroke_paint(col(1.0, 1.0, 1.0, 0.18), 0.8),
+        );
 
         // Curve line
         let mut line_path = vg::PathBuilder::new();
@@ -83,6 +111,9 @@ impl View for EqCurveView {
             let y = db_to_y(*db);
             line_path.line_to((x, y));
         }
-        canvas.draw_path(&line_path.detach(), &stroke_paint(col(1.0, 0.45, 0.1, 1.0), 1.5));
+        canvas.draw_path(
+            &line_path.detach(),
+            &stroke_paint(col(1.0, 0.45, 0.1, 1.0), 1.5),
+        );
     }
 }

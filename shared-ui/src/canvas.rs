@@ -58,13 +58,21 @@ pub fn line(canvas: &vg::Canvas, x1: f32, y1: f32, x2: f32, y2: f32, color: vg::
 pub fn fill_text(canvas: &vg::Canvas, text: &str, x: f32, y: f32, size: f32, color: vg::Color) {
     let f = match default_typeface() {
         Some(tf) => vg::Font::new(tf, size),
-        None => { let mut f = vg::Font::default(); f.set_size(size); f }
+        None => {
+            let mut f = vg::Font::default();
+            f.set_size(size);
+            f
+        }
     };
     canvas.draw_str(text, (x, y), &f, &fill_paint(color));
 }
 
 pub fn fmt_db(v: f32) -> String {
-    if v <= -60.0 { "-inf".to_string() } else { format!("{v:.1}") }
+    if v <= -60.0 {
+        "-inf".to_string()
+    } else {
+        format!("{v:.1}")
+    }
 }
 
 // ─── Stereo Meter ────────────────────────────────────────────────────────────
@@ -78,8 +86,22 @@ pub struct StereoMeterView {
 }
 
 impl StereoMeterView {
-    pub fn new(cx: &mut Context, peak_l: f32, peak_r: f32, hold_l: f32, hold_r: f32, balance: f32) -> Handle<'_, Self> {
-        Self { peak_l, peak_r, hold_l, hold_r, balance }.build(cx, |_| {})
+    pub fn new(
+        cx: &mut Context,
+        peak_l: f32,
+        peak_r: f32,
+        hold_l: f32,
+        hold_r: f32,
+        balance: f32,
+    ) -> Handle<'_, Self> {
+        Self {
+            peak_l,
+            peak_r,
+            hold_l,
+            hold_r,
+            balance,
+        }
+        .build(cx, |_| {})
     }
 }
 
@@ -98,7 +120,10 @@ impl View for StereoMeterView {
         let max_db = 6.0f32;
         let db_range = max_db - min_db;
 
-        canvas.draw_rect(vg::Rect::new(0.0, 0.0, w, h), &fill_paint(rgb(0.08, 0.08, 0.08)));
+        canvas.draw_rect(
+            vg::Rect::new(0.0, 0.0, w, h),
+            &fill_paint(rgb(0.08, 0.08, 0.08)),
+        );
 
         for (idx, (peak_db, hold_db)) in [(self.peak_l, self.hold_l), (self.peak_r, self.hold_r)]
             .iter()
@@ -124,17 +149,49 @@ impl View for StereoMeterView {
                 line(canvas, x, hold_y, x + bar_w, hold_y, vg::Color::WHITE, 1.5);
             }
             let label = if idx == 0 { "L" } else { "R" };
-            fill_text(canvas, label, x + bar_w * 0.5 - 3.0, h - 14.0, 9.0, col(1.0, 1.0, 1.0, 0.45));
+            fill_text(
+                canvas,
+                label,
+                x + bar_w * 0.5 - 3.0,
+                h - 14.0,
+                9.0,
+                col(1.0, 1.0, 1.0, 0.45),
+            );
         }
 
         let gx = bar_w;
         let center_x = gx + gap * 0.5;
-        for (db_val, label) in [(-3.0f32, "-3"), (-6.0, "-6"), (-12.0, "-12"), (-24.0, "-24"), (-48.0, "-48")] {
+        for (db_val, label) in [
+            (-3.0f32, "-3"),
+            (-6.0, "-6"),
+            (-12.0, "-12"),
+            (-24.0, "-24"),
+            (-48.0, "-48"),
+        ] {
             let norm = ((db_val - min_db) / db_range).clamp(0.0, 1.0);
             let y = h - h * norm;
-            let tick_half = if label == "-3" || label == "-6" { 5.0 } else { 3.0 };
-            line(canvas, center_x - tick_half, y, center_x + tick_half, y, col(1.0, 1.0, 1.0, 0.45), 0.8);
-            fill_text(canvas, label, gx + 1.0, y - 5.0, 8.0, col(1.0, 1.0, 1.0, 0.60));
+            let tick_half = if label == "-3" || label == "-6" {
+                5.0
+            } else {
+                3.0
+            };
+            line(
+                canvas,
+                center_x - tick_half,
+                y,
+                center_x + tick_half,
+                y,
+                col(1.0, 1.0, 1.0, 0.45),
+                0.8,
+            );
+            fill_text(
+                canvas,
+                label,
+                gx + 1.0,
+                y - 5.0,
+                8.0,
+                col(1.0, 1.0, 1.0, 0.60),
+            );
         }
 
         let balance_norm = self.balance.clamp(-1.0, 1.0);
@@ -146,7 +203,15 @@ impl View for StereoMeterView {
             rgb(1.0, 0.45, 0.1)
         };
         canvas.draw_circle((cursor_x, cursor_y), 3.5, &fill_paint(cursor_color));
-        line(canvas, center_x, cursor_y - 5.0, center_x, cursor_y + 5.0, col(1.0, 1.0, 1.0, 0.12), 0.8);
+        line(
+            canvas,
+            center_x,
+            cursor_y - 5.0,
+            center_x,
+            cursor_y + 5.0,
+            col(1.0, 1.0, 1.0, 0.12),
+            0.8,
+        );
     }
 }
 
@@ -186,14 +251,21 @@ impl View for GoniometerView {
         let (cx_, cy) = (w * 0.5, h * 0.5);
         let scale = cx_.min(cy) * 0.9;
 
-        canvas.draw_rect(vg::Rect::new(0.0, 0.0, w, h), &fill_paint(rgb(0.06, 0.06, 0.06)));
+        canvas.draw_rect(
+            vg::Rect::new(0.0, 0.0, w, h),
+            &fill_paint(rgb(0.06, 0.06, 0.06)),
+        );
 
         let grid = col(1.0, 1.0, 1.0, 0.08);
         line(canvas, cx_, 0.0, cx_, h, grid, 1.0);
         line(canvas, 0.0, cy, w, cy, grid, 1.0);
         line(canvas, 0.0, 0.0, w, h, grid, 1.0);
         line(canvas, w, 0.0, 0.0, h, grid, 1.0);
-        canvas.draw_circle((cx_, cy), scale, &stroke_paint(col(1.0, 1.0, 1.0, 0.06), 1.0));
+        canvas.draw_circle(
+            (cx_, cy),
+            scale,
+            &stroke_paint(col(1.0, 1.0, 1.0, 0.06), 1.0),
+        );
 
         if let Ok(samples) = self.samples.lock() {
             let n = samples.len();
@@ -203,10 +275,10 @@ impl View for GoniometerView {
                 let wp = self.write_pos % n;
                 let inv_sqrt2 = std::f32::consts::FRAC_1_SQRT_2;
 
-                // ponytail: batched via canvas.draw_points (native Skia point-list
-                // primitive), NOT the lyon fill-tessellator that caused the 2026-07-04
-                // host freeze (bugs/all/2026-07-04-goniometer-batch-fill-host-freeze) -
-                // that bug was in lyon's O(N^2) multi-subpath fill, unrelated to this API.
+                // Batched via canvas.draw_points (native Skia point-list primitive),
+                // NOT the lyon fill-tessellator that caused the 2026-07-04 host freeze
+                // (bugs/all/2026-07-04-goniometer-batch-fill-host-freeze) - that bug was
+                // in lyon's O(N^2) multi-subpath fill, unrelated to this API.
                 for group in 0..3u8 {
                     let alpha = match group {
                         0 => 0.12,
@@ -215,7 +287,11 @@ impl View for GoniometerView {
                     };
                     let dot_color = col(0.1, 0.9, 0.5, alpha);
                     let start = group as usize * third;
-                    let end = if group == 2 { draw_count } else { (group as usize + 1) * third };
+                    let end = if group == 2 {
+                        draw_count
+                    } else {
+                        (group as usize + 1) * third
+                    };
 
                     let mut points: Vec<vg::Point> = Vec::with_capacity(end - start);
                     for k in start..end {
@@ -250,7 +326,14 @@ impl View for GoniometerView {
         let (dot_x, dot_y) = (8.0, h - 8.0);
         canvas.draw_circle((dot_x, dot_y), 3.5, &fill_paint(dot_color));
         let sign = if corr >= 0.0 { "+" } else { "" };
-        fill_text(canvas, &format!("{sign}{corr:.2}"), dot_x + 7.0, dot_y - 5.5, 9.0, rgb(1.0, 0.65, 0.3));
+        fill_text(
+            canvas,
+            &format!("{sign}{corr:.2}"),
+            dot_x + 7.0,
+            dot_y - 5.5,
+            9.0,
+            rgb(1.0, 0.65, 0.3),
+        );
     }
 }
 
@@ -327,7 +410,10 @@ impl View for SpectrumView {
         let db_range = max_db - min_db;
         let sample_rate = self.config.sample_rate;
 
-        canvas.draw_rect(vg::Rect::new(0.0, 0.0, width, height), &fill_paint(rgb(0.08, 0.08, 0.08)));
+        canvas.draw_rect(
+            vg::Rect::new(0.0, 0.0, width, height),
+            &fill_paint(rgb(0.08, 0.08, 0.08)),
+        );
 
         let log_freq = |f: f32| -> f32 {
             ((f.ln() - 20.0f32.ln()) / (20000.0f32.ln() - 20.0f32.ln())).clamp(0.0, 1.0)
@@ -379,7 +465,10 @@ impl View for SpectrumView {
                 line_builder.line_to((sx * width, db_to_y(db)));
             }
             let line_path = line_builder.detach();
-            canvas.draw_path(&line_path, &stroke_paint(col(cr, cg, cb, curve.line_alpha), curve.line_width));
+            canvas.draw_path(
+                &line_path,
+                &stroke_paint(col(cr, cg, cb, curve.line_alpha), curve.line_width),
+            );
         }
 
         if !self.masking.is_empty() {
@@ -438,7 +527,10 @@ impl View for SpectrumView {
                 for &(x, db) in &eq.points[1..] {
                     line_builder.line_to((x * width, eq_to_y(db)));
                 }
-                canvas.draw_path(&line_builder.detach(), &stroke_paint(col(er, eg, eb, ea), 1.6));
+                canvas.draw_path(
+                    &line_builder.detach(),
+                    &stroke_paint(col(er, eg, eb, ea), 1.6),
+                );
             }
         }
     }
@@ -447,7 +539,11 @@ impl View for SpectrumView {
 // ─── Spectrum Smoothing ──────────────────────────────────────────────────────
 
 /// 1/3-octave (tapering to 1/20 at the top) fractional-band smoothing.
-pub fn smooth_spectrum_third_octave(spectrum: &[f32], fft_size: usize, sample_rate: f32) -> Vec<(f32, f32)> {
+pub fn smooth_spectrum_third_octave(
+    spectrum: &[f32],
+    fft_size: usize,
+    sample_rate: f32,
+) -> Vec<(f32, f32)> {
     if spectrum.is_empty() {
         return Vec::new();
     }
@@ -512,7 +608,8 @@ pub fn smooth_spectrum_third_octave(spectrum: &[f32], fft_size: usize, sample_ra
     if result.len() >= 3 {
         let smoothed_db: Vec<f32> = result.iter().map(|&(_, db)| db).collect();
         for i in 1..result.len().saturating_sub(1) {
-            result[i].1 = smoothed_db[i - 1] * 0.25 + smoothed_db[i] * 0.5 + smoothed_db[i + 1] * 0.25;
+            result[i].1 =
+                smoothed_db[i - 1] * 0.25 + smoothed_db[i] * 0.5 + smoothed_db[i + 1] * 0.25;
         }
     }
 

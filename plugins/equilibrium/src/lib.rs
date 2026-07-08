@@ -8,16 +8,16 @@
 //   → per-band: Gain → M/S Width → Pan → Solo
 //   → sum → Mono Floor (Side HPF) → Mono/Delta → Gain → Auto Gain → clamp
 
+use shared_dsp::state_migration;
+use std::f32::consts::FRAC_PI_4;
+use std::sync::Arc;
 use truce::prelude::*;
 use truce_core::editor::Editor;
 use truce_core::state::StateLoadError;
 use truce_vizia::ViziaEditor;
-use std::sync::Arc;
-use shared_dsp::state_migration;
-use std::f32::consts::FRAC_PI_4;
 
-use shared_dsp::{Biquad, LR2Crossover, AutoLoudMeter, DBTP_CEILING, FtzDazGuard};
-use shared_analysis::{SharedState, SCOPE_BUFFER_LEN, SnapFFT, SnapMode};
+use shared_analysis::{SCOPE_BUFFER_LEN, SharedState, SnapFFT, SnapMode};
+use shared_dsp::{AutoLoudMeter, Biquad, DBTP_CEILING, FtzDazGuard, LR2Crossover};
 
 mod editor;
 mod vizia_canvas;
@@ -29,11 +29,17 @@ const WINDOW_H: u32 = 660;
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 #[inline]
-fn db_to_gain(db: f32) -> f32 { 10.0_f32.powf(db / 20.0) }
+fn db_to_gain(db: f32) -> f32 {
+    10.0_f32.powf(db / 20.0)
+}
 
 #[inline]
 fn gain_to_db(gain: f32) -> f32 {
-    if gain < 1e-9 { -90.0 } else { 20.0 * gain.log10() }
+    if gain < 1e-9 {
+        -90.0
+    } else {
+        20.0 * gain.log10()
+    }
 }
 
 const MINUS_INF_DB: f32 = -90.0;
@@ -43,47 +49,163 @@ const MINUS_INF_DB: f32 = -90.0;
 #[derive(Params)]
 pub struct EquilibriumParams {
     // 5 Band Gains
-    #[param(name = "Sub Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "Gain")]
+    #[param(
+        name = "Sub Gain",
+        default = 0.0,
+        range = "linear(-12.0, 12.0)",
+        unit = "dB",
+        smooth = "linear(20)",
+        group = "Gain"
+    )]
     pub low_gain: FloatParam,
-    #[param(name = "Bass Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "Gain")]
+    #[param(
+        name = "Bass Gain",
+        default = 0.0,
+        range = "linear(-12.0, 12.0)",
+        unit = "dB",
+        smooth = "linear(20)",
+        group = "Gain"
+    )]
     pub bass_gain: FloatParam,
-    #[param(name = "Mid Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "Gain")]
+    #[param(
+        name = "Mid Gain",
+        default = 0.0,
+        range = "linear(-12.0, 12.0)",
+        unit = "dB",
+        smooth = "linear(20)",
+        group = "Gain"
+    )]
     pub mid_gain: FloatParam,
-    #[param(name = "Pres Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "Gain")]
+    #[param(
+        name = "Pres Gain",
+        default = 0.0,
+        range = "linear(-12.0, 12.0)",
+        unit = "dB",
+        smooth = "linear(20)",
+        group = "Gain"
+    )]
     pub high_mid_gain: FloatParam,
-    #[param(name = "Air Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "Gain")]
+    #[param(
+        name = "Air Gain",
+        default = 0.0,
+        range = "linear(-12.0, 12.0)",
+        unit = "dB",
+        smooth = "linear(20)",
+        group = "Gain"
+    )]
     pub high_gain: FloatParam,
 
     // 5 Band Widths
-    #[param(name = "Sub Width", default = 100.0, range = "linear(0.0, 150.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Width")]
+    #[param(
+        name = "Sub Width",
+        default = 100.0,
+        range = "linear(0.0, 150.0)",
+        unit = "%",
+        format = "fmt_pct",
+        smooth = "linear(20)",
+        group = "Width"
+    )]
     pub low_width: FloatParam,
-    #[param(name = "Bass Width", default = 100.0, range = "linear(0.0, 150.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Width")]
+    #[param(
+        name = "Bass Width",
+        default = 100.0,
+        range = "linear(0.0, 150.0)",
+        unit = "%",
+        format = "fmt_pct",
+        smooth = "linear(20)",
+        group = "Width"
+    )]
     pub bass_width: FloatParam,
-    #[param(name = "Mid Width", default = 100.0, range = "linear(0.0, 150.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Width")]
+    #[param(
+        name = "Mid Width",
+        default = 100.0,
+        range = "linear(0.0, 150.0)",
+        unit = "%",
+        format = "fmt_pct",
+        smooth = "linear(20)",
+        group = "Width"
+    )]
     pub mid_width: FloatParam,
-    #[param(name = "Pres Width", default = 100.0, range = "linear(0.0, 150.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Width")]
+    #[param(
+        name = "Pres Width",
+        default = 100.0,
+        range = "linear(0.0, 150.0)",
+        unit = "%",
+        format = "fmt_pct",
+        smooth = "linear(20)",
+        group = "Width"
+    )]
     pub high_mid_width: FloatParam,
-    #[param(name = "Air Width", default = 100.0, range = "linear(0.0, 150.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Width")]
+    #[param(
+        name = "Air Width",
+        default = 100.0,
+        range = "linear(0.0, 150.0)",
+        unit = "%",
+        format = "fmt_pct",
+        smooth = "linear(20)",
+        group = "Width"
+    )]
     pub high_width: FloatParam,
 
     // 5 Band Pans (-1.0 L to +1.0 R)
-    #[param(name = "Sub Pan", default = 0.0, range = "linear(-1.0, 1.0)", smooth = "linear(20)", group = "Pan")]
+    #[param(
+        name = "Sub Pan",
+        default = 0.0,
+        range = "linear(-1.0, 1.0)",
+        smooth = "linear(20)",
+        group = "Pan"
+    )]
     pub low_pan: FloatParam,
-    #[param(name = "Bass Pan", default = 0.0, range = "linear(-1.0, 1.0)", smooth = "linear(20)", group = "Pan")]
+    #[param(
+        name = "Bass Pan",
+        default = 0.0,
+        range = "linear(-1.0, 1.0)",
+        smooth = "linear(20)",
+        group = "Pan"
+    )]
     pub bass_pan: FloatParam,
-    #[param(name = "Mid Pan", default = 0.0, range = "linear(-1.0, 1.0)", smooth = "linear(20)", group = "Pan")]
+    #[param(
+        name = "Mid Pan",
+        default = 0.0,
+        range = "linear(-1.0, 1.0)",
+        smooth = "linear(20)",
+        group = "Pan"
+    )]
     pub mid_pan: FloatParam,
-    #[param(name = "Pres Pan", default = 0.0, range = "linear(-1.0, 1.0)", smooth = "linear(20)", group = "Pan")]
+    #[param(
+        name = "Pres Pan",
+        default = 0.0,
+        range = "linear(-1.0, 1.0)",
+        smooth = "linear(20)",
+        group = "Pan"
+    )]
     pub high_mid_pan: FloatParam,
-    #[param(name = "Air Pan", default = 0.0, range = "linear(-1.0, 1.0)", smooth = "linear(20)", group = "Pan")]
+    #[param(
+        name = "Air Pan",
+        default = 0.0,
+        range = "linear(-1.0, 1.0)",
+        smooth = "linear(20)",
+        group = "Pan"
+    )]
     pub high_pan: FloatParam,
 
     // Mono Floor frequency (0 = off, 1–300 Hz)
-    #[param(name = "Mono Floor", default = 0.0, range = "linear(0.0, 300.0)", unit = "Hz")]
+    #[param(
+        name = "Mono Floor",
+        default = 0.0,
+        range = "linear(0.0, 300.0)",
+        unit = "Hz"
+    )]
     pub mono_floor: FloatParam,
 
     // Output manual gain
-    #[param(name = "Output Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(
+        name = "Output Gain",
+        default = 0.0,
+        range = "linear(-12.0, 12.0)",
+        unit = "dB",
+        smooth = "linear(20)"
+    )]
     pub output_gain: FloatParam,
 
     // Solos
@@ -212,12 +334,18 @@ impl Equilibrium {
     pub fn new(params: Arc<EquilibriumParams>) -> Self {
         Self {
             params,
-            low_cut_l: Biquad::new(), high_cut_l: Biquad::new(),
-            xo_bass_mid_l: LR2Crossover::new(), xo_low_bass_l: LR2Crossover::new(),
-            xo_mid_high_l: LR2Crossover::new(), xo_highmid_high_l: LR2Crossover::new(),
-            low_cut_r: Biquad::new(), high_cut_r: Biquad::new(),
-            xo_bass_mid_r: LR2Crossover::new(), xo_low_bass_r: LR2Crossover::new(),
-            xo_mid_high_r: LR2Crossover::new(), xo_highmid_high_r: LR2Crossover::new(),
+            low_cut_l: Biquad::new(),
+            high_cut_l: Biquad::new(),
+            xo_bass_mid_l: LR2Crossover::new(),
+            xo_low_bass_l: LR2Crossover::new(),
+            xo_mid_high_l: LR2Crossover::new(),
+            xo_highmid_high_l: LR2Crossover::new(),
+            low_cut_r: Biquad::new(),
+            high_cut_r: Biquad::new(),
+            xo_bass_mid_r: LR2Crossover::new(),
+            xo_low_bass_r: LR2Crossover::new(),
+            xo_mid_high_r: LR2Crossover::new(),
+            xo_highmid_high_r: LR2Crossover::new(),
             mono_floor_filter: Biquad::new(),
             rms_decay_coef: 0.001,
             correlation_decay_coef: 0.005,
@@ -230,14 +358,19 @@ impl Equilibrium {
             listen_levels_ema: [-90.0; BAND_COUNT],
             listen_min_ema: [-90.0; BAND_COUNT],
             listen_max_ema: [-90.0; BAND_COUNT],
-            smoothed_power_l: 0.0, smoothed_power_r: 0.0,
-            corr_avg_lr: 0.0, corr_avg_l2: 0.0, corr_avg_r2: 0.0,
+            smoothed_power_l: 0.0,
+            smoothed_power_r: 0.0,
+            corr_avg_lr: 0.0,
+            corr_avg_l2: 0.0,
+            corr_avg_r2: 0.0,
             peak_hold_value: MINUS_INF_DB,
             peak_hold_l_value: MINUS_INF_DB,
             peak_hold_r_value: MINUS_INF_DB,
             auto_gain_comp: 1.0,
-            pre_master_gain: 1.0, pre_master_active_prev: false,
-            pre_master_measure_peak: 0.0, pre_master_measure_count: 0,
+            pre_master_gain: 1.0,
+            pre_master_active_prev: false,
+            pre_master_measure_peak: 0.0,
+            pre_master_measure_count: 0,
             scope_vis_envelope: 1e-4,
             auto_loud_in: AutoLoudMeter::new(44100.0),
             auto_loud_out: AutoLoudMeter::new(44100.0),
@@ -276,7 +409,11 @@ impl PluginLogic for Equilibrium {
             (&mut self.xo_bass_mid_l, &mut self.xo_bass_mid_r, 300.0),
             (&mut self.xo_low_bass_l, &mut self.xo_low_bass_r, 80.0),
             (&mut self.xo_mid_high_l, &mut self.xo_mid_high_r, 2000.0),
-            (&mut self.xo_highmid_high_l, &mut self.xo_highmid_high_r, 6000.0),
+            (
+                &mut self.xo_highmid_high_l,
+                &mut self.xo_highmid_high_r,
+                6000.0,
+            ),
         ] {
             xo_l.set_cutoff(fc, sr);
             xo_r.set_cutoff(fc, sr);
@@ -293,15 +430,24 @@ impl PluginLogic for Equilibrium {
         self.correlation_decay_coef = 1.0 - (-1.0 / (0.1 * sr)).exp();
 
         // Reset all filter states
-        self.low_cut_l.reset(); self.low_cut_r.reset();
-        self.high_cut_l.reset(); self.high_cut_r.reset();
-        self.xo_bass_mid_l.reset(); self.xo_bass_mid_r.reset();
-        self.xo_low_bass_l.reset(); self.xo_low_bass_r.reset();
-        self.xo_mid_high_l.reset(); self.xo_mid_high_r.reset();
-        self.xo_highmid_high_l.reset(); self.xo_highmid_high_r.reset();
+        self.low_cut_l.reset();
+        self.low_cut_r.reset();
+        self.high_cut_l.reset();
+        self.high_cut_r.reset();
+        self.xo_bass_mid_l.reset();
+        self.xo_bass_mid_r.reset();
+        self.xo_low_bass_l.reset();
+        self.xo_low_bass_r.reset();
+        self.xo_mid_high_l.reset();
+        self.xo_mid_high_r.reset();
+        self.xo_highmid_high_l.reset();
+        self.xo_highmid_high_r.reset();
         self.mono_floor_filter.reset();
 
-        self.params.shared.sample_rate.store(sr, std::sync::atomic::Ordering::Release);
+        self.params
+            .shared
+            .sample_rate
+            .store(sr, std::sync::atomic::Ordering::Release);
     }
 
     fn process(
@@ -312,28 +458,47 @@ impl PluginLogic for Equilibrium {
     ) -> ProcessStatus {
         let _ftz = FtzDazGuard::new();
 
-        if buffer.num_input_channels() < 2 { return ProcessStatus::Normal; }
+        if buffer.num_input_channels() < 2 {
+            return ProcessStatus::Normal;
+        }
 
-        let sample_rate = self.params.shared.sample_rate.load(std::sync::atomic::Ordering::Acquire);
+        let sample_rate = self
+            .params
+            .shared
+            .sample_rate
+            .load(std::sync::atomic::Ordering::Acquire);
 
         // Dirty-flag for mono_floor
         let mono_maker_freq = self.params.mono_floor.raw_target() as f32;
         let coef_dirty = sample_rate != self.cached_sample_rate;
-        if coef_dirty { self.cached_sample_rate = sample_rate; }
+        if coef_dirty {
+            self.cached_sample_rate = sample_rate;
+        }
         if (mono_maker_freq != self.cached_mono_floor_freq || coef_dirty) && mono_maker_freq > 1.0 {
             self.cached_mono_floor_freq = mono_maker_freq;
-            self.mono_floor_filter.set_butterworth_hp(mono_maker_freq, sample_rate);
+            self.mono_floor_filter
+                .set_butterworth_hp(mono_maker_freq, sample_rate);
         }
 
         // Reset peak
-        if self.params.shared.reset_peak.swap(false, std::sync::atomic::Ordering::Release) {
+        if self
+            .params
+            .shared
+            .reset_peak
+            .swap(false, std::sync::atomic::Ordering::Release)
+        {
             self.peak_hold_value = MINUS_INF_DB;
             self.peak_hold_l_value = MINUS_INF_DB;
             self.peak_hold_r_value = MINUS_INF_DB;
         }
 
         // Reset analysis
-        if self.params.shared.reset_analysis.swap(false, std::sync::atomic::Ordering::Release) {
+        if self
+            .params
+            .shared
+            .reset_analysis
+            .swap(false, std::sync::atomic::Ordering::Release)
+        {
             for b in 0..BAND_COUNT {
                 self.listen_band_power_sum[b] = 0.0;
                 self.listen_lo_ema[b] = f64::INFINITY;
@@ -344,12 +509,18 @@ impl PluginLogic for Equilibrium {
                 self.listen_max_ema[b] = -90.0;
             }
             self.listen_sample_count = 0;
-            self.low_cut_l.reset(); self.low_cut_r.reset();
-            self.high_cut_l.reset(); self.high_cut_r.reset();
-            self.xo_bass_mid_l.reset(); self.xo_bass_mid_r.reset();
-            self.xo_low_bass_l.reset(); self.xo_low_bass_r.reset();
-            self.xo_mid_high_l.reset(); self.xo_mid_high_r.reset();
-            self.xo_highmid_high_l.reset(); self.xo_highmid_high_r.reset();
+            self.low_cut_l.reset();
+            self.low_cut_r.reset();
+            self.high_cut_l.reset();
+            self.high_cut_r.reset();
+            self.xo_bass_mid_l.reset();
+            self.xo_bass_mid_r.reset();
+            self.xo_low_bass_l.reset();
+            self.xo_low_bass_r.reset();
+            self.xo_mid_high_l.reset();
+            self.xo_mid_high_r.reset();
+            self.xo_highmid_high_l.reset();
+            self.xo_highmid_high_r.reset();
             self.mono_floor_filter.reset();
         }
 
@@ -359,17 +530,47 @@ impl PluginLogic for Equilibrium {
             || self.params.solo_high_mid.value()
             || self.params.solo_high.value();
 
-        let s_low = if any_solo { self.params.solo_low.value() } else { true };
-        let s_bass = if any_solo { self.params.solo_bass.value() } else { true };
-        let s_mid = if any_solo { self.params.solo_mid.value() } else { true };
-        let s_high_mid = if any_solo { self.params.solo_high_mid.value() } else { true };
-        let s_high = if any_solo { self.params.solo_high.value() } else { true };
+        let s_low = if any_solo {
+            self.params.solo_low.value()
+        } else {
+            true
+        };
+        let s_bass = if any_solo {
+            self.params.solo_bass.value()
+        } else {
+            true
+        };
+        let s_mid = if any_solo {
+            self.params.solo_mid.value()
+        } else {
+            true
+        };
+        let s_high_mid = if any_solo {
+            self.params.solo_high_mid.value()
+        } else {
+            true
+        };
+        let s_high = if any_solo {
+            self.params.solo_high.value()
+        } else {
+            true
+        };
 
         let bypass = self.params.bypass_active.value();
 
-        let mut snap_phase = self.params.shared.snap_phase.load(std::sync::atomic::Ordering::Acquire);
-        let mono = match snap_phase { 2 => true, _ => self.params.mono_active.value() };
-        let delta = match snap_phase { 3 => true, _ => self.params.delta_active.value() };
+        let mut snap_phase = self
+            .params
+            .shared
+            .snap_phase
+            .load(std::sync::atomic::Ordering::Acquire);
+        let mono = match snap_phase {
+            2 => true,
+            _ => self.params.mono_active.value(),
+        };
+        let delta = match snap_phase {
+            3 => true,
+            _ => self.params.delta_active.value(),
+        };
         let listen = self.params.listen_active.value();
         let auto_gain = self.params.auto_gain_active.value();
 
@@ -400,12 +601,18 @@ impl PluginLogic for Equilibrium {
         // SAFETY: both pointers are valid, non-aliasing output channels
         #[allow(unsafe_code)]
         let (out0, out1): (&mut [f32], &mut [f32]) = unsafe {
-            (std::slice::from_raw_parts_mut(out0_ptr, num_samples),
-             std::slice::from_raw_parts_mut(out1_ptr, num_samples))
+            (
+                std::slice::from_raw_parts_mut(out0_ptr, num_samples),
+                std::slice::from_raw_parts_mut(out1_ptr, num_samples),
+            )
         };
 
         // Feed input to LUFS meter BEFORE we modify the buffer
-        let is_measuring = self.params.shared.auto_loud_measuring.load(std::sync::atomic::Ordering::Acquire);
+        let is_measuring = self
+            .params
+            .shared
+            .auto_loud_measuring
+            .load(std::sync::atomic::Ordering::Acquire);
         if is_measuring {
             self.auto_loud_in.feed(buffer.input(0), buffer.input(1));
         }
@@ -420,19 +627,29 @@ impl PluginLogic for Equilibrium {
             // HP @8 Hz always, LP @35 kHz only at ≥ 88.2 kHz
             let dc_l = self.low_cut_l.process(in_l);
             let dc_r = self.low_cut_r.process(in_r);
-            let cut_l = if sample_rate >= 88_200.0 { self.high_cut_l.process(dc_l) } else { dc_l };
-            let cut_r = if sample_rate >= 88_200.0 { self.high_cut_r.process(dc_r) } else { dc_r };
+            let cut_l = if sample_rate >= 88_200.0 {
+                self.high_cut_l.process(dc_l)
+            } else {
+                dc_l
+            };
+            let cut_r = if sample_rate >= 88_200.0 {
+                self.high_cut_r.process(dc_r)
+            } else {
+                dc_r
+            };
 
             // Crossover tree
             let (low_group_l, high_group_l) = self.xo_bass_mid_l.process_transparent(cut_l);
             let (band1_l, band2_l) = self.xo_low_bass_l.process_transparent(low_group_l);
-            let (mid_group_l, super_high_group_l) = self.xo_mid_high_l.process_transparent(high_group_l);
+            let (mid_group_l, super_high_group_l) =
+                self.xo_mid_high_l.process_transparent(high_group_l);
             let (band3_l, band4_l_pre) = (mid_group_l, super_high_group_l);
             let (band4_l, band5_l) = self.xo_highmid_high_l.process_transparent(band4_l_pre);
 
             let (low_group_r, high_group_r) = self.xo_bass_mid_r.process_transparent(cut_r);
             let (band1_r, band2_r) = self.xo_low_bass_r.process_transparent(low_group_r);
-            let (mid_group_r, super_high_group_r) = self.xo_mid_high_r.process_transparent(high_group_r);
+            let (mid_group_r, super_high_group_r) =
+                self.xo_mid_high_r.process_transparent(high_group_r);
             let (band3_r, band4_r_pre) = (mid_group_r, super_high_group_r);
             let (band4_r, band5_r) = self.xo_highmid_high_r.process_transparent(band4_r_pre);
 
@@ -568,15 +785,22 @@ impl PluginLogic for Equilibrium {
                 out1[i] = processed_r;
             }
 
-            let (output_l, output_r) = if bypass { (in_l, in_r) } else { (processed_l, processed_r) };
+            let (output_l, output_r) = if bypass {
+                (in_l, in_r)
+            } else {
+                (processed_l, processed_r)
+            };
 
             // Correlation
             let corr_lr = output_l * output_r;
             let corr_l2 = output_l * output_l;
             let corr_r2 = output_r * output_r;
-            self.corr_avg_lr = (1.0 - self.correlation_decay_coef) * self.corr_avg_lr + self.correlation_decay_coef * corr_lr;
-            self.corr_avg_l2 = (1.0 - self.correlation_decay_coef) * self.corr_avg_l2 + self.correlation_decay_coef * corr_l2;
-            self.corr_avg_r2 = (1.0 - self.correlation_decay_coef) * self.corr_avg_r2 + self.correlation_decay_coef * corr_r2;
+            self.corr_avg_lr = (1.0 - self.correlation_decay_coef) * self.corr_avg_lr
+                + self.correlation_decay_coef * corr_lr;
+            self.corr_avg_l2 = (1.0 - self.correlation_decay_coef) * self.corr_avg_l2
+                + self.correlation_decay_coef * corr_l2;
+            self.corr_avg_r2 = (1.0 - self.correlation_decay_coef) * self.corr_avg_r2
+                + self.correlation_decay_coef * corr_r2;
 
             // SNAP FFT capture
             if snap_phase > 0 {
@@ -592,7 +816,11 @@ impl PluginLogic for Equilibrium {
 
                 if self.snap_fft.push_sample(sample) {
                     let frame = self.snap_fft.compute_fft(sample_rate);
-                    let threshold = if snap_phase == 2 || snap_phase == 3 { 30 } else { 60 };
+                    let threshold = if snap_phase == 2 || snap_phase == 3 {
+                        30
+                    } else {
+                        60
+                    };
                     if self.snap_fft.accumulate_snap(&frame, snap_phase, threshold) {
                         let mode = match snap_phase {
                             1 => SnapMode::Stereo,
@@ -609,11 +837,17 @@ impl PluginLogic for Equilibrium {
                         }
                         let next_phase = if snap_phase < 3 { snap_phase + 1 } else { 0 };
                         if next_phase == 0 {
-                            self.params.shared.snap_active.store(false, std::sync::atomic::Ordering::Release);
+                            self.params
+                                .shared
+                                .snap_active
+                                .store(false, std::sync::atomic::Ordering::Release);
                         } else {
                             self.snap_fft.reset_snapshots();
                         }
-                        self.params.shared.snap_phase.store(next_phase, std::sync::atomic::Ordering::Release);
+                        self.params
+                            .shared
+                            .snap_phase
+                            .store(next_phase, std::sync::atomic::Ordering::Release);
                         snap_phase = next_phase;
                     }
                 }
@@ -631,14 +865,21 @@ impl PluginLogic for Equilibrium {
         let rms_l = self.smoothed_power_l.sqrt();
         let rms_r = self.smoothed_power_r.sqrt();
         let sum_rms = rms_l + rms_r;
-        let balance = if sum_rms > 1e-6 { (rms_l - rms_r) / sum_rms } else { 0.0 };
-        self.params.shared.balance.store(balance, std::sync::atomic::Ordering::Release);
+        let balance = if sum_rms > 1e-6 {
+            (rms_l - rms_r) / sum_rms
+        } else {
+            0.0
+        };
+        self.params
+            .shared
+            .balance
+            .store(balance, std::sync::atomic::Ordering::Release);
 
         // Band power → dB
         for b in 0..BAND_COUNT {
             let average_band_power = block_band_power[b] * sample_weight;
-            self.smoothed_band_power[b] = (1.0 - buf_coef) * self.smoothed_band_power[b]
-                + buf_coef * average_band_power;
+            self.smoothed_band_power[b] =
+                (1.0 - buf_coef) * self.smoothed_band_power[b] + buf_coef * average_band_power;
             let band_db = gain_to_db(self.smoothed_band_power[b].sqrt());
             self.params.shared.band_levels[b].store(band_db, std::sync::atomic::Ordering::Release);
 
@@ -675,60 +916,113 @@ impl PluginLogic for Equilibrium {
         // Listen analysis post-processing
         if listen {
             self.listen_sample_count += count_samples as u64;
-            self.params.shared.listen_samples.store(self.listen_sample_count as f32, std::sync::atomic::Ordering::Release);
+            self.params.shared.listen_samples.store(
+                self.listen_sample_count as f32,
+                std::sync::atomic::Ordering::Release,
+            );
 
             if self.listen_sample_count > 0 {
                 let div = 1.0 / self.listen_sample_count as f64;
                 for b in 0..BAND_COUNT {
                     let avg_pow = self.listen_band_power_sum[b] * div;
-                    let lo_pow = if self.listen_lo_ema[b].is_finite() { self.listen_lo_ema[b] } else { avg_pow };
-                    let hi_pow = if self.listen_hi_ema[b].is_finite() { self.listen_hi_ema[b] } else { avg_pow };
+                    let lo_pow = if self.listen_lo_ema[b].is_finite() {
+                        self.listen_lo_ema[b]
+                    } else {
+                        avg_pow
+                    };
+                    let hi_pow = if self.listen_hi_ema[b].is_finite() {
+                        self.listen_hi_ema[b]
+                    } else {
+                        avg_pow
+                    };
 
                     let avg_db = gain_to_db((avg_pow as f32).sqrt());
                     let lo_db = gain_to_db((lo_pow.max(1e-10) as f32).sqrt());
                     let hi_db = gain_to_db((hi_pow.max(1e-10) as f32).sqrt());
 
                     const ALPHA: f32 = 0.2;
-                    self.listen_levels_ema[b] = ALPHA * avg_db + (1.0 - ALPHA) * self.listen_levels_ema[b];
+                    self.listen_levels_ema[b] =
+                        ALPHA * avg_db + (1.0 - ALPHA) * self.listen_levels_ema[b];
                     let listen_tolerance = (hi_db - lo_db) * 0.5;
 
-                    self.params.shared.listen_levels[b].store(self.listen_levels_ema[b], std::sync::atomic::Ordering::Release);
-                    self.params.shared.listen_level_min[b].store(lo_db, std::sync::atomic::Ordering::Release);
-                    self.params.shared.listen_level_max[b].store(hi_db, std::sync::atomic::Ordering::Release);
-                    self.params.shared.listen_tolerances[b].store(listen_tolerance, std::sync::atomic::Ordering::Release);
+                    self.params.shared.listen_levels[b].store(
+                        self.listen_levels_ema[b],
+                        std::sync::atomic::Ordering::Release,
+                    );
+                    self.params.shared.listen_level_min[b]
+                        .store(lo_db, std::sync::atomic::Ordering::Release);
+                    self.params.shared.listen_level_max[b]
+                        .store(hi_db, std::sync::atomic::Ordering::Release);
+                    self.params.shared.listen_tolerances[b]
+                        .store(listen_tolerance, std::sync::atomic::Ordering::Release);
                 }
             }
         } else if self.listen_sample_count > 0 {
             self.listen_sample_count = 0;
-            self.params.shared.listen_samples.store(0.0, std::sync::atomic::Ordering::Release);
+            self.params
+                .shared
+                .listen_samples
+                .store(0.0, std::sync::atomic::Ordering::Release);
             for b in 0..BAND_COUNT {
                 self.listen_band_power_sum[b] = 0.0;
                 self.listen_lo_ema[b] = f64::INFINITY;
                 self.listen_hi_ema[b] = f64::NEG_INFINITY;
                 self.listen_ref_ema[b] = 0.0;
-                self.params.shared.listen_tolerances[b].store(0.0, std::sync::atomic::Ordering::Release);
+                self.params.shared.listen_tolerances[b]
+                    .store(0.0, std::sync::atomic::Ordering::Release);
             }
         }
 
         // Correlation
         let den = (self.corr_avg_l2 * self.corr_avg_r2).sqrt();
-        let correlation = if den > 1e-9 { self.corr_avg_lr / den } else { 1.0 };
-        self.params.shared.phase_correlation.store(correlation.clamp(-1.0, 1.0), std::sync::atomic::Ordering::Release);
+        let correlation = if den > 1e-9 {
+            self.corr_avg_lr / den
+        } else {
+            1.0
+        };
+        self.params.shared.phase_correlation.store(
+            correlation.clamp(-1.0, 1.0),
+            std::sync::atomic::Ordering::Release,
+        );
 
         // Peak meters
         let block_peak_db = gain_to_db(max_out_peak);
-        self.params.shared.output_peak.store(block_peak_db, std::sync::atomic::Ordering::Release);
-        if block_peak_db > self.peak_hold_value { self.peak_hold_value = block_peak_db; }
-        self.params.shared.peak_hold.store(self.peak_hold_value, std::sync::atomic::Ordering::Release);
+        self.params
+            .shared
+            .output_peak
+            .store(block_peak_db, std::sync::atomic::Ordering::Release);
+        if block_peak_db > self.peak_hold_value {
+            self.peak_hold_value = block_peak_db;
+        }
+        self.params
+            .shared
+            .peak_hold
+            .store(self.peak_hold_value, std::sync::atomic::Ordering::Release);
 
         let peak_l_db = gain_to_db(max_out_peak_l);
         let peak_r_db = gain_to_db(max_out_peak_r);
-        self.params.shared.output_peak_l.store(peak_l_db, std::sync::atomic::Ordering::Release);
-        self.params.shared.output_peak_r.store(peak_r_db, std::sync::atomic::Ordering::Release);
-        if peak_l_db > self.peak_hold_l_value { self.peak_hold_l_value = peak_l_db; }
-        if peak_r_db > self.peak_hold_r_value { self.peak_hold_r_value = peak_r_db; }
-        self.params.shared.peak_hold_l.store(self.peak_hold_l_value, std::sync::atomic::Ordering::Release);
-        self.params.shared.peak_hold_r.store(self.peak_hold_r_value, std::sync::atomic::Ordering::Release);
+        self.params
+            .shared
+            .output_peak_l
+            .store(peak_l_db, std::sync::atomic::Ordering::Release);
+        self.params
+            .shared
+            .output_peak_r
+            .store(peak_r_db, std::sync::atomic::Ordering::Release);
+        if peak_l_db > self.peak_hold_l_value {
+            self.peak_hold_l_value = peak_l_db;
+        }
+        if peak_r_db > self.peak_hold_r_value {
+            self.peak_hold_r_value = peak_r_db;
+        }
+        self.params
+            .shared
+            .peak_hold_l
+            .store(self.peak_hold_l_value, std::sync::atomic::Ordering::Release);
+        self.params
+            .shared
+            .peak_hold_r
+            .store(self.peak_hold_r_value, std::sync::atomic::Ordering::Release);
 
         // Auto gain
         if auto_gain && count_samples > 0 {
@@ -745,9 +1039,20 @@ impl PluginLogic for Equilibrium {
         }
 
         // AUTO LOUD
-        if self.params.shared.auto_loud_trigger.load(std::sync::atomic::Ordering::Acquire) {
-            self.params.shared.auto_loud_trigger.store(false, std::sync::atomic::Ordering::Release);
-            self.params.shared.auto_loud_measuring.store(true, std::sync::atomic::Ordering::Release);
+        if self
+            .params
+            .shared
+            .auto_loud_trigger
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            self.params
+                .shared
+                .auto_loud_trigger
+                .store(false, std::sync::atomic::Ordering::Release);
+            self.params
+                .shared
+                .auto_loud_measuring
+                .store(true, std::sync::atomic::Ordering::Release);
             self.auto_loud_in.reset();
             self.auto_loud_out.reset();
         }
@@ -761,8 +1066,14 @@ impl PluginLogic for Equilibrium {
                 let lufs_offset = in_lufs - out_lufs;
                 let peak_limit = DBTP_CEILING - out_tp;
                 let offset_clamped = lufs_offset.clamp(-24.0, peak_limit);
-                self.params.shared.auto_loud_gain_offset.store(offset_clamped, std::sync::atomic::Ordering::Release);
-                self.params.shared.auto_loud_measuring.store(false, std::sync::atomic::Ordering::Release);
+                self.params
+                    .shared
+                    .auto_loud_gain_offset
+                    .store(offset_clamped, std::sync::atomic::Ordering::Release);
+                self.params
+                    .shared
+                    .auto_loud_measuring
+                    .store(false, std::sync::atomic::Ordering::Release);
             }
         }
 
@@ -770,7 +1081,11 @@ impl PluginLogic for Equilibrium {
         if self.params.pre_master_active.value() {
             let target_linear = db_to_gain(self.params.pre_master_target_db.raw_target() as f32);
             let n = out0.len().min(out1.len());
-            let sr_safe = if sample_rate > 0.0 { sample_rate } else { 48_000.0 };
+            let sr_safe = if sample_rate > 0.0 {
+                sample_rate
+            } else {
+                48_000.0
+            };
             let measure_samples = (0.200 * sr_safe) as u32;
 
             if !self.pre_master_active_prev {
@@ -794,7 +1109,8 @@ impl PluginLogic for Equilibrium {
                 if self.pre_master_measure_peak > gate {
                     let max_boost = db_to_gain(12.0);
                     let max_cut = db_to_gain(-24.0);
-                    self.pre_master_gain = (target_linear / self.pre_master_measure_peak).clamp(max_cut, max_boost);
+                    self.pre_master_gain =
+                        (target_linear / self.pre_master_measure_peak).clamp(max_cut, max_boost);
                 } else {
                     self.pre_master_measure_count = 0;
                     self.pre_master_measure_peak = 0.0;
@@ -817,17 +1133,41 @@ impl PluginLogic for Equilibrium {
                 post_peak_r = post_peak_r.max(abs_r);
             }
             let post_db = gain_to_db(post_peak.max(1e-9));
-            self.params.shared.output_peak.store(post_db, std::sync::atomic::Ordering::Release);
-            if post_db > self.peak_hold_value { self.peak_hold_value = post_db; }
-            self.params.shared.peak_hold.store(self.peak_hold_value, std::sync::atomic::Ordering::Release);
+            self.params
+                .shared
+                .output_peak
+                .store(post_db, std::sync::atomic::Ordering::Release);
+            if post_db > self.peak_hold_value {
+                self.peak_hold_value = post_db;
+            }
+            self.params
+                .shared
+                .peak_hold
+                .store(self.peak_hold_value, std::sync::atomic::Ordering::Release);
             let post_l_db = gain_to_db(post_peak_l.max(1e-9));
             let post_r_db = gain_to_db(post_peak_r.max(1e-9));
-            self.params.shared.output_peak_l.store(post_l_db, std::sync::atomic::Ordering::Release);
-            self.params.shared.output_peak_r.store(post_r_db, std::sync::atomic::Ordering::Release);
-            if post_l_db > self.peak_hold_l_value { self.peak_hold_l_value = post_l_db; }
-            if post_r_db > self.peak_hold_r_value { self.peak_hold_r_value = post_r_db; }
-            self.params.shared.peak_hold_l.store(self.peak_hold_l_value, std::sync::atomic::Ordering::Release);
-            self.params.shared.peak_hold_r.store(self.peak_hold_r_value, std::sync::atomic::Ordering::Release);
+            self.params
+                .shared
+                .output_peak_l
+                .store(post_l_db, std::sync::atomic::Ordering::Release);
+            self.params
+                .shared
+                .output_peak_r
+                .store(post_r_db, std::sync::atomic::Ordering::Release);
+            if post_l_db > self.peak_hold_l_value {
+                self.peak_hold_l_value = post_l_db;
+            }
+            if post_r_db > self.peak_hold_r_value {
+                self.peak_hold_r_value = post_r_db;
+            }
+            self.params
+                .shared
+                .peak_hold_l
+                .store(self.peak_hold_l_value, std::sync::atomic::Ordering::Release);
+            self.params
+                .shared
+                .peak_hold_r
+                .store(self.peak_hold_r_value, std::sync::atomic::Ordering::Release);
         } else {
             self.pre_master_gain = 1.0;
             self.pre_master_active_prev = false;
@@ -835,7 +1175,11 @@ impl PluginLogic for Equilibrium {
 
         // Goniometer scope buffer
         {
-            let start_pos = self.params.shared.scope_write_pos.load(std::sync::atomic::Ordering::Acquire);
+            let start_pos = self
+                .params
+                .shared
+                .scope_write_pos
+                .load(std::sync::atomic::Ordering::Acquire);
             if let Ok(mut scope) = self.params.shared.scope_samples.try_lock() {
                 let buf_len = SCOPE_BUFFER_LEN;
                 let n = out0.len().min(out1.len());
@@ -859,14 +1203,19 @@ impl PluginLogic for Equilibrium {
                     let pos = (start_pos + i) % buf_len;
                     scope[pos] = [out0[i] * vis_gain, out1[i] * vis_gain];
                 }
-                self.params.shared.scope_write_pos.store((start_pos + n) % buf_len, std::sync::atomic::Ordering::Release);
+                self.params.shared.scope_write_pos.store(
+                    (start_pos + n) % buf_len,
+                    std::sync::atomic::Ordering::Release,
+                );
             }
         }
 
         ProcessStatus::Normal
     }
 
-    fn save_state(&self) -> Vec<u8> { Vec::new() }
+    fn save_state(&self) -> Vec<u8> {
+        Vec::new()
+    }
     fn load_state(&mut self, data: &[u8]) -> Result<(), StateLoadError> {
         if let Some(params) = state_migration::try_parse_niceplug_state(data) {
             for (name, value) in params {

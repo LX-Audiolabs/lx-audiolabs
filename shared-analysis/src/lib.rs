@@ -1,6 +1,6 @@
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicU32, AtomicUsize};
-use std::sync::{Arc, Mutex};
 use atomic_float::AtomicF32;
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU8, AtomicUsize};
+use std::sync::{Arc, Mutex};
 
 pub mod dev_log;
 pub mod snap_fft;
@@ -8,20 +8,16 @@ pub use snap_fft::{SnapFFT, SnapMode};
 
 // Re-export shm-hub transparently so existing callers keep working
 pub use shm_hub as shm;
-pub use shm_hub::{relay_hub, RelayHub, SPECTRUM_BINS, EQ_BANDS, MAX_NAME_LEN, STALE_MS, MAX_SLOTS, MAX_CONSUMERS, now_ms, display_name};
+pub use shm_hub::{
+    display_name, now_ms, relay_hub, RelayHub, EQ_BANDS, MAX_CONSUMERS, MAX_NAME_LEN, MAX_SLOTS,
+    SPECTRUM_BINS, STALE_MS,
+};
 
 // Re-export vault/preset/config types so existing callers don't need to change imports
 pub use shared_vault::{
+    export_preset_to_markdown, get_plugin_dir, list_custom_presets, load_config,
+    parse_preset_from_markdown, preset_plugin_name, save_config, PluginConfig, Profile,
     DEFAULT_TOLERANCES,
-    Profile,
-    export_preset_to_markdown,
-    parse_preset_from_markdown,
-    preset_plugin_name,
-    PluginConfig,
-    get_plugin_dir,
-    load_config,
-    save_config,
-    list_custom_presets,
 };
 
 pub const SCOPE_BUFFER_LEN: usize = 4096;
@@ -31,21 +27,36 @@ pub const SCOPE_BUFFER_LEN: usize = 4096;
 /// `fft_output` = complex FFT bins (RealFft half-spectrum).
 /// `frame` = output slice of length SPECTRUM_BINS, filled with dB values.
 #[inline]
-pub fn compute_spectrum_bins(fft_output: &[realfft::num_complex::Complex<f32>], frame: &mut [f32], fft_size: usize, sample_rate: f32) {
+pub fn compute_spectrum_bins(
+    fft_output: &[realfft::num_complex::Complex<f32>],
+    frame: &mut [f32],
+    fft_size: usize,
+    sample_rate: f32,
+) {
     let inv_norm = 2.0 / fft_size as f32;
     for (k, slot) in frame.iter_mut().enumerate() {
         let mag = fft_output[k].norm() * inv_norm;
-        let db = if mag > 1e-9 { 20.0 * mag.log10() } else { -90.0 };
+        let db = if mag > 1e-9 {
+            20.0 * mag.log10()
+        } else {
+            -90.0
+        };
         let freq = k as f32 * sample_rate / fft_size as f32;
-        let tilt = if freq > 20.0 { 4.5 * (freq / 1000.0).log2() } else { 0.0 };
+        let tilt = if freq > 20.0 {
+            4.5 * (freq / 1000.0).log2()
+        } else {
+            0.0
+        };
         *slot = (db + tilt).clamp(-90.0, 12.0);
     }
 }
 
 /// Shared real-time analyzer values for the GUI.
 ///
-/// ## Plugin ownership (ponytail: split into per-plugin state structs before
-/// multi-plugin migration — current monolith works but gets painful fast)
+/// ## Plugin ownership
+///
+/// TODO: split into per-plugin state structs before multi-plugin migration -
+/// current monolith works but gets painful fast.
 ///
 /// ── Equilibrium ──
 ///   band_levels, target_levels, target_tolerances, listen_*,

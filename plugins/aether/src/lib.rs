@@ -9,16 +9,16 @@
 // The Harman EQ is a plain per-channel-identical linear EQ (no M/S, no L/R diff),
 // so it commutes with the crossfeed — order is conceptual, not sonic.
 
+use shared_analysis::SharedState;
+use shared_dsp::{Biquad, FtzDazGuard, state_migration};
+use std::sync::Arc;
 use truce::prelude::*;
 use truce_core::editor::Editor;
 use truce_core::state::StateLoadError;
 use truce_vizia::ViziaEditor;
-use std::sync::Arc;
-use shared_dsp::{Biquad, FtzDazGuard, state_migration};
-use shared_analysis::SharedState;
 
-mod editor;
 mod aether_canvas;
+mod editor;
 
 const NUM_BANDS: usize = 5;
 const CF_DELAY_MAX: usize = 512;
@@ -29,40 +29,125 @@ const WINDOW_H: u32 = 395;
 
 #[derive(Params)]
 pub struct AetherParams {
-    #[param(name = "EQ1 Freq", default = 105.0, range = "log(20.0, 20000.0)", unit = "Hz", smooth = "linear(20)")]
+    #[param(
+        name = "EQ1 Freq",
+        default = 105.0,
+        range = "log(20.0, 20000.0)",
+        unit = "Hz",
+        smooth = "linear(20)"
+    )]
     pub eq1_freq: FloatParam,
-    #[param(name = "EQ1 Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(
+        name = "EQ1 Gain",
+        default = 0.0,
+        range = "linear(-12.0, 12.0)",
+        unit = "dB",
+        smooth = "linear(20)"
+    )]
     pub eq1_gain: FloatParam,
-    #[param(name = "EQ1 Q", default = 0.7, range = "log(0.3, 8.0)", smooth = "linear(20)")]
-    pub eq1_q:    FloatParam,
+    #[param(
+        name = "EQ1 Q",
+        default = 0.7,
+        range = "log(0.3, 8.0)",
+        smooth = "linear(20)"
+    )]
+    pub eq1_q: FloatParam,
 
-    #[param(name = "EQ2 Freq", default = 300.0, range = "log(20.0, 20000.0)", unit = "Hz", smooth = "linear(20)")]
+    #[param(
+        name = "EQ2 Freq",
+        default = 300.0,
+        range = "log(20.0, 20000.0)",
+        unit = "Hz",
+        smooth = "linear(20)"
+    )]
     pub eq2_freq: FloatParam,
-    #[param(name = "EQ2 Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(
+        name = "EQ2 Gain",
+        default = 0.0,
+        range = "linear(-12.0, 12.0)",
+        unit = "dB",
+        smooth = "linear(20)"
+    )]
     pub eq2_gain: FloatParam,
-    #[param(name = "EQ2 Q", default = 1.0, range = "log(0.3, 8.0)", smooth = "linear(20)")]
-    pub eq2_q:    FloatParam,
+    #[param(
+        name = "EQ2 Q",
+        default = 1.0,
+        range = "log(0.3, 8.0)",
+        smooth = "linear(20)"
+    )]
+    pub eq2_q: FloatParam,
 
-    #[param(name = "EQ3 Freq", default = 1200.0, range = "log(20.0, 20000.0)", unit = "Hz", smooth = "linear(20)")]
+    #[param(
+        name = "EQ3 Freq",
+        default = 1200.0,
+        range = "log(20.0, 20000.0)",
+        unit = "Hz",
+        smooth = "linear(20)"
+    )]
     pub eq3_freq: FloatParam,
-    #[param(name = "EQ3 Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(
+        name = "EQ3 Gain",
+        default = 0.0,
+        range = "linear(-12.0, 12.0)",
+        unit = "dB",
+        smooth = "linear(20)"
+    )]
     pub eq3_gain: FloatParam,
-    #[param(name = "EQ3 Q", default = 1.0, range = "log(0.3, 8.0)", smooth = "linear(20)")]
-    pub eq3_q:    FloatParam,
+    #[param(
+        name = "EQ3 Q",
+        default = 1.0,
+        range = "log(0.3, 8.0)",
+        smooth = "linear(20)"
+    )]
+    pub eq3_q: FloatParam,
 
-    #[param(name = "EQ4 Freq", default = 4000.0, range = "log(20.0, 20000.0)", unit = "Hz", smooth = "linear(20)")]
+    #[param(
+        name = "EQ4 Freq",
+        default = 4000.0,
+        range = "log(20.0, 20000.0)",
+        unit = "Hz",
+        smooth = "linear(20)"
+    )]
     pub eq4_freq: FloatParam,
-    #[param(name = "EQ4 Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(
+        name = "EQ4 Gain",
+        default = 0.0,
+        range = "linear(-12.0, 12.0)",
+        unit = "dB",
+        smooth = "linear(20)"
+    )]
     pub eq4_gain: FloatParam,
-    #[param(name = "EQ4 Q", default = 1.0, range = "log(0.3, 8.0)", smooth = "linear(20)")]
-    pub eq4_q:    FloatParam,
+    #[param(
+        name = "EQ4 Q",
+        default = 1.0,
+        range = "log(0.3, 8.0)",
+        smooth = "linear(20)"
+    )]
+    pub eq4_q: FloatParam,
 
-    #[param(name = "EQ5 Freq", default = 10000.0, range = "log(20.0, 20000.0)", unit = "Hz", smooth = "linear(20)")]
+    #[param(
+        name = "EQ5 Freq",
+        default = 10000.0,
+        range = "log(20.0, 20000.0)",
+        unit = "Hz",
+        smooth = "linear(20)"
+    )]
     pub eq5_freq: FloatParam,
-    #[param(name = "EQ5 Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)")]
+    #[param(
+        name = "EQ5 Gain",
+        default = 0.0,
+        range = "linear(-12.0, 12.0)",
+        unit = "dB",
+        smooth = "linear(20)"
+    )]
     pub eq5_gain: FloatParam,
-    #[param(name = "EQ5 Q", default = 0.7, range = "log(0.3, 8.0)", smooth = "linear(20)")]
-    pub eq5_q:    FloatParam,
+    #[param(
+        name = "EQ5 Q",
+        default = 0.7,
+        range = "log(0.3, 8.0)",
+        smooth = "linear(20)"
+    )]
+    pub eq5_q: FloatParam,
 
     #[param(name = "EQ1 Type", default = 1, range = "discrete(0, 3)")]
     pub eq1_type: IntParam,
@@ -75,17 +160,52 @@ pub struct AetherParams {
     #[param(name = "EQ5 Type", default = 3, range = "discrete(0, 3)")]
     pub eq5_type: IntParam,
 
-    #[param(name = "Blend", default = 100.0, range = "linear(0.0, 100.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Aether")]
+    #[param(
+        name = "Blend",
+        default = 100.0,
+        range = "linear(0.0, 100.0)",
+        unit = "%",
+        format = "fmt_pct",
+        smooth = "linear(20)",
+        group = "Aether"
+    )]
     pub blend: FloatParam,
 
-    #[param(name = "Crossfeed Angle", default = 60.0, range = "linear(30.0, 75.0)", unit = "deg", smooth = "linear(20)", group = "Aether")]
-    pub cf_angle:  FloatParam,
-    #[param(name = "Crossfeed Amount", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Aether")]
+    #[param(
+        name = "Crossfeed Angle",
+        default = 60.0,
+        range = "linear(30.0, 75.0)",
+        unit = "deg",
+        smooth = "linear(20)",
+        group = "Aether"
+    )]
+    pub cf_angle: FloatParam,
+    #[param(
+        name = "Crossfeed Amount",
+        default = 0.0,
+        range = "linear(0.0, 100.0)",
+        unit = "%",
+        format = "fmt_pct",
+        smooth = "linear(20)",
+        group = "Aether"
+    )]
     pub cf_amount: FloatParam,
-    #[param(name = "Crossfeed Realism", default = 0, range = "discrete(0, 2)", group = "Aether")]
+    #[param(
+        name = "Crossfeed Realism",
+        default = 0,
+        range = "discrete(0, 2)",
+        group = "Aether"
+    )]
     pub cf_realism: IntParam,
 
-    #[param(name = "Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "Aether")]
+    #[param(
+        name = "Gain",
+        default = 0.0,
+        range = "linear(-12.0, 12.0)",
+        unit = "dB",
+        smooth = "linear(20)",
+        group = "Aether"
+    )]
     pub gain: FloatParam,
 
     #[param(name = "Bypass", default = 0)]
@@ -127,7 +247,8 @@ impl Aether {
             sample_rate: 44100.0,
             eq_l: std::array::from_fn(|_| Biquad::new()),
             eq_r: std::array::from_fn(|_| Biquad::new()),
-            cf_lp_l: 0.0, cf_lp_r: 0.0,
+            cf_lp_l: 0.0,
+            cf_lp_r: 0.0,
             cf_delay_l: vec![0.0; CF_DELAY_MAX],
             cf_delay_r: vec![0.0; CF_DELAY_MAX],
             cf_delay_pos: 0,
@@ -138,11 +259,36 @@ impl Aether {
         let sr = self.sample_rate;
         let p = &self.params;
         let vals: [(f32, f32, f32, i32); NUM_BANDS] = [
-            (p.eq1_freq.raw_target() as f32, p.eq1_gain.raw_target() as f32, p.eq1_q.raw_target() as f32, p.eq1_type.value_i32()),
-            (p.eq2_freq.raw_target() as f32, p.eq2_gain.raw_target() as f32, p.eq2_q.raw_target() as f32, p.eq2_type.value_i32()),
-            (p.eq3_freq.raw_target() as f32, p.eq3_gain.raw_target() as f32, p.eq3_q.raw_target() as f32, p.eq3_type.value_i32()),
-            (p.eq4_freq.raw_target() as f32, p.eq4_gain.raw_target() as f32, p.eq4_q.raw_target() as f32, p.eq4_type.value_i32()),
-            (p.eq5_freq.raw_target() as f32, p.eq5_gain.raw_target() as f32, p.eq5_q.raw_target() as f32, p.eq5_type.value_i32()),
+            (
+                p.eq1_freq.raw_target() as f32,
+                p.eq1_gain.raw_target() as f32,
+                p.eq1_q.raw_target() as f32,
+                p.eq1_type.value_i32(),
+            ),
+            (
+                p.eq2_freq.raw_target() as f32,
+                p.eq2_gain.raw_target() as f32,
+                p.eq2_q.raw_target() as f32,
+                p.eq2_type.value_i32(),
+            ),
+            (
+                p.eq3_freq.raw_target() as f32,
+                p.eq3_gain.raw_target() as f32,
+                p.eq3_q.raw_target() as f32,
+                p.eq3_type.value_i32(),
+            ),
+            (
+                p.eq4_freq.raw_target() as f32,
+                p.eq4_gain.raw_target() as f32,
+                p.eq4_q.raw_target() as f32,
+                p.eq4_type.value_i32(),
+            ),
+            (
+                p.eq5_freq.raw_target() as f32,
+                p.eq5_gain.raw_target() as f32,
+                p.eq5_q.raw_target() as f32,
+                p.eq5_type.value_i32(),
+            ),
         ];
         for (i, &(fc, g, q, t)) in vals.iter().enumerate() {
             set_band(&mut self.eq_l[i], t, fc, g, q, sr);
@@ -161,17 +307,34 @@ pub fn set_band(b: &mut Biquad, type_code: i32, fc: f32, gain: f32, q: f32, sr: 
 }
 
 pub fn band_type_label(type_code: i32) -> &'static str {
-    match type_code { 1 => "LSC", 2 => "PK", 3 => "HSC", _ => "OFF" }
+    match type_code {
+        1 => "LSC",
+        2 => "PK",
+        3 => "HSC",
+        _ => "OFF",
+    }
 }
 
 pub fn realism_label(code: i32) -> &'static str {
-    match code { 1 => "LIFELIKE", 2 => "HYPERREAL", _ => "STANDARD" }
+    match code {
+        1 => "LIFELIKE",
+        2 => "HYPERREAL",
+        _ => "STANDARD",
+    }
 }
 
 // ─── AutoEQ parser ───────────────────────────────────────────────────────────
 
-pub struct AutoEqFilter { pub type_code: i32, pub freq: f32, pub gain: f32, pub q: f32 }
-pub struct AutoEqProfile { pub preamp: f32, pub filters: Vec<AutoEqFilter> }
+pub struct AutoEqFilter {
+    pub type_code: i32,
+    pub freq: f32,
+    pub gain: f32,
+    pub q: f32,
+}
+pub struct AutoEqProfile {
+    pub preamp: f32,
+    pub filters: Vec<AutoEqFilter>,
+}
 
 pub fn parse_autoeq(content: &str) -> AutoEqProfile {
     let mut preamp = 0.0f32;
@@ -179,19 +342,44 @@ pub fn parse_autoeq(content: &str) -> AutoEqProfile {
     for line in content.lines() {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix("Preamp:") {
-            if let Some(v) = rest.split_whitespace().next().and_then(|t| t.parse::<f32>().ok()) { preamp = v; }
+            if let Some(v) = rest
+                .split_whitespace()
+                .next()
+                .and_then(|t| t.parse::<f32>().ok())
+            {
+                preamp = v;
+            }
             continue;
         }
-        if !line.starts_with("Filter") { continue; }
+        if !line.starts_with("Filter") {
+            continue;
+        }
         let toks: Vec<&str> = line.split_whitespace().collect();
-        if !toks.contains(&"ON") { continue; }
-        let type_code = if toks.iter().any(|t| *t == "LSC" || *t == "LS") { 1 }
-            else if toks.iter().any(|t| *t == "HSC" || *t == "HS") { 3 }
-            else if toks.iter().any(|t| *t == "PK" || *t == "PEQ") { 2 }
-            else { continue; };
-        let after = |kw: &str| toks.iter().position(|t| *t == kw).and_then(|i| toks.get(i+1)).and_then(|t| t.parse::<f32>().ok());
+        if !toks.contains(&"ON") {
+            continue;
+        }
+        let type_code = if toks.iter().any(|t| *t == "LSC" || *t == "LS") {
+            1
+        } else if toks.iter().any(|t| *t == "HSC" || *t == "HS") {
+            3
+        } else if toks.iter().any(|t| *t == "PK" || *t == "PEQ") {
+            2
+        } else {
+            continue;
+        };
+        let after = |kw: &str| {
+            toks.iter()
+                .position(|t| *t == kw)
+                .and_then(|i| toks.get(i + 1))
+                .and_then(|t| t.parse::<f32>().ok())
+        };
         if let (Some(freq), Some(gain), Some(q)) = (after("Fc"), after("Gain"), after("Q")) {
-            filters.push(AutoEqFilter { type_code, freq, gain, q });
+            filters.push(AutoEqFilter {
+                type_code,
+                freq,
+                gain,
+                q,
+            });
         }
     }
     AutoEqProfile { preamp, filters }
@@ -204,10 +392,17 @@ impl PluginLogic for Aether {
 
     fn reset(&mut self, sr: f64, _max: usize) {
         self.sample_rate = sr as f32;
-        self.params.shared.sample_rate.store(sr as f32, std::sync::atomic::Ordering::Release);
-        for b in self.eq_l.iter_mut().chain(self.eq_r.iter_mut()) { b.reset(); }
-        self.cf_lp_l = 0.0; self.cf_lp_r = 0.0;
-        self.cf_delay_l.fill(0.0); self.cf_delay_r.fill(0.0);
+        self.params
+            .shared
+            .sample_rate
+            .store(sr as f32, std::sync::atomic::Ordering::Release);
+        for b in self.eq_l.iter_mut().chain(self.eq_r.iter_mut()) {
+            b.reset();
+        }
+        self.cf_lp_l = 0.0;
+        self.cf_lp_r = 0.0;
+        self.cf_delay_l.fill(0.0);
+        self.cf_delay_r.fill(0.0);
         self.cf_delay_pos = 0;
         self.update_eq_coeffs();
     }
@@ -220,29 +415,49 @@ impl PluginLogic for Aether {
     ) -> ProcessStatus {
         let _ftz = FtzDazGuard::new();
 
-        if buffer.num_input_channels() < 2 { return ProcessStatus::Normal; }
+        if buffer.num_input_channels() < 2 {
+            return ProcessStatus::Normal;
+        }
         let num_samples = buffer.num_samples();
 
         let mut in_peak = 0.0f32;
-        for i in 0..num_samples { in_peak = in_peak.max(buffer.input(0)[i].abs()).max(buffer.input(1)[i].abs()); }
-        let in_db = if in_peak < 1e-9 { -90.0 } else { 20.0 * in_peak.log10() };
-        self.params.shared.input_peak.store(in_db, std::sync::atomic::Ordering::Release);
+        for i in 0..num_samples {
+            in_peak = in_peak
+                .max(buffer.input(0)[i].abs())
+                .max(buffer.input(1)[i].abs());
+        }
+        let in_db = if in_peak < 1e-9 {
+            -90.0
+        } else {
+            20.0 * in_peak.log10()
+        };
+        self.params
+            .shared
+            .input_peak
+            .store(in_db, std::sync::atomic::Ordering::Release);
 
         if self.params.bypass.value() {
-            for ch in 0..buffer.channels() { let (inp, out) = buffer.io(ch); out.copy_from_slice(inp); }
+            for ch in 0..buffer.channels() {
+                let (inp, out) = buffer.io(ch);
+                out.copy_from_slice(inp);
+            }
             return ProcessStatus::Normal;
         }
 
         self.update_eq_coeffs();
         let blend = self.params.blend.raw_target() as f32 / 100.0;
         let (itd_ms, cut_mul, feed_mul) = match self.params.cf_realism.value_i32() {
-            1 => (0.32, 0.85, 1.05), 2 => (0.45, 0.70, 1.15), _ => (0.22, 1.00, 1.00),
+            1 => (0.32, 0.85, 1.05),
+            2 => (0.45, 0.70, 1.15),
+            _ => (0.22, 1.00, 1.00),
         };
-        let cf_mix = ((self.params.cf_amount.raw_target() as f32 / 100.0) * 0.5 * feed_mul).min(0.75);
+        let cf_mix =
+            ((self.params.cf_amount.raw_target() as f32 / 100.0) * 0.5 * feed_mul).min(0.75);
         let cf_norm = ((self.params.cf_angle.raw_target() as f32 - 30.0) / 45.0).clamp(0.0, 1.0);
         let cf_fc = (700.0 + cf_norm * 1300.0) * cut_mul;
         let cf_a = 1.0 - (-2.0 * std::f32::consts::PI * cf_fc / self.sample_rate).exp();
-        let delay_samples = ((itd_ms * 0.001 * self.sample_rate).round() as usize).min(self.cf_delay_l.len() - 1);
+        let delay_samples =
+            ((itd_ms * 0.001 * self.sample_rate).round() as usize).min(self.cf_delay_l.len() - 1);
 
         for i in 0..num_samples {
             let in_l = buffer.input(0)[i];
@@ -250,14 +465,19 @@ impl PluginLogic for Aether {
 
             let mut eq_l = in_l;
             let mut eq_r = in_r;
-            for b in 0..NUM_BANDS { eq_l = self.eq_l[b].process(eq_l); eq_r = self.eq_r[b].process(eq_r); }
+            for b in 0..NUM_BANDS {
+                eq_l = self.eq_l[b].process(eq_l);
+                eq_r = self.eq_r[b].process(eq_r);
+            }
             let h_l = in_l + (eq_l - in_l) * blend;
             let h_r = in_r + (eq_r - in_r) * blend;
 
             let wp = self.cf_delay_pos;
-            self.cf_delay_l[wp] = h_l; self.cf_delay_r[wp] = h_r;
+            self.cf_delay_l[wp] = h_l;
+            self.cf_delay_r[wp] = h_r;
             let rp = (wp + self.cf_delay_l.len() - delay_samples) % self.cf_delay_l.len();
-            let del_l = self.cf_delay_l[rp]; let del_r = self.cf_delay_r[rp];
+            let del_l = self.cf_delay_l[rp];
+            let del_r = self.cf_delay_r[rp];
             self.cf_delay_pos = (wp + 1) % self.cf_delay_l.len();
 
             self.cf_lp_l += cf_a * (del_r - self.cf_lp_l);
@@ -274,7 +494,9 @@ impl PluginLogic for Aether {
         ProcessStatus::Normal
     }
 
-    fn save_state(&self) -> Vec<u8> { Vec::new() }
+    fn save_state(&self) -> Vec<u8> {
+        Vec::new()
+    }
     fn load_state(&mut self, data: &[u8]) -> Result<(), StateLoadError> {
         if let Some(params) = state_migration::try_parse_niceplug_state(data) {
             for (name, value) in params {
@@ -316,11 +538,9 @@ impl PluginLogic for Aether {
     fn editor(params: Arc<Self::Params>) -> Box<dyn Editor> {
         // Vizia migration (2026-07-05).
         let shared = params.shared.clone();
-        ViziaEditor::<AetherParams>::new(
-            params.clone(),
-            (WINDOW_W, WINDOW_H),
-            move |cx, lens| editor::build(cx, lens, params.clone(), shared.clone()),
-        )
+        ViziaEditor::<AetherParams>::new(params.clone(), (WINDOW_W, WINDOW_H), move |cx, lens| {
+            editor::build(cx, lens, params.clone(), shared.clone())
+        })
         .into_editor()
     }
 }

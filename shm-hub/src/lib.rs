@@ -264,7 +264,12 @@ fn try_claim(claimed: &AtomicU32, heartbeat: &AtomicU64, now_ms: u64) -> bool {
 /// slots don't need one since the multi-writer collision this guards against
 /// is specific to publishers racing to reclaim a stale relay slot). Returns
 /// the new generation on a won claim, `None` if the slot is live and held.
-fn try_claim_gen(claimed: &AtomicU32, heartbeat: &AtomicU64, generation: &AtomicU32, now_ms: u64) -> Option<u32> {
+fn try_claim_gen(
+    claimed: &AtomicU32,
+    heartbeat: &AtomicU64,
+    generation: &AtomicU32,
+    now_ms: u64,
+) -> Option<u32> {
     let mut c = claimed.load(Ordering::Acquire);
     if c == 1 {
         let hb = heartbeat.load(Ordering::Acquire);
@@ -313,7 +318,10 @@ impl RelayHub {
             }
         }
 
-        Some(RelayHub { _shmem: shmem, shared })
+        Some(RelayHub {
+            _shmem: shmem,
+            shared,
+        })
     }
 
     // ---- Publisher registry (writer = producer, reader = consumer) -----------
@@ -411,7 +419,17 @@ impl RelayHub {
     ///
     /// If `bins` or `band_energy` are shorter than expected, the rest is zero-filled
     /// (spectrum bins are filled with -90.0 dB, band energy with -90.0 dB).
-    pub fn write(&self, slot: u8, generation: u32, label: &str, target: &str, bins: &[f32], band_energy: &[f32], now_ms: u64) -> bool {
+    #[allow(clippy::too_many_arguments)]
+    pub fn write(
+        &self,
+        slot: u8,
+        generation: u32,
+        label: &str,
+        target: &str,
+        bins: &[f32],
+        band_energy: &[f32],
+        now_ms: u64,
+    ) -> bool {
         let idx = slot as usize;
         if idx >= MAX_SLOTS {
             return false;
@@ -575,8 +593,7 @@ impl RelayHub {
                     if active != 0 {
                         let target = String::from_utf8_lossy(&target_buf[..target_len]);
                         if target.is_empty() || target == my_name {
-                            let name =
-                                String::from_utf8_lossy(&name_buf[..name_len]).into_owned();
+                            let name = String::from_utf8_lossy(&name_buf[..name_len]).into_owned();
                             out.push((name, bins));
                         }
                     }
@@ -684,7 +701,8 @@ impl RelayHub {
                 if seq1 == s.seq.load(Ordering::Acquire) {
                     let slot_name = String::from_utf8_lossy(&name_buf[..name_len]);
                     if slot_name == name {
-                        return self.read_band_energy(idx as u8, now_ms)
+                        return self
+                            .read_band_energy(idx as u8, now_ms)
                             .map(|e| (idx as u8, e));
                     }
                 }
@@ -792,7 +810,12 @@ impl RelayHub {
 
     /// Read one consumer slot's name if it is live and non-empty.
     /// Returns the name length. Allocation-free — safe on the audio thread.
-    fn read_consumer_slot(&self, idx: usize, now_ms: u64, out: &mut [u8; MAX_NAME_LEN]) -> Option<usize> {
+    fn read_consumer_slot(
+        &self,
+        idx: usize,
+        now_ms: u64,
+        out: &mut [u8; MAX_NAME_LEN],
+    ) -> Option<usize> {
         let s = unsafe { &(*self.shared).consumers[idx] };
         let hb = s.heartbeat_ms.load(Ordering::Acquire);
         if hb == 0 || now_ms.wrapping_sub(hb) > STALE_MS {
@@ -804,7 +827,11 @@ impl RelayHub {
                 continue;
             }
             let name_len = unsafe {
-                std::ptr::copy_nonoverlapping(s.name.get() as *const u8, out.as_mut_ptr(), MAX_NAME_LEN);
+                std::ptr::copy_nonoverlapping(
+                    s.name.get() as *const u8,
+                    out.as_mut_ptr(),
+                    MAX_NAME_LEN,
+                );
                 (*s.name_len.get() as usize).min(MAX_NAME_LEN)
             };
             fence(Ordering::Acquire);

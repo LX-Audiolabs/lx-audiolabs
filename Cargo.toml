@@ -46,13 +46,6 @@ truce-clap = { path = "truce-clap-local" }
 truce-params = { git = "https://github.com/truce-audio/truce", tag = "v3.1.2" }
 truce-core = { git = "https://github.com/truce-audio/truce", tag = "v3.1.2" }
 
-# Local forks of baseview and truce-gui/truce-gpu that carry small
-# Windows-specific fixes (DPI awareness and wgpu GL fallback) until the
-# changes land upstream.
-[patch."https://github.com/truce-audio/truce"]
-truce-gui = { path = "truce-local/truce-gui" }
-truce-gpu = { path = "truce-local/truce-gpu" }
-
 [patch."https://github.com/vizia/baseview.git"]
 baseview = { path = "baseview-local" }
 

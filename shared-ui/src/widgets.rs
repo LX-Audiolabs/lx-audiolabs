@@ -7,6 +7,9 @@ use vizia::vg;
 
 use crate::canvas::col;
 
+/// Shorthand for the boxed callback used by gesture-aware widgets.
+type GestureCallback = Box<dyn Fn(&mut EventContext, Gesture)>;
+
 /// DAW-automation gesture lifecycle.
 #[derive(Debug, Clone, Copy)]
 pub enum Gesture {
@@ -30,7 +33,7 @@ pub struct KnobView {
     /// Tracked manually because Vizia's `hovered` check compares against
     /// `cx.current()`, which isn't always the knob itself during drag.
     hovered: bool,
-    on_gesture: Box<dyn Fn(&mut EventContext, Gesture)>,
+    on_gesture: GestureCallback,
 }
 
 impl KnobView {
@@ -61,7 +64,17 @@ impl KnobView {
     }
 }
 
-fn knob_arc(canvas: &vg::Canvas, cx: f32, cy: f32, inner_r: f32, outer_r: f32, a_start: f32, a_end: f32, color: vg::Color) {
+#[allow(clippy::too_many_arguments)]
+fn knob_arc(
+    canvas: &vg::Canvas,
+    cx: f32,
+    cy: f32,
+    inner_r: f32,
+    outer_r: f32,
+    a_start: f32,
+    a_end: f32,
+    color: vg::Color,
+) {
     const N: usize = 48;
     let da = (a_end - a_start) / N as f32;
     let mut path = vg::PathBuilder::new();
@@ -179,7 +192,16 @@ impl View for KnobView {
         let r_inner = r * 0.72;
         let r_outer = r * 0.96;
 
-        knob_arc(canvas, kcx, kcy, r_inner, r_outer, a_start, a_start + a_sweep, col(0.22, 0.22, 0.22, 1.0));
+        knob_arc(
+            canvas,
+            kcx,
+            kcy,
+            r_inner,
+            r_outer,
+            a_start,
+            a_start + a_sweep,
+            col(0.22, 0.22, 0.22, 1.0),
+        );
 
         let a_center = a_start + a_sweep * 0.5;
 
@@ -190,7 +212,16 @@ impl View for KnobView {
                 } else {
                     (a_start + self.value_norm * a_sweep, a_center)
                 };
-                knob_arc(canvas, kcx, kcy, r_inner, r_outer, arc_s, arc_e, col(1.0, 0.45, 0.1, 1.0));
+                knob_arc(
+                    canvas,
+                    kcx,
+                    kcy,
+                    r_inner,
+                    r_outer,
+                    arc_s,
+                    arc_e,
+                    col(1.0, 0.45, 0.1, 1.0),
+                );
             }
             let mut stroke = vg::Paint::default();
             stroke.set_anti_alias(true);
@@ -198,12 +229,27 @@ impl View for KnobView {
             stroke.set_stroke_width(1.5);
             stroke.set_color(col(1.0, 1.0, 1.0, 0.25));
             canvas.draw_line(
-                (kcx + r * 0.68 * a_center.cos(), kcy + r * 0.68 * a_center.sin()),
-                (kcx + r_outer * a_center.cos(), kcy + r_outer * a_center.sin()),
+                (
+                    kcx + r * 0.68 * a_center.cos(),
+                    kcy + r * 0.68 * a_center.sin(),
+                ),
+                (
+                    kcx + r_outer * a_center.cos(),
+                    kcy + r_outer * a_center.sin(),
+                ),
                 &stroke,
             );
         } else if self.value_norm > 0.005 {
-            knob_arc(canvas, kcx, kcy, r_inner, r_outer, a_start, a_start + self.value_norm * a_sweep, col(1.0, 0.45, 0.1, 1.0));
+            knob_arc(
+                canvas,
+                kcx,
+                kcy,
+                r_inner,
+                r_outer,
+                a_start,
+                a_start + self.value_norm * a_sweep,
+                col(1.0, 0.45, 0.1, 1.0),
+            );
         }
 
         let a_ind = a_start + self.value_norm * a_sweep;
@@ -211,7 +257,11 @@ impl View for KnobView {
         let mut dot = vg::Paint::default();
         dot.set_anti_alias(true);
         dot.set_color(vg::Color::WHITE);
-        canvas.draw_circle((kcx + ind_r * a_ind.cos(), kcy + ind_r * a_ind.sin()), 2.5, &dot);
+        canvas.draw_circle(
+            (kcx + ind_r * a_ind.cos(), kcy + ind_r * a_ind.sin()),
+            2.5,
+            &dot,
+        );
 
         if self.hovered {
             let mut hover_ring = vg::Paint::default();
@@ -250,7 +300,7 @@ pub struct HSliderView {
     dragging: bool,
     last_click: Option<Instant>,
     hovered: bool,
-    on_gesture: Box<dyn Fn(&mut EventContext, Gesture)>,
+    on_gesture: GestureCallback,
 }
 
 impl HSliderView {
@@ -263,10 +313,22 @@ impl HSliderView {
         on_gesture: impl Fn(&mut EventContext, Gesture) + 'static,
     ) -> Handle<'_, Self> {
         let span = max - min;
-        let value_norm = if span.abs() < 1e-9 { 0.0 } else { ((value - min) / span).clamp(0.0, 1.0) };
-        let default_norm = if span.abs() < 1e-9 { 0.0 } else { ((default - min) / span).clamp(0.0, 1.0) };
+        let value_norm = if span.abs() < 1e-9 {
+            0.0
+        } else {
+            ((value - min) / span).clamp(0.0, 1.0)
+        };
+        let default_norm = if span.abs() < 1e-9 {
+            0.0
+        } else {
+            ((default - min) / span).clamp(0.0, 1.0)
+        };
         let bipolar = min < 0.0 && max > 0.0;
-        let center_norm = if bipolar { ((0.0 - min) / span).clamp(0.0, 1.0) } else { 0.0 };
+        let center_norm = if bipolar {
+            ((0.0 - min) / span).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         Self {
             value_norm,
             default_norm,
@@ -284,7 +346,11 @@ impl HSliderView {
 
     fn val_at(&self, cx: &EventContext, x: f32) -> f32 {
         let bounds = cx.bounds();
-        let n = if bounds.w > 0.0 { ((x - bounds.x) / bounds.w).clamp(0.0, 1.0) } else { 0.0 };
+        let n = if bounds.w > 0.0 {
+            ((x - bounds.x) / bounds.w).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         self.min + n * (self.max - self.min)
     }
 }
@@ -345,7 +411,11 @@ impl View for HSliderView {
                     } else {
                         let new_val = self.val_at(cx, *x);
                         let span = self.max - self.min;
-                        self.value_norm = if span.abs() < 1e-9 { 0.0 } else { ((new_val - self.min) / span).clamp(0.0, 1.0) };
+                        self.value_norm = if span.abs() < 1e-9 {
+                            0.0
+                        } else {
+                            ((new_val - self.min) / span).clamp(0.0, 1.0)
+                        };
                         (self.on_gesture)(cx, Gesture::Change(new_val));
                         cx.needs_redraw();
                     }
@@ -382,7 +452,11 @@ impl View for HSliderView {
         if self.bipolar {
             let cx_px = self.center_norm * w;
             let hx = (self.value_norm * w).clamp(0.0, w);
-            let (left, right) = if hx >= cx_px { (cx_px, hx) } else { (hx, cx_px) };
+            let (left, right) = if hx >= cx_px {
+                (cx_px, hx)
+            } else {
+                (hx, cx_px)
+            };
             if right - left > 0.5 {
                 canvas.draw_rect(vg::Rect::new(left, ty, right, ty + track_h), &amber);
             }

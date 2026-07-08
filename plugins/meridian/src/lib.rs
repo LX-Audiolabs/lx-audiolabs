@@ -7,18 +7,20 @@
 //   HPF/LPF → 5-band Series EQ → Tilt → Exciter → Compressor →
 //   Warmth → Inflate → Pan → Stereo Width → Mono/Delta → Gain → clamp
 
+use realfft::RealFftPlanner;
+use shared_dsp::state_migration;
+use std::f32::consts::FRAC_PI_4;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use truce::prelude::*;
 use truce_core::editor::Editor;
 use truce_core::state::StateLoadError;
 use truce_vizia::ViziaEditor;
-use std::sync::Arc;
-use std::f32::consts::FRAC_PI_4;
-use std::sync::atomic::Ordering;
-use shared_dsp::state_migration;
-use realfft::RealFftPlanner;
 
-use shared_dsp::{Biquad, LR2Crossover, TiltEq, Compressor, AutoLoudMeter, DBTP_CEILING, FtzDazGuard};
-use shared_analysis::{SharedState, SPECTRUM_BINS, SCOPE_BUFFER_LEN, SnapFFT, SnapMode};
+use shared_analysis::{SCOPE_BUFFER_LEN, SPECTRUM_BINS, SharedState, SnapFFT, SnapMode};
+use shared_dsp::{
+    AutoLoudMeter, Biquad, Compressor, DBTP_CEILING, FtzDazGuard, LR2Crossover, TiltEq,
+};
 
 mod editor;
 mod vizia_canvas;
@@ -29,20 +31,30 @@ const WINDOW_H: u32 = 660;
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 #[inline]
-fn db_to_gain(db: f32) -> f32 { 10.0_f32.powf(db / 20.0) }
+fn db_to_gain(db: f32) -> f32 {
+    10.0_f32.powf(db / 20.0)
+}
 
 #[inline]
 fn gain_to_db(gain: f32) -> f32 {
-    if gain < 1e-9 { -90.0 } else { 20.0 * gain.log10() }
+    if gain < 1e-9 {
+        -90.0
+    } else {
+        20.0 * gain.log10()
+    }
 }
 
 /// Soft clipping — odd harmonics (Exciter).
 #[inline]
 fn soft_clip(x: f32) -> f32 {
     let abs_x = x.abs();
-    if abs_x <= 1.0 { x - (x * x * x) / 3.0 }
-    else if x > 0.0 { 2.0 / 3.0 }
-    else { -2.0 / 3.0 }
+    if abs_x <= 1.0 {
+        x - (x * x * x) / 3.0
+    } else if x > 0.0 {
+        2.0 / 3.0
+    } else {
+        -2.0 / 3.0
+    }
 }
 
 /// Tube-style saturation — DC bias shifts operating point for even harmonics (Warmth).
@@ -79,91 +91,297 @@ fn inflate_shape(x: f32, curve: f32) -> f32 {
 #[derive(Params)]
 pub struct MeridianParams {
     // HPF / LPF
-    #[param(name = "Low Cut", default = 2.0, range = "log(2.0, 2000.0)", unit = "Hz", group = "Filter")]
+    #[param(
+        name = "Low Cut",
+        default = 2.0,
+        range = "log(2.0, 2000.0)",
+        unit = "Hz",
+        group = "Filter"
+    )]
     pub hpf_freq: FloatParam,
-    #[param(name = "High Cut", default = 35000.0, range = "log(200.0, 35000.0)", unit = "Hz", group = "Filter")]
+    #[param(
+        name = "High Cut",
+        default = 35000.0,
+        range = "log(200.0, 35000.0)",
+        unit = "Hz",
+        group = "Filter"
+    )]
     pub lpf_freq: FloatParam,
-    #[param(name = "Cut Slope", default = 0, range = "discrete(0, 1)", group = "Filter")]
+    #[param(
+        name = "Cut Slope",
+        default = 0,
+        range = "discrete(0, 1)",
+        group = "Filter"
+    )]
     pub cut_slope: IntParam,
 
     // Bass EQ shelf
-    #[param(name = "Lo Shelf Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "EQ/Lo Shelf")]
+    #[param(
+        name = "Lo Shelf Gain",
+        default = 0.0,
+        range = "linear(-12.0, 12.0)",
+        unit = "dB",
+        smooth = "linear(20)",
+        group = "EQ/Lo Shelf"
+    )]
     pub bass_gain: FloatParam,
-    #[param(name = "Lo Shelf Slope", default = 1, range = "discrete(0, 2)", group = "EQ/Lo Shelf")]
+    #[param(
+        name = "Lo Shelf Slope",
+        default = 1,
+        range = "discrete(0, 2)",
+        group = "EQ/Lo Shelf"
+    )]
     pub bass_slope: IntParam,
 
     // Lo-Mid EQ
-    #[param(name = "Lo-Mid Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "EQ/Lo-Mid")]
+    #[param(
+        name = "Lo-Mid Gain",
+        default = 0.0,
+        range = "linear(-12.0, 12.0)",
+        unit = "dB",
+        smooth = "linear(20)",
+        group = "EQ/Lo-Mid"
+    )]
     pub lo_mid_gain: FloatParam,
-    #[param(name = "Lo-Mid Slope", default = 1, range = "discrete(0, 2)", group = "EQ/Lo-Mid")]
+    #[param(
+        name = "Lo-Mid Slope",
+        default = 1,
+        range = "discrete(0, 2)",
+        group = "EQ/Lo-Mid"
+    )]
     pub lo_mid_slope: IntParam,
 
     // Mid EQ
-    #[param(name = "Mid Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "EQ/Mid")]
+    #[param(
+        name = "Mid Gain",
+        default = 0.0,
+        range = "linear(-12.0, 12.0)",
+        unit = "dB",
+        smooth = "linear(20)",
+        group = "EQ/Mid"
+    )]
     pub mid_gain: FloatParam,
-    #[param(name = "Mid Slope", default = 1, range = "discrete(0, 2)", group = "EQ/Mid")]
+    #[param(
+        name = "Mid Slope",
+        default = 1,
+        range = "discrete(0, 2)",
+        group = "EQ/Mid"
+    )]
     pub mid_slope: IntParam,
 
     // High EQ
-    #[param(name = "Hi-Mid Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "EQ/Hi-Mid")]
+    #[param(
+        name = "Hi-Mid Gain",
+        default = 0.0,
+        range = "linear(-12.0, 12.0)",
+        unit = "dB",
+        smooth = "linear(20)",
+        group = "EQ/Hi-Mid"
+    )]
     pub high_gain: FloatParam,
-    #[param(name = "Hi-Mid Slope", default = 1, range = "discrete(0, 2)", group = "EQ/Hi-Mid")]
+    #[param(
+        name = "Hi-Mid Slope",
+        default = 1,
+        range = "discrete(0, 2)",
+        group = "EQ/Hi-Mid"
+    )]
     pub high_slope: IntParam,
 
     // Excite (high shelf)
-    #[param(name = "Hi Shelf Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "EQ/Hi Shelf")]
+    #[param(
+        name = "Hi Shelf Gain",
+        default = 0.0,
+        range = "linear(-12.0, 12.0)",
+        unit = "dB",
+        smooth = "linear(20)",
+        group = "EQ/Hi Shelf"
+    )]
     pub excite_gain: FloatParam,
-    #[param(name = "Hi Shelf Slope", default = 1, range = "discrete(0, 2)", group = "EQ/Hi Shelf")]
+    #[param(
+        name = "Hi Shelf Slope",
+        default = 1,
+        range = "discrete(0, 2)",
+        group = "EQ/Hi Shelf"
+    )]
     pub excite_slope: IntParam,
 
     // EQ band frequencies
-    #[param(name = "Lo Shelf Freq", default = 80.0, range = "log(40.0, 200.0)", unit = "Hz", group = "EQ/Lo Shelf")]
+    #[param(
+        name = "Lo Shelf Freq",
+        default = 80.0,
+        range = "log(40.0, 200.0)",
+        unit = "Hz",
+        group = "EQ/Lo Shelf"
+    )]
     pub eq_freq_1: FloatParam,
-    #[param(name = "Lo-Mid Freq", default = 300.0, range = "log(150.0, 800.0)", unit = "Hz", group = "EQ/Lo-Mid")]
+    #[param(
+        name = "Lo-Mid Freq",
+        default = 300.0,
+        range = "log(150.0, 800.0)",
+        unit = "Hz",
+        group = "EQ/Lo-Mid"
+    )]
     pub eq_freq_2: FloatParam,
-    #[param(name = "Mid Freq", default = 1000.0, range = "log(500.0, 3000.0)", unit = "Hz", group = "EQ/Mid")]
+    #[param(
+        name = "Mid Freq",
+        default = 1000.0,
+        range = "log(500.0, 3000.0)",
+        unit = "Hz",
+        group = "EQ/Mid"
+    )]
     pub eq_freq_3: FloatParam,
-    #[param(name = "Hi-Mid Freq", default = 4000.0, range = "log(2000.0, 10000.0)", unit = "Hz", group = "EQ/Hi-Mid")]
+    #[param(
+        name = "Hi-Mid Freq",
+        default = 4000.0,
+        range = "log(2000.0, 10000.0)",
+        unit = "Hz",
+        group = "EQ/Hi-Mid"
+    )]
     pub eq_freq_4: FloatParam,
-    #[param(name = "Hi Shelf Freq", default = 12000.0, range = "log(6000.0, 20000.0)", unit = "Hz", group = "EQ/Hi Shelf")]
+    #[param(
+        name = "Hi Shelf Freq",
+        default = 12000.0,
+        range = "log(6000.0, 20000.0)",
+        unit = "Hz",
+        group = "EQ/Hi Shelf"
+    )]
     pub eq_freq_5: FloatParam,
 
     // Tilt EQ
-    #[param(name = "Tilt", default = 0.0, range = "linear(-1.5, 1.5)", unit = "dB", group = "Tilt")]
+    #[param(
+        name = "Tilt",
+        default = 0.0,
+        range = "linear(-1.5, 1.5)",
+        unit = "dB",
+        group = "Tilt"
+    )]
     pub tilt_gain: FloatParam,
 
     // Warmth (tube saturation)
-    #[param(name = "Warmth Drive", default = 0.0, range = "linear(0.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "Saturator")]
+    #[param(
+        name = "Warmth Drive",
+        default = 0.0,
+        range = "linear(0.0, 12.0)",
+        unit = "dB",
+        smooth = "linear(20)",
+        group = "Saturator"
+    )]
     pub warmth_drive: FloatParam,
-    #[param(name = "Warmth Mix", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Saturator")]
+    #[param(
+        name = "Warmth Mix",
+        default = 0.0,
+        range = "linear(0.0, 100.0)",
+        unit = "%",
+        format = "fmt_pct",
+        smooth = "linear(20)",
+        group = "Saturator"
+    )]
     pub warmth_mix: FloatParam,
 
     // Exciter (HF saturation)
-    #[param(name = "Excite Amount", default = 0.0, range = "linear(0.0, 30.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Exciter")]
+    #[param(
+        name = "Excite Amount",
+        default = 0.0,
+        range = "linear(0.0, 30.0)",
+        unit = "%",
+        format = "fmt_pct",
+        smooth = "linear(20)",
+        group = "Exciter"
+    )]
     pub excite_amount: FloatParam,
-    #[param(name = "Excite Blend", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Exciter")]
+    #[param(
+        name = "Excite Blend",
+        default = 0.0,
+        range = "linear(0.0, 100.0)",
+        unit = "%",
+        format = "fmt_pct",
+        smooth = "linear(20)",
+        group = "Exciter"
+    )]
     pub excite_blend: FloatParam,
-    #[param(name = "Excite Freq", default = 8000.0, range = "log(6000.0, 12000.0)", unit = "Hz", group = "Exciter")]
+    #[param(
+        name = "Excite Freq",
+        default = 8000.0,
+        range = "log(6000.0, 12000.0)",
+        unit = "Hz",
+        group = "Exciter"
+    )]
     pub excite_freq: FloatParam,
 
     // Compressor
-    #[param(name = "Comp Threshold", default = 0.0, range = "linear(-30.0, 0.0)", unit = "dB", smooth = "linear(20)", group = "Compressor")]
+    #[param(
+        name = "Comp Threshold",
+        default = 0.0,
+        range = "linear(-30.0, 0.0)",
+        unit = "dB",
+        smooth = "linear(20)",
+        group = "Compressor"
+    )]
     pub comp_threshold: FloatParam,
-    #[param(name = "Comp Mix", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Compressor")]
+    #[param(
+        name = "Comp Mix",
+        default = 0.0,
+        range = "linear(0.0, 100.0)",
+        unit = "%",
+        format = "fmt_pct",
+        smooth = "linear(20)",
+        group = "Compressor"
+    )]
     pub comp_mix: FloatParam,
-    #[param(name = "Comp Attack", default = 15.0, range = "linear(5.0, 50.0)", unit = "ms", smooth = "linear(20)", group = "Compressor")]
+    #[param(
+        name = "Comp Attack",
+        default = 15.0,
+        range = "linear(5.0, 50.0)",
+        unit = "ms",
+        smooth = "linear(20)",
+        group = "Compressor"
+    )]
     pub comp_attack: FloatParam,
-    #[param(name = "Comp Release", default = 120.0, range = "linear(50.0, 300.0)", unit = "ms", smooth = "linear(20)", group = "Compressor")]
+    #[param(
+        name = "Comp Release",
+        default = 120.0,
+        range = "linear(50.0, 300.0)",
+        unit = "ms",
+        smooth = "linear(20)",
+        group = "Compressor"
+    )]
     pub comp_release: FloatParam,
-    #[param(name = "Comp Ratio", default = 2.0, range = "linear(1.5, 4.0)", smooth = "linear(20)", group = "Compressor")]
+    #[param(
+        name = "Comp Ratio",
+        default = 2.0,
+        range = "linear(1.5, 4.0)",
+        smooth = "linear(20)",
+        group = "Compressor"
+    )]
     pub comp_character: FloatParam,
-    #[param(name = "Comp Makeup", default = 0.0, range = "linear(0.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "Compressor")]
+    #[param(
+        name = "Comp Makeup",
+        default = 0.0,
+        range = "linear(0.0, 12.0)",
+        unit = "dB",
+        smooth = "linear(20)",
+        group = "Compressor"
+    )]
     pub comp_makeup: FloatParam,
 
     // Inflate (Oxford-Inflator-inspired loudness/density waveshaper)
-    #[param(name = "Inflate Effect", default = 0.0, range = "linear(0.0, 100.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Inflate")]
+    #[param(
+        name = "Inflate Effect",
+        default = 0.0,
+        range = "linear(0.0, 100.0)",
+        unit = "%",
+        format = "fmt_pct",
+        smooth = "linear(20)",
+        group = "Inflate"
+    )]
     pub inflate_effect: FloatParam,
-    #[param(name = "Inflate Curve", default = 0.0, range = "linear(-50.0, 50.0)", smooth = "linear(20)", group = "Inflate")]
+    #[param(
+        name = "Inflate Curve",
+        default = 0.0,
+        range = "linear(-50.0, 50.0)",
+        smooth = "linear(20)",
+        group = "Inflate"
+    )]
     pub inflate_curve: FloatParam,
     #[param(name = "Inflate Band Split", default = 0, group = "Inflate")]
     pub inflate_band_split: BoolParam,
@@ -171,13 +389,34 @@ pub struct MeridianParams {
     pub inflate_clip: BoolParam,
 
     // Stereo Width
-    #[param(name = "Stereo Width", default = 100.0, range = "linear(0.0, 200.0)", unit = "%", format = "fmt_pct", smooth = "linear(20)", group = "Stereo/Routing")]
+    #[param(
+        name = "Stereo Width",
+        default = 100.0,
+        range = "linear(0.0, 200.0)",
+        unit = "%",
+        format = "fmt_pct",
+        smooth = "linear(20)",
+        group = "Stereo/Routing"
+    )]
     pub stereo_width: FloatParam,
     // Pan
-    #[param(name = "Pan", default = 0.0, range = "linear(-1.0, 1.0)", smooth = "linear(20)", group = "Stereo/Routing")]
+    #[param(
+        name = "Pan",
+        default = 0.0,
+        range = "linear(-1.0, 1.0)",
+        smooth = "linear(20)",
+        group = "Stereo/Routing"
+    )]
     pub pan: FloatParam,
     // Output Gain
-    #[param(name = "Output Gain", default = 0.0, range = "linear(-12.0, 12.0)", unit = "dB", smooth = "linear(20)", group = "Stereo/Routing")]
+    #[param(
+        name = "Output Gain",
+        default = 0.0,
+        range = "linear(-12.0, 12.0)",
+        unit = "dB",
+        smooth = "linear(20)",
+        group = "Stereo/Routing"
+    )]
     pub output_gain: FloatParam,
 
     // States
@@ -209,39 +448,60 @@ pub struct Meridian {
     params: Arc<MeridianParams>,
 
     // HPF/LPF
-    hpf_l: Biquad, hpf_r: Biquad,
-    lpf_l: Biquad, lpf_r: Biquad,
-    hpf2_l: Biquad, hpf2_r: Biquad,
-    lpf2_l: Biquad, lpf2_r: Biquad,
+    hpf_l: Biquad,
+    hpf_r: Biquad,
+    lpf_l: Biquad,
+    lpf_r: Biquad,
+    hpf2_l: Biquad,
+    hpf2_r: Biquad,
+    lpf2_l: Biquad,
+    lpf2_r: Biquad,
 
     // EQ bands
-    bass_l: Biquad, bass_r: Biquad,
-    lo_mid_l: Biquad, lo_mid_r: Biquad,
-    mid_l: Biquad, mid_r: Biquad,
-    high_l: Biquad, high_r: Biquad,
-    excite_l: Biquad, excite_r: Biquad,
+    bass_l: Biquad,
+    bass_r: Biquad,
+    lo_mid_l: Biquad,
+    lo_mid_r: Biquad,
+    mid_l: Biquad,
+    mid_r: Biquad,
+    high_l: Biquad,
+    high_r: Biquad,
+    excite_l: Biquad,
+    excite_r: Biquad,
 
-    tilt_l: TiltEq, tilt_r: TiltEq,
+    tilt_l: TiltEq,
+    tilt_r: TiltEq,
 
-    excite_hp_l: Biquad, excite_hp_r: Biquad,
+    excite_hp_l: Biquad,
+    excite_hp_r: Biquad,
 
     compressor: Compressor,
 
     // Inflate band-split (LF/MF/HF, Linkwitz-Riley, sums flat)
-    xo_inflate_lo_l: LR2Crossover, xo_inflate_lo_r: LR2Crossover,
-    xo_inflate_hi_l: LR2Crossover, xo_inflate_hi_r: LR2Crossover,
+    xo_inflate_lo_l: LR2Crossover,
+    xo_inflate_lo_r: LR2Crossover,
+    xo_inflate_hi_l: LR2Crossover,
+    xo_inflate_hi_r: LR2Crossover,
 
     // Crossover analysis (for GUI visualizer)
-    xo_bass_mid_l: LR2Crossover, xo_bass_mid_r: LR2Crossover,
-    xo_low_bass_l: LR2Crossover, xo_low_bass_r: LR2Crossover,
-    xo_mid_high_l: LR2Crossover, xo_mid_high_r: LR2Crossover,
-    xo_highmid_high_l: LR2Crossover, xo_highmid_high_r: LR2Crossover,
+    xo_bass_mid_l: LR2Crossover,
+    xo_bass_mid_r: LR2Crossover,
+    xo_low_bass_l: LR2Crossover,
+    xo_low_bass_r: LR2Crossover,
+    xo_mid_high_l: LR2Crossover,
+    xo_mid_high_r: LR2Crossover,
+    xo_highmid_high_l: LR2Crossover,
+    xo_highmid_high_r: LR2Crossover,
 
     // Smoothed states
     correlation_decay_coef: f32,
     smoothed_band_power: [f32; 5],
-    corr_avg_lr: f32, corr_avg_l2: f32, corr_avg_r2: f32,
-    peak_hold_value: f32, peak_hold_l_value: f32, peak_hold_r_value: f32,
+    corr_avg_lr: f32,
+    corr_avg_l2: f32,
+    corr_avg_r2: f32,
+    peak_hold_value: f32,
+    peak_hold_l_value: f32,
+    peak_hold_r_value: f32,
 
     // AUTO LOUD
     auto_loud_in: AutoLoudMeter,
@@ -265,14 +525,26 @@ pub struct Meridian {
     snap_fft: SnapFFT,
 
     // Dirty-flag caches
-    cached_hpf_freq: f32, cached_lpf_freq: f32, cached_cut_slope: i64,
-    cached_bass_gain: f32, cached_bass_slope: i64,
-    cached_lo_mid_gain: f32, cached_lo_mid_slope: i64,
-    cached_mid_gain: f32, cached_mid_slope: i64,
-    cached_high_gain: f32, cached_high_slope: i64,
-    cached_excite_gain: f32, cached_excite_slope: i64,
-    cached_eq_freq_1: f32, cached_eq_freq_2: f32, cached_eq_freq_3: f32, cached_eq_freq_4: f32, cached_eq_freq_5: f32,
-    cached_tilt_gain: f32, cached_excite_freq: f32,
+    cached_hpf_freq: f32,
+    cached_lpf_freq: f32,
+    cached_cut_slope: i64,
+    cached_bass_gain: f32,
+    cached_bass_slope: i64,
+    cached_lo_mid_gain: f32,
+    cached_lo_mid_slope: i64,
+    cached_mid_gain: f32,
+    cached_mid_slope: i64,
+    cached_high_gain: f32,
+    cached_high_slope: i64,
+    cached_excite_gain: f32,
+    cached_excite_slope: i64,
+    cached_eq_freq_1: f32,
+    cached_eq_freq_2: f32,
+    cached_eq_freq_3: f32,
+    cached_eq_freq_4: f32,
+    cached_eq_freq_5: f32,
+    cached_tilt_gain: f32,
+    cached_excite_freq: f32,
     cached_sample_rate: f32,
 }
 
@@ -281,32 +553,54 @@ impl Meridian {
         let fft_size = SPECTRUM_BINS * 2;
         Self {
             params,
-            hpf_l: Biquad::new(), hpf_r: Biquad::new(),
-            lpf_l: Biquad::new(), lpf_r: Biquad::new(),
-            hpf2_l: Biquad::new(), hpf2_r: Biquad::new(),
-            lpf2_l: Biquad::new(), lpf2_r: Biquad::new(),
-            bass_l: Biquad::new(), bass_r: Biquad::new(),
-            lo_mid_l: Biquad::new(), lo_mid_r: Biquad::new(),
-            mid_l: Biquad::new(), mid_r: Biquad::new(),
-            high_l: Biquad::new(), high_r: Biquad::new(),
-            excite_l: Biquad::new(), excite_r: Biquad::new(),
-            tilt_l: TiltEq::new(), tilt_r: TiltEq::new(),
-            excite_hp_l: Biquad::new(), excite_hp_r: Biquad::new(),
+            hpf_l: Biquad::new(),
+            hpf_r: Biquad::new(),
+            lpf_l: Biquad::new(),
+            lpf_r: Biquad::new(),
+            hpf2_l: Biquad::new(),
+            hpf2_r: Biquad::new(),
+            lpf2_l: Biquad::new(),
+            lpf2_r: Biquad::new(),
+            bass_l: Biquad::new(),
+            bass_r: Biquad::new(),
+            lo_mid_l: Biquad::new(),
+            lo_mid_r: Biquad::new(),
+            mid_l: Biquad::new(),
+            mid_r: Biquad::new(),
+            high_l: Biquad::new(),
+            high_r: Biquad::new(),
+            excite_l: Biquad::new(),
+            excite_r: Biquad::new(),
+            tilt_l: TiltEq::new(),
+            tilt_r: TiltEq::new(),
+            excite_hp_l: Biquad::new(),
+            excite_hp_r: Biquad::new(),
             compressor: Compressor::new(),
-            xo_inflate_lo_l: LR2Crossover::new(), xo_inflate_lo_r: LR2Crossover::new(),
-            xo_inflate_hi_l: LR2Crossover::new(), xo_inflate_hi_r: LR2Crossover::new(),
-            xo_bass_mid_l: LR2Crossover::new(), xo_bass_mid_r: LR2Crossover::new(),
-            xo_low_bass_l: LR2Crossover::new(), xo_low_bass_r: LR2Crossover::new(),
-            xo_mid_high_l: LR2Crossover::new(), xo_mid_high_r: LR2Crossover::new(),
-            xo_highmid_high_l: LR2Crossover::new(), xo_highmid_high_r: LR2Crossover::new(),
+            xo_inflate_lo_l: LR2Crossover::new(),
+            xo_inflate_lo_r: LR2Crossover::new(),
+            xo_inflate_hi_l: LR2Crossover::new(),
+            xo_inflate_hi_r: LR2Crossover::new(),
+            xo_bass_mid_l: LR2Crossover::new(),
+            xo_bass_mid_r: LR2Crossover::new(),
+            xo_low_bass_l: LR2Crossover::new(),
+            xo_low_bass_r: LR2Crossover::new(),
+            xo_mid_high_l: LR2Crossover::new(),
+            xo_mid_high_r: LR2Crossover::new(),
+            xo_highmid_high_l: LR2Crossover::new(),
+            xo_highmid_high_r: LR2Crossover::new(),
             correlation_decay_coef: 0.005,
             smoothed_band_power: [0.0; 5],
-            corr_avg_lr: 0.0, corr_avg_l2: 0.0, corr_avg_r2: 0.0,
-            peak_hold_value: -90.0, peak_hold_l_value: -90.0, peak_hold_r_value: -90.0,
+            corr_avg_lr: 0.0,
+            corr_avg_l2: 0.0,
+            corr_avg_r2: 0.0,
+            peak_hold_value: -90.0,
+            peak_hold_l_value: -90.0,
+            peak_hold_r_value: -90.0,
             auto_loud_in: AutoLoudMeter::new(44100.0),
             auto_loud_pre_sat: AutoLoudMeter::new(44100.0),
             auto_loud_out: AutoLoudMeter::new(44100.0),
-            pre_sat_buf_l: Vec::new(), pre_sat_buf_r: Vec::new(),
+            pre_sat_buf_l: Vec::new(),
+            pre_sat_buf_r: Vec::new(),
             scope_vis_envelope: 1e-4,
             fft_planner: RealFftPlanner::new(),
             fft_input: vec![0.0f32; fft_size],
@@ -316,22 +610,40 @@ impl Meridian {
                     let n = fft_size;
                     let pi2 = 2.0 * std::f32::consts::PI;
                     let norm = i as f32 / (n - 1) as f32;
-                    let a0 = 0.35875; let a1 = 0.48829; let a2 = 0.14128; let a3 = 0.01168;
-                    a0 - a1 * (pi2 * norm).cos() + a2 * (2.0 * pi2 * norm).cos() - a3 * (3.0 * pi2 * norm).cos()
+                    let a0 = 0.35875;
+                    let a1 = 0.48829;
+                    let a2 = 0.14128;
+                    let a3 = 0.01168;
+                    a0 - a1 * (pi2 * norm).cos() + a2 * (2.0 * pi2 * norm).cos()
+                        - a3 * (3.0 * pi2 * norm).cos()
                 })
                 .collect(),
             fft_windowed: vec![0.0f32; fft_size],
-            fft_output_cache: vec![realfft::num_complex::Complex::new(0.0f32, 0.0f32); SPECTRUM_BINS + 1],
+            fft_output_cache: vec![
+                realfft::num_complex::Complex::new(0.0f32, 0.0f32);
+                SPECTRUM_BINS + 1
+            ],
             snap_fft: SnapFFT::new(),
-            cached_hpf_freq: -999.0, cached_lpf_freq: -999.0, cached_cut_slope: -999,
-            cached_bass_gain: -999.0, cached_bass_slope: -999,
-            cached_lo_mid_gain: -999.0, cached_lo_mid_slope: -999,
-            cached_mid_gain: -999.0, cached_mid_slope: -999,
-            cached_high_gain: -999.0, cached_high_slope: -999,
-            cached_excite_gain: -999.0, cached_excite_slope: -999,
-            cached_eq_freq_1: -999.0, cached_eq_freq_2: -999.0, cached_eq_freq_3: -999.0,
-            cached_eq_freq_4: -999.0, cached_eq_freq_5: -999.0,
-            cached_tilt_gain: -999.0, cached_excite_freq: -999.0,
+            cached_hpf_freq: -999.0,
+            cached_lpf_freq: -999.0,
+            cached_cut_slope: -999,
+            cached_bass_gain: -999.0,
+            cached_bass_slope: -999,
+            cached_lo_mid_gain: -999.0,
+            cached_lo_mid_slope: -999,
+            cached_mid_gain: -999.0,
+            cached_mid_slope: -999,
+            cached_high_gain: -999.0,
+            cached_high_slope: -999,
+            cached_excite_gain: -999.0,
+            cached_excite_slope: -999,
+            cached_eq_freq_1: -999.0,
+            cached_eq_freq_2: -999.0,
+            cached_eq_freq_3: -999.0,
+            cached_eq_freq_4: -999.0,
+            cached_eq_freq_5: -999.0,
+            cached_tilt_gain: -999.0,
+            cached_excite_freq: -999.0,
             cached_sample_rate: -999.0,
         }
     }
@@ -362,7 +674,11 @@ impl PluginLogic for Meridian {
             (&mut self.xo_bass_mid_l, &mut self.xo_bass_mid_r, 400.0),
             (&mut self.xo_low_bass_l, &mut self.xo_low_bass_r, 100.0),
             (&mut self.xo_mid_high_l, &mut self.xo_mid_high_r, 1500.0),
-            (&mut self.xo_highmid_high_l, &mut self.xo_highmid_high_r, 8000.0),
+            (
+                &mut self.xo_highmid_high_l,
+                &mut self.xo_highmid_high_r,
+                8000.0,
+            ),
         ] {
             xo_l.set_cutoff(fc, sr);
             xo_r.set_cutoff(fc, sr);
@@ -371,7 +687,10 @@ impl PluginLogic for Meridian {
         self.correlation_decay_coef = 1.0 - (-1.0 / (0.1 * sr)).exp();
         self.cached_sample_rate = sr;
 
-        self.params.shared.sample_rate.store(sr, std::sync::atomic::Ordering::Release);
+        self.params
+            .shared
+            .sample_rate
+            .store(sr, std::sync::atomic::Ordering::Release);
     }
 
     fn process(
@@ -382,33 +701,61 @@ impl PluginLogic for Meridian {
     ) -> ProcessStatus {
         let _ftz = FtzDazGuard::new();
 
-        if buffer.num_input_channels() < 2 { return ProcessStatus::Normal; }
+        if buffer.num_input_channels() < 2 {
+            return ProcessStatus::Normal;
+        }
 
         let bypass = self.params.bypass_active.value();
 
         // Reset analysis
-        if self.params.shared.reset_analysis.swap(false, Ordering::Acquire) {
+        if self
+            .params
+            .shared
+            .reset_analysis
+            .swap(false, Ordering::Acquire)
+        {
             self.fft_input.fill(0.0);
             self.fft_write_pos = 0;
-            if let Ok(mut avg) = self.params.shared.spectrum_avg.try_lock() { avg.fill(-90.0); }
-            if let Ok(mut bins) = self.params.shared.spectrum_bins.try_lock() { bins.fill(-90.0); }
-            self.hpf_l.reset(); self.hpf_r.reset();
-            self.lpf_l.reset(); self.lpf_r.reset();
-            self.hpf2_l.reset(); self.hpf2_r.reset();
-            self.lpf2_l.reset(); self.lpf2_r.reset();
-            self.bass_l.reset(); self.bass_r.reset();
-            self.lo_mid_l.reset(); self.lo_mid_r.reset();
-            self.mid_l.reset(); self.mid_r.reset();
-            self.high_l.reset(); self.high_r.reset();
-            self.excite_l.reset(); self.excite_r.reset();
-            self.tilt_l.reset(); self.tilt_r.reset();
-            self.excite_hp_l.reset(); self.excite_hp_r.reset();
-            self.xo_inflate_lo_l.reset(); self.xo_inflate_lo_r.reset();
-            self.xo_inflate_hi_l.reset(); self.xo_inflate_hi_r.reset();
-            self.xo_bass_mid_l.reset(); self.xo_bass_mid_r.reset();
-            self.xo_low_bass_l.reset(); self.xo_low_bass_r.reset();
-            self.xo_mid_high_l.reset(); self.xo_mid_high_r.reset();
-            self.xo_highmid_high_l.reset(); self.xo_highmid_high_r.reset();
+            if let Ok(mut avg) = self.params.shared.spectrum_avg.try_lock() {
+                avg.fill(-90.0);
+            }
+            if let Ok(mut bins) = self.params.shared.spectrum_bins.try_lock() {
+                bins.fill(-90.0);
+            }
+            self.hpf_l.reset();
+            self.hpf_r.reset();
+            self.lpf_l.reset();
+            self.lpf_r.reset();
+            self.hpf2_l.reset();
+            self.hpf2_r.reset();
+            self.lpf2_l.reset();
+            self.lpf2_r.reset();
+            self.bass_l.reset();
+            self.bass_r.reset();
+            self.lo_mid_l.reset();
+            self.lo_mid_r.reset();
+            self.mid_l.reset();
+            self.mid_r.reset();
+            self.high_l.reset();
+            self.high_r.reset();
+            self.excite_l.reset();
+            self.excite_r.reset();
+            self.tilt_l.reset();
+            self.tilt_r.reset();
+            self.excite_hp_l.reset();
+            self.excite_hp_r.reset();
+            self.xo_inflate_lo_l.reset();
+            self.xo_inflate_lo_r.reset();
+            self.xo_inflate_hi_l.reset();
+            self.xo_inflate_hi_r.reset();
+            self.xo_bass_mid_l.reset();
+            self.xo_bass_mid_r.reset();
+            self.xo_low_bass_l.reset();
+            self.xo_low_bass_r.reset();
+            self.xo_mid_high_l.reset();
+            self.xo_mid_high_r.reset();
+            self.xo_highmid_high_l.reset();
+            self.xo_highmid_high_r.reset();
         }
 
         let sample_rate = self.params.shared.sample_rate.load(Ordering::Acquire);
@@ -437,32 +784,54 @@ impl PluginLogic for Meridian {
         let excite_freq = self.params.excite_freq.raw_target() as f32;
 
         let slope_val = |slope_idx: i64| -> f32 {
-            match slope_idx { 0 => 0.5, 1 => 1.0, _ => 2.0 }
+            match slope_idx {
+                0 => 0.5,
+                1 => 1.0,
+                _ => 2.0,
+            }
         };
         let q_val = |slope_idx: i64| -> f32 {
-            match slope_idx { 0 => 0.4, 1 => 0.7, _ => 1.5 }
+            match slope_idx {
+                0 => 0.4,
+                1 => 0.7,
+                _ => 1.5,
+            }
         };
 
         let coef_dirty = sample_rate != self.cached_sample_rate;
         self.cached_sample_rate = sample_rate;
 
-        if hpf_f != self.cached_hpf_freq || lpf_f != self.cached_lpf_freq
-            || cut_slope_val != self.cached_cut_slope || coef_dirty
+        if hpf_f != self.cached_hpf_freq
+            || lpf_f != self.cached_lpf_freq
+            || cut_slope_val != self.cached_cut_slope
+            || coef_dirty
         {
             // Safety: reset filter state on >4 octave jump (right-click reset fix)
             let hpf_jump = if self.cached_hpf_freq > 1.0 && hpf_f > 1.0 {
                 (hpf_f / self.cached_hpf_freq).max(self.cached_hpf_freq / hpf_f)
-            } else if hpf_f != self.cached_hpf_freq { 4.1 } else { 1.0 };
+            } else if hpf_f != self.cached_hpf_freq {
+                4.1
+            } else {
+                1.0
+            };
             let lpf_jump = if self.cached_lpf_freq > 1.0 && lpf_f > 1.0 {
                 (lpf_f / self.cached_lpf_freq).max(self.cached_lpf_freq / lpf_f)
-            } else if lpf_f != self.cached_lpf_freq { 4.1 } else { 1.0 };
+            } else if lpf_f != self.cached_lpf_freq {
+                4.1
+            } else {
+                1.0
+            };
             if hpf_jump > 4.0 {
-                self.hpf_l.reset(); self.hpf_r.reset();
-                self.hpf2_l.reset(); self.hpf2_r.reset();
+                self.hpf_l.reset();
+                self.hpf_r.reset();
+                self.hpf2_l.reset();
+                self.hpf2_r.reset();
             }
             if lpf_jump > 4.0 {
-                self.lpf_l.reset(); self.lpf_r.reset();
-                self.lpf2_l.reset(); self.lpf2_r.reset();
+                self.lpf_l.reset();
+                self.lpf_r.reset();
+                self.lpf2_l.reset();
+                self.lpf2_r.reset();
             }
             self.cached_hpf_freq = hpf_f;
             self.cached_lpf_freq = lpf_f;
@@ -483,44 +852,86 @@ impl PluginLogic for Meridian {
                 self.hpf_r.set_butterworth_hp(hpf_f, sample_rate);
                 self.lpf_l.set_butterworth_lp(lpf_f, sample_rate);
                 self.lpf_r.set_butterworth_lp(lpf_f, sample_rate);
-                self.hpf2_l.set_identity(); self.hpf2_r.set_identity();
-                self.lpf2_l.set_identity(); self.lpf2_r.set_identity();
+                self.hpf2_l.set_identity();
+                self.hpf2_r.set_identity();
+                self.lpf2_l.set_identity();
+                self.lpf2_r.set_identity();
             }
         }
 
-        if bass_gain_val != self.cached_bass_gain || bass_slope_val != self.cached_bass_slope || eq_f1 != self.cached_eq_freq_1 || coef_dirty {
-            self.cached_bass_gain = bass_gain_val; self.cached_bass_slope = bass_slope_val; self.cached_eq_freq_1 = eq_f1;
+        if bass_gain_val != self.cached_bass_gain
+            || bass_slope_val != self.cached_bass_slope
+            || eq_f1 != self.cached_eq_freq_1
+            || coef_dirty
+        {
+            self.cached_bass_gain = bass_gain_val;
+            self.cached_bass_slope = bass_slope_val;
+            self.cached_eq_freq_1 = eq_f1;
             let bass_slope = slope_val(bass_slope_val);
-            self.bass_l.set_low_shelf(eq_f1, bass_gain_val, bass_slope, sample_rate);
-            self.bass_r.set_low_shelf(eq_f1, bass_gain_val, bass_slope, sample_rate);
+            self.bass_l
+                .set_low_shelf(eq_f1, bass_gain_val, bass_slope, sample_rate);
+            self.bass_r
+                .set_low_shelf(eq_f1, bass_gain_val, bass_slope, sample_rate);
         }
 
-        if lo_mid_gain_val != self.cached_lo_mid_gain || lo_mid_slope_val != self.cached_lo_mid_slope || eq_f2 != self.cached_eq_freq_2 || coef_dirty {
-            self.cached_lo_mid_gain = lo_mid_gain_val; self.cached_lo_mid_slope = lo_mid_slope_val; self.cached_eq_freq_2 = eq_f2;
+        if lo_mid_gain_val != self.cached_lo_mid_gain
+            || lo_mid_slope_val != self.cached_lo_mid_slope
+            || eq_f2 != self.cached_eq_freq_2
+            || coef_dirty
+        {
+            self.cached_lo_mid_gain = lo_mid_gain_val;
+            self.cached_lo_mid_slope = lo_mid_slope_val;
+            self.cached_eq_freq_2 = eq_f2;
             let lo_mid_q = q_val(lo_mid_slope_val);
-            self.lo_mid_l.set_peaking_eq(eq_f2, lo_mid_gain_val, lo_mid_q, sample_rate);
-            self.lo_mid_r.set_peaking_eq(eq_f2, lo_mid_gain_val, lo_mid_q, sample_rate);
+            self.lo_mid_l
+                .set_peaking_eq(eq_f2, lo_mid_gain_val, lo_mid_q, sample_rate);
+            self.lo_mid_r
+                .set_peaking_eq(eq_f2, lo_mid_gain_val, lo_mid_q, sample_rate);
         }
 
-        if mid_gain_val != self.cached_mid_gain || mid_slope_val != self.cached_mid_slope || eq_f3 != self.cached_eq_freq_3 || coef_dirty {
-            self.cached_mid_gain = mid_gain_val; self.cached_mid_slope = mid_slope_val; self.cached_eq_freq_3 = eq_f3;
+        if mid_gain_val != self.cached_mid_gain
+            || mid_slope_val != self.cached_mid_slope
+            || eq_f3 != self.cached_eq_freq_3
+            || coef_dirty
+        {
+            self.cached_mid_gain = mid_gain_val;
+            self.cached_mid_slope = mid_slope_val;
+            self.cached_eq_freq_3 = eq_f3;
             let mid_q = q_val(mid_slope_val);
-            self.mid_l.set_peaking_eq(eq_f3, mid_gain_val, mid_q, sample_rate);
-            self.mid_r.set_peaking_eq(eq_f3, mid_gain_val, mid_q, sample_rate);
+            self.mid_l
+                .set_peaking_eq(eq_f3, mid_gain_val, mid_q, sample_rate);
+            self.mid_r
+                .set_peaking_eq(eq_f3, mid_gain_val, mid_q, sample_rate);
         }
 
-        if high_gain_val != self.cached_high_gain || high_slope_val != self.cached_high_slope || eq_f4 != self.cached_eq_freq_4 || coef_dirty {
-            self.cached_high_gain = high_gain_val; self.cached_high_slope = high_slope_val; self.cached_eq_freq_4 = eq_f4;
+        if high_gain_val != self.cached_high_gain
+            || high_slope_val != self.cached_high_slope
+            || eq_f4 != self.cached_eq_freq_4
+            || coef_dirty
+        {
+            self.cached_high_gain = high_gain_val;
+            self.cached_high_slope = high_slope_val;
+            self.cached_eq_freq_4 = eq_f4;
             let high_q = q_val(high_slope_val);
-            self.high_l.set_peaking_eq(eq_f4, high_gain_val, high_q, sample_rate);
-            self.high_r.set_peaking_eq(eq_f4, high_gain_val, high_q, sample_rate);
+            self.high_l
+                .set_peaking_eq(eq_f4, high_gain_val, high_q, sample_rate);
+            self.high_r
+                .set_peaking_eq(eq_f4, high_gain_val, high_q, sample_rate);
         }
 
-        if excite_gain_val != self.cached_excite_gain || excite_slope_val != self.cached_excite_slope || eq_f5 != self.cached_eq_freq_5 || coef_dirty {
-            self.cached_excite_gain = excite_gain_val; self.cached_excite_slope = excite_slope_val; self.cached_eq_freq_5 = eq_f5;
+        if excite_gain_val != self.cached_excite_gain
+            || excite_slope_val != self.cached_excite_slope
+            || eq_f5 != self.cached_eq_freq_5
+            || coef_dirty
+        {
+            self.cached_excite_gain = excite_gain_val;
+            self.cached_excite_slope = excite_slope_val;
+            self.cached_eq_freq_5 = eq_f5;
             let excite_slope = slope_val(excite_slope_val);
-            self.excite_l.set_high_shelf(eq_f5, excite_gain_val, excite_slope, sample_rate);
-            self.excite_r.set_high_shelf(eq_f5, excite_gain_val, excite_slope, sample_rate);
+            self.excite_l
+                .set_high_shelf(eq_f5, excite_gain_val, excite_slope, sample_rate);
+            self.excite_r
+                .set_high_shelf(eq_f5, excite_gain_val, excite_slope, sample_rate);
         }
 
         if tilt_db != self.cached_tilt_gain || coef_dirty {
@@ -531,8 +942,10 @@ impl PluginLogic for Meridian {
 
         if excite_freq != self.cached_excite_freq || coef_dirty {
             self.cached_excite_freq = excite_freq;
-            self.excite_hp_l.set_butterworth_hp(excite_freq, sample_rate);
-            self.excite_hp_r.set_butterworth_hp(excite_freq, sample_rate);
+            self.excite_hp_l
+                .set_butterworth_hp(excite_freq, sample_rate);
+            self.excite_hp_r
+                .set_butterworth_hp(excite_freq, sample_rate);
         }
 
         // Reset peak
@@ -565,8 +978,15 @@ impl PluginLogic for Meridian {
         let out_gain = db_to_gain(self.params.output_gain.value());
 
         let mut snap_phase = self.params.shared.snap_phase.load(Ordering::Acquire);
-        let mono = match snap_phase { 2 => true, 3 => false, _ => self.params.mono_active.value() };
-        let delta = match snap_phase { 3 => true, _ => self.params.delta_active.value() };
+        let mono = match snap_phase {
+            2 => true,
+            3 => false,
+            _ => self.params.mono_active.value(),
+        };
+        let delta = match snap_phase {
+            3 => true,
+            _ => self.params.delta_active.value(),
+        };
 
         let mut max_out_peak = 0.0f32;
         let mut max_out_peak_l = 0.0f32;
@@ -575,12 +995,18 @@ impl PluginLogic for Meridian {
 
         let mut block_band_power = [0.0f32; 5];
 
-        if buffer.num_samples() == 0 { return ProcessStatus::Normal; }
+        if buffer.num_samples() == 0 {
+            return ProcessStatus::Normal;
+        }
         let num_samples = buffer.num_samples();
 
         let mut gr_db = 0.0f32;
         let mut max_gr_db = 0.0f32;
-        let is_measuring = self.params.shared.auto_loud_measuring.load(Ordering::Acquire);
+        let is_measuring = self
+            .params
+            .shared
+            .auto_loud_measuring
+            .load(Ordering::Acquire);
 
         // Feed input LUFS
         if is_measuring {
@@ -601,8 +1027,10 @@ impl PluginLogic for Meridian {
         }
         #[allow(unsafe_code)]
         let (out0, out1): (&mut [f32], &mut [f32]) = unsafe {
-            (std::slice::from_raw_parts_mut(out0_ptr, num_samples),
-             std::slice::from_raw_parts_mut(out1_ptr, num_samples))
+            (
+                std::slice::from_raw_parts_mut(out0_ptr, num_samples),
+                std::slice::from_raw_parts_mut(out1_ptr, num_samples),
+            )
         };
 
         for i in 0..num_samples {
@@ -611,12 +1039,28 @@ impl PluginLogic for Meridian {
             let in_r = buffer.input(1)[i];
 
             // HPF & LPF
-            let mut x_l = self.lpf2_l.process(self.lpf_l.process(self.hpf2_l.process(self.hpf_l.process(in_l))));
-            let mut x_r = self.lpf2_r.process(self.lpf_r.process(self.hpf2_r.process(self.hpf_r.process(in_r))));
+            let mut x_l = self.lpf2_l.process(
+                self.lpf_l
+                    .process(self.hpf2_l.process(self.hpf_l.process(in_l))),
+            );
+            let mut x_r = self.lpf2_r.process(
+                self.lpf_r
+                    .process(self.hpf2_r.process(self.hpf_r.process(in_r))),
+            );
 
             // Series EQ
-            x_l = self.excite_l.process(self.high_l.process(self.mid_l.process(self.lo_mid_l.process(self.bass_l.process(x_l)))));
-            x_r = self.excite_r.process(self.high_r.process(self.mid_r.process(self.lo_mid_r.process(self.bass_r.process(x_r)))));
+            x_l = self.excite_l.process(
+                self.high_l.process(
+                    self.mid_l
+                        .process(self.lo_mid_l.process(self.bass_l.process(x_l))),
+                ),
+            );
+            x_r = self.excite_r.process(
+                self.high_r.process(
+                    self.mid_r
+                        .process(self.lo_mid_r.process(self.bass_r.process(x_r))),
+                ),
+            );
 
             // Tilt
             x_l = self.tilt_l.process(x_l);
@@ -661,7 +1105,11 @@ impl PluginLogic for Meridian {
             // Inflate (Oxford-Inflator-inspired loudness/density waveshaper)
             if inflate_effect > 0.0 {
                 let shape_one = |v: f32| -> f32 {
-                    let v = if inflate_clip { v.clamp(-1.0, 1.0) } else { v.clamp(-2.0, 2.0) };
+                    let v = if inflate_clip {
+                        v.clamp(-1.0, 1.0)
+                    } else {
+                        v.clamp(-2.0, 2.0)
+                    };
                     inflate_shape(v, inflate_curve)
                 };
                 let (wet_l, wet_r) = if inflate_band_split {
@@ -669,8 +1117,10 @@ impl PluginLogic for Meridian {
                     let (mid_l, top_l) = self.xo_inflate_hi_l.process(hi_l);
                     let (lo_r, hi_r) = self.xo_inflate_lo_r.process(comp_r);
                     let (mid_r, top_r) = self.xo_inflate_hi_r.process(hi_r);
-                    (shape_one(lo_l) + shape_one(mid_l) + shape_one(top_l),
-                     shape_one(lo_r) + shape_one(mid_r) + shape_one(top_r))
+                    (
+                        shape_one(lo_l) + shape_one(mid_l) + shape_one(top_l),
+                        shape_one(lo_r) + shape_one(mid_r) + shape_one(top_r),
+                    )
                 } else {
                     (shape_one(comp_l), shape_one(comp_r))
                 };
@@ -761,48 +1211,84 @@ impl PluginLogic for Meridian {
             let corr_lr = meter_l * meter_r;
             let corr_l2 = meter_l * meter_l;
             let corr_r2 = meter_r * meter_r;
-            self.corr_avg_lr = (1.0 - self.correlation_decay_coef) * self.corr_avg_lr + self.correlation_decay_coef * corr_lr;
-            self.corr_avg_l2 = (1.0 - self.correlation_decay_coef) * self.corr_avg_l2 + self.correlation_decay_coef * corr_l2;
-            self.corr_avg_r2 = (1.0 - self.correlation_decay_coef) * self.corr_avg_r2 + self.correlation_decay_coef * corr_r2;
+            self.corr_avg_lr = (1.0 - self.correlation_decay_coef) * self.corr_avg_lr
+                + self.correlation_decay_coef * corr_lr;
+            self.corr_avg_l2 = (1.0 - self.correlation_decay_coef) * self.corr_avg_l2
+                + self.correlation_decay_coef * corr_l2;
+            self.corr_avg_r2 = (1.0 - self.correlation_decay_coef) * self.corr_avg_r2
+                + self.correlation_decay_coef * corr_r2;
         }
 
         // Gain reduction
-        self.params.shared.gain_reduction.store(max_gr_db, Ordering::Release);
+        self.params
+            .shared
+            .gain_reduction
+            .store(max_gr_db, Ordering::Release);
 
         // Smoothed band levels
         let sample_weight = 1.0 / count_samples as f32;
         let buf_coef = 1.0 - (-(num_samples as f32) / (0.1 * sample_rate)).exp();
         for (b, &band_power) in block_band_power.iter().enumerate() {
             let average_band_power = band_power * sample_weight;
-            self.smoothed_band_power[b] = (1.0 - buf_coef) * self.smoothed_band_power[b] + buf_coef * average_band_power;
+            self.smoothed_band_power[b] =
+                (1.0 - buf_coef) * self.smoothed_band_power[b] + buf_coef * average_band_power;
             let band_db = gain_to_db(self.smoothed_band_power[b].sqrt());
             self.params.shared.band_levels[b].store(band_db, Ordering::Release);
         }
 
         // Correlation
         let denom = (self.corr_avg_l2 * self.corr_avg_r2).sqrt();
-        let corr = if denom > 1e-6 { self.corr_avg_lr / denom } else { 1.0 };
-        self.params.shared.phase_correlation.store(corr, Ordering::Release);
+        let corr = if denom > 1e-6 {
+            self.corr_avg_lr / denom
+        } else {
+            1.0
+        };
+        self.params
+            .shared
+            .phase_correlation
+            .store(corr, Ordering::Release);
 
         // Peak meters
         let peak_db = gain_to_db(max_out_peak);
         let peak_l_db = gain_to_db(max_out_peak_l);
         let peak_r_db = gain_to_db(max_out_peak_r);
-        self.params.shared.output_peak.store(peak_db, Ordering::Release);
-        self.params.shared.output_peak_l.store(peak_l_db, Ordering::Release);
-        self.params.shared.output_peak_r.store(peak_r_db, Ordering::Release);
+        self.params
+            .shared
+            .output_peak
+            .store(peak_db, Ordering::Release);
+        self.params
+            .shared
+            .output_peak_l
+            .store(peak_l_db, Ordering::Release);
+        self.params
+            .shared
+            .output_peak_r
+            .store(peak_r_db, Ordering::Release);
         self.peak_hold_value = self.peak_hold_value.max(peak_db);
         self.peak_hold_l_value = self.peak_hold_l_value.max(peak_l_db);
         self.peak_hold_r_value = self.peak_hold_r_value.max(peak_r_db);
-        self.params.shared.peak_hold.store(self.peak_hold_value, Ordering::Release);
-        self.params.shared.peak_hold_l.store(self.peak_hold_l_value, Ordering::Release);
-        self.params.shared.peak_hold_r.store(self.peak_hold_r_value, Ordering::Release);
+        self.params
+            .shared
+            .peak_hold
+            .store(self.peak_hold_value, Ordering::Release);
+        self.params
+            .shared
+            .peak_hold_l
+            .store(self.peak_hold_l_value, Ordering::Release);
+        self.params
+            .shared
+            .peak_hold_r
+            .store(self.peak_hold_r_value, Ordering::Release);
 
         // Balance
         let rms_l = self.corr_avg_l2.sqrt();
         let rms_r = self.corr_avg_r2.sqrt();
         let sum_lr = rms_l + rms_r;
-        let balance = if sum_lr > 1e-6 { (rms_l - rms_r) / sum_lr } else { 0.0 };
+        let balance = if sum_lr > 1e-6 {
+            (rms_l - rms_r) / sum_lr
+        } else {
+            0.0
+        };
         self.params.shared.balance.store(balance, Ordering::Release);
 
         // FFT Spectrum
@@ -823,7 +1309,8 @@ impl PluginLogic for Meridian {
                         self.fft_windowed[i] = self.fft_input[i] * self.fft_hann[i];
                     }
                     let fft = self.fft_planner.plan_fft_forward(fft_size);
-                    fft.process(&mut self.fft_windowed, &mut self.fft_output_cache).ok();
+                    fft.process(&mut self.fft_windowed, &mut self.fft_output_cache)
+                        .ok();
                 }
             }
 
@@ -839,28 +1326,30 @@ impl PluginLogic for Meridian {
 
             // Update spectrum_avg (EMA) from spectrum_bins
             if let Ok(mut avg) = self.params.shared.spectrum_avg.try_lock()
-                && let Ok(bins) = self.params.shared.spectrum_bins.try_lock() {
-                    let n_bins = SPECTRUM_BINS;
-                    // Energy-gating: only update EMA if signal above -80 dB
-                    let frame_energy = bins.iter().map(|x| x * x).sum::<f32>() / n_bins as f32;
-                    let energy_db = 10.0 * frame_energy.log10().max(-40.0);
-                    let gate = energy_db > -80.0;
+                && let Ok(bins) = self.params.shared.spectrum_bins.try_lock()
+            {
+                let n_bins = SPECTRUM_BINS;
+                // Energy-gating: only update EMA if signal above -80 dB
+                let frame_energy = bins.iter().map(|x| x * x).sum::<f32>() / n_bins as f32;
+                let energy_db = 10.0 * frame_energy.log10().max(-40.0);
+                let gate = energy_db > -80.0;
 
-                    if !gate {
-                        for sample in self.fft_input.iter_mut() {
-                            *sample = 0.0;
-                        }
-                    }
-
-                    for k in 0..n_bins {
-                        let freq = k as f32 * sample_rate / fft_size as f32;
-                        let log_norm = ((freq.max(20.0).ln() - 20.0_f32.ln())
-                            / (20000.0_f32.ln() - 20.0_f32.ln())).clamp(0.0, 1.0);
-                        let alpha = 0.02 + (0.10 - 0.02) * log_norm;
-                        let input = if gate { bins[k] } else { 0.0 };
-                        avg[k] = avg[k] * (1.0 - alpha) + input * alpha;
+                if !gate {
+                    for sample in self.fft_input.iter_mut() {
+                        *sample = 0.0;
                     }
                 }
+
+                for k in 0..n_bins {
+                    let freq = k as f32 * sample_rate / fft_size as f32;
+                    let log_norm = ((freq.max(20.0).ln() - 20.0_f32.ln())
+                        / (20000.0_f32.ln() - 20.0_f32.ln()))
+                    .clamp(0.0, 1.0);
+                    let alpha = 0.02 + (0.10 - 0.02) * log_norm;
+                    let input = if gate { bins[k] } else { 0.0 };
+                    avg[k] = avg[k] * (1.0 - alpha) + input * alpha;
+                }
+            }
         }
 
         // SNAP FFT
@@ -877,22 +1366,38 @@ impl PluginLogic for Meridian {
                 };
                 if self.snap_fft.push_sample(sample) {
                     let frame = self.snap_fft.compute_fft(sample_rate);
-                    let threshold = if snap_phase == 2 || snap_phase == 3 { 30 } else { 60 };
+                    let threshold = if snap_phase == 2 || snap_phase == 3 {
+                        30
+                    } else {
+                        60
+                    };
                     if self.snap_fft.accumulate_snap(&frame, snap_phase, threshold) {
                         let mode = match snap_phase {
-                            1 => SnapMode::Stereo, 2 => SnapMode::Mono, _ => SnapMode::Delta,
+                            1 => SnapMode::Stereo,
+                            2 => SnapMode::Mono,
+                            _ => SnapMode::Delta,
                         };
                         let snapshot = self.snap_fft.read_snapshot(mode);
                         if let Ok(mut buf) = match mode {
                             SnapMode::Stereo => self.params.shared.snap_stereo_snap.try_lock(),
                             SnapMode::Mono => self.params.shared.snap_mono_snap.try_lock(),
                             SnapMode::Delta => self.params.shared.snap_delta_snap.try_lock(),
-                        } { buf.copy_from_slice(&snapshot); }
+                        } {
+                            buf.copy_from_slice(&snapshot);
+                        }
                         let next_phase = if snap_phase < 3 { snap_phase + 1 } else { 0 };
                         if next_phase == 0 {
-                            self.params.shared.snap_active.store(false, Ordering::Release);
-                        } else { self.snap_fft.reset_snapshots(); }
-                        self.params.shared.snap_phase.store(next_phase, Ordering::Release);
+                            self.params
+                                .shared
+                                .snap_active
+                                .store(false, Ordering::Release);
+                        } else {
+                            self.snap_fft.reset_snapshots();
+                        }
+                        self.params
+                            .shared
+                            .snap_phase
+                            .store(next_phase, Ordering::Release);
                         snap_phase = next_phase;
                     }
                 }
@@ -901,15 +1406,22 @@ impl PluginLogic for Meridian {
 
         // AUTO LOUD
         if self.params.shared.auto_loud_trigger.load(Ordering::Acquire) {
-            self.params.shared.auto_loud_trigger.store(false, Ordering::Release);
-            self.params.shared.auto_loud_measuring.store(true, Ordering::Release);
+            self.params
+                .shared
+                .auto_loud_trigger
+                .store(false, Ordering::Release);
+            self.params
+                .shared
+                .auto_loud_measuring
+                .store(true, Ordering::Release);
             self.auto_loud_in.reset();
             self.auto_loud_pre_sat.reset();
             self.auto_loud_out.reset();
         }
         if is_measuring {
             if !self.pre_sat_buf_l.is_empty() {
-                self.auto_loud_pre_sat.feed(&self.pre_sat_buf_l, &self.pre_sat_buf_r);
+                self.auto_loud_pre_sat
+                    .feed(&self.pre_sat_buf_l, &self.pre_sat_buf_r);
             }
             self.auto_loud_out.feed(out0, out1);
             let target_samples = (5.0 * sample_rate as f64) as u64;
@@ -921,8 +1433,14 @@ impl PluginLogic for Meridian {
                 let lufs_offset = in_lufs - out_lufs;
                 let peak_limit = DBTP_CEILING - out_tp;
                 let offset_clamped = lufs_offset.clamp(-24.0, peak_limit);
-                self.params.shared.auto_loud_gain_offset.store(offset_clamped, Ordering::Release);
-                self.params.shared.auto_loud_measuring.store(false, Ordering::Release);
+                self.params
+                    .shared
+                    .auto_loud_gain_offset
+                    .store(offset_clamped, Ordering::Release);
+                self.params
+                    .shared
+                    .auto_loud_measuring
+                    .store(false, Ordering::Release);
             }
         }
 
@@ -945,19 +1463,26 @@ impl PluginLogic for Meridian {
                 }
                 let vis_gain = if self.scope_vis_envelope > 1e-5 {
                     (0.9 / self.scope_vis_envelope).min(20.0)
-                } else { 0.0 };
+                } else {
+                    0.0
+                };
                 for i in 0..n {
                     let pos = (start_pos + i) % buf_len;
                     scope[pos] = [out0[i] * vis_gain, out1[i] * vis_gain];
                 }
-                self.params.shared.scope_write_pos.store((start_pos + n) % buf_len, Ordering::Release);
+                self.params
+                    .shared
+                    .scope_write_pos
+                    .store((start_pos + n) % buf_len, Ordering::Release);
             }
         }
 
         ProcessStatus::Normal
     }
 
-    fn save_state(&self) -> Vec<u8> { Vec::new() }
+    fn save_state(&self) -> Vec<u8> {
+        Vec::new()
+    }
     fn load_state(&mut self, data: &[u8]) -> Result<(), StateLoadError> {
         if let Some(params) = state_migration::try_parse_niceplug_state(data) {
             for (name, value) in params {

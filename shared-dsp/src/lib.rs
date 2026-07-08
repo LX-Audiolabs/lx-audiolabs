@@ -13,9 +13,13 @@ pub mod state_migration;
 /// is gone.
 #[derive(Clone, Default)]
 pub struct Biquad {
-    b0: f64, b1: f64, b2: f64,
-    a1: f64, a2: f64,
-    s1: f64, s2: f64,
+    b0: f64,
+    b1: f64,
+    b2: f64,
+    a1: f64,
+    a2: f64,
+    s1: f64,
+    s2: f64,
 }
 
 impl Biquad {
@@ -55,23 +59,29 @@ impl Biquad {
         // shelf into a ~+40 dB resonator. Sweeping the Low/High Cut then pumped
         // energy into that resonance until the output ran away. We now only reject
         // non-finite coefficients and otherwise trust the design.
-        if !(b0.is_finite() && b1.is_finite() && b2.is_finite() && a1.is_finite() && a2.is_finite()) {
+        if !(b0.is_finite() && b1.is_finite() && b2.is_finite() && a1.is_finite() && a2.is_finite())
+        {
             return; // keep the previous (valid) coefficients
         }
 
-        self.b0 = b0; self.b1 = b1; self.b2 = b2;
-        self.a1 = a1; self.a2 = a2;
+        self.b0 = b0;
+        self.b1 = b1;
+        self.b2 = b2;
+        self.a1 = a1;
+        self.a2 = a2;
     }
 
     pub fn set_butterworth_hp(&mut self, fc: f32, sample_rate: f32) {
         // Guard: sr=0 produces NaN (division by zero) → keep old coefficients.
-        if sample_rate < 1.0 { return; }
+        if sample_rate < 1.0 {
+            return;
+        }
         let fc = (fc as f64).min(0.49 * (sample_rate as f64)).max(1.0);
         let sr = sample_rate as f64;
         let theta = std::f64::consts::PI * fc / sr;
         let k = theta.tan();
         let norm = 1.0 / (1.0 + std::f64::consts::FRAC_1_SQRT_2 * 2.0 * k + k * k);
-        
+
         self.b0 = norm;
         self.b1 = -2.0 * norm;
         self.b2 = norm;
@@ -80,7 +90,9 @@ impl Biquad {
     }
 
     pub fn set_butterworth_lp(&mut self, fc: f32, sample_rate: f32) {
-        if sample_rate < 1.0 { return; }
+        if sample_rate < 1.0 {
+            return;
+        }
         let fc = (fc as f64).min(0.49 * (sample_rate as f64)).max(1.0);
         let sr = sample_rate as f64;
         let theta = std::f64::consts::PI * fc / sr;
@@ -97,7 +109,9 @@ impl Biquad {
     /// 2nd-order high-pass with arbitrary Q. Cascade two of these with staggered Q
     /// (0.54119610 & 1.30656296) for a 4th-order (24 dB/oct) Butterworth.
     pub fn set_butterworth_hp_q(&mut self, fc: f32, q: f32, sample_rate: f32) {
-        if sample_rate < 1.0 { return; }
+        if sample_rate < 1.0 {
+            return;
+        }
         let fc = (fc as f64).min(0.49 * (sample_rate as f64)).max(1.0);
         let sr = sample_rate as f64;
         let theta = std::f64::consts::PI * fc / sr;
@@ -115,7 +129,9 @@ impl Biquad {
     /// 2nd-order low-pass with arbitrary Q. Cascade two of these with staggered Q
     /// (0.54119610 & 1.30656296) for a 4th-order (24 dB/oct) Butterworth.
     pub fn set_butterworth_lp_q(&mut self, fc: f32, q: f32, sample_rate: f32) {
-        if sample_rate < 1.0 { return; }
+        if sample_rate < 1.0 {
+            return;
+        }
         let fc = (fc as f64).min(0.49 * (sample_rate as f64)).max(1.0);
         let sr = sample_rate as f64;
         let theta = std::f64::consts::PI * fc / sr;
@@ -162,7 +178,10 @@ impl Biquad {
         let omega = 2.0 * std::f64::consts::PI * (fc as f64) / (sample_rate as f64);
         let sn = omega.sin();
         let cs = omega.cos();
-        let alpha = (sn / 2.0) * (((a + 1.0 / a) * (1.0 / (slope_s as f64) - 1.0) + 2.0).max(0.0).sqrt());
+        let alpha = (sn / 2.0)
+            * (((a + 1.0 / a) * (1.0 / (slope_s as f64) - 1.0) + 2.0)
+                .max(0.0)
+                .sqrt());
 
         let two_sqrt_a_alpha = 2.0 * a.sqrt() * alpha;
 
@@ -189,9 +208,15 @@ impl Biquad {
         let dr = 1.0 + self.a1 * cw + self.a2 * c2w;
         let di = -(self.a1 * sw + self.a2 * s2w);
         let den2 = dr * dr + di * di;
-        if den2 < 1e-30 { return 0.0; }
+        if den2 < 1e-30 {
+            return 0.0;
+        }
         let mag2 = (nr * nr + ni * ni) / den2;
-        if mag2 < 1e-12 { -60.0 } else { (10.0 * mag2.log10()) as f32 }
+        if mag2 < 1e-12 {
+            -60.0
+        } else {
+            (10.0 * mag2.log10()) as f32
+        }
     }
 
     pub fn set_high_shelf(&mut self, fc: f32, db_gain: f32, slope_s: f32, sample_rate: f32) {
@@ -199,7 +224,10 @@ impl Biquad {
         let omega = 2.0 * std::f64::consts::PI * (fc as f64) / (sample_rate as f64);
         let sn = omega.sin();
         let cs = omega.cos();
-        let alpha = (sn / 2.0) * (((a + 1.0 / a) * (1.0 / (slope_s as f64) - 1.0) + 2.0).max(0.0).sqrt());
+        let alpha = (sn / 2.0)
+            * (((a + 1.0 / a) * (1.0 / (slope_s as f64) - 1.0) + 2.0)
+                .max(0.0)
+                .sqrt());
 
         let two_sqrt_a_alpha = 2.0 * a.sqrt() * alpha;
 
@@ -274,7 +302,7 @@ impl LR2Crossover {
         let theta = std::f64::consts::PI * fc / (sample_rate as f64);
         let k = theta.tan();
         let norm = 1.0 / (1.0 + k);
-        
+
         let b0_lp = k * norm;
         let b1_lp = k * norm;
         let a1_lp = (k - 1.0) * norm;
@@ -373,7 +401,7 @@ impl MasteringSaturator {
 
         let drive_linear = 10f32.powf(drive_db / 20.0);
         let x_driven = x * drive_linear;
-        
+
         let saturated = match mode {
             HarmonicsMode::Even => {
                 // Asymmetric curve for even harmonics (Pentode style).
@@ -412,7 +440,7 @@ impl MasteringClipper {
     #[inline]
     pub fn process(x: f32, ceiling_linear: f32, softness: f32) -> f32 {
         let abs_x = x.abs();
-        
+
         if softness <= 0.0 {
             // Hard clip
             return x.clamp(-ceiling_linear, ceiling_linear);
@@ -473,7 +501,7 @@ impl Compressor {
         gain_reduction_db_out: &mut f32,
     ) -> (f32, f32) {
         let signal_level = (l.abs() + r.abs()) * 0.5;
-        
+
         // Envelope tracking
         let att_coef = (-1.0 / (attack_ms.max(0.1) * 0.001 * self.sample_rate)).exp();
         let rel_coef = (-1.0 / (release_ms.max(1.0) * 0.001 * self.sample_rate)).exp();
@@ -485,7 +513,11 @@ impl Compressor {
             rel_coef * self.envelope + (1.0 - rel_coef) * env_in
         };
 
-        let env_db = if self.envelope < 1e-5 { -100.0 } else { 20.0 * self.envelope.log10() };
+        let env_db = if self.envelope < 1e-5 {
+            -100.0
+        } else {
+            20.0 * self.envelope.log10()
+        };
 
         // Gain reduction calculation (with soft knee)
         let mut gr_db = 0.0;
@@ -570,8 +602,12 @@ impl TwoBandCompressor {
         let (lo_l, hi_l) = self.xo_l.process(l);
         let (lo_r, hi_r) = self.xo_r.process(r);
 
-        let (comp_lo_l, comp_lo_r) = self.low_comp.process(lo_l, lo_r, t_lo, 100.0, att, rel, ratio, 4.0, gr_lo_out);
-        let (comp_hi_l, comp_hi_r) = self.high_comp.process(hi_l, hi_r, t_hi, 100.0, att, rel, ratio, 4.0, gr_hi_out);
+        let (comp_lo_l, comp_lo_r) = self
+            .low_comp
+            .process(lo_l, lo_r, t_lo, 100.0, att, rel, ratio, 4.0, gr_lo_out);
+        let (comp_hi_l, comp_hi_r) = self
+            .high_comp
+            .process(hi_l, hi_r, t_hi, 100.0, att, rel, ratio, 4.0, gr_hi_out);
 
         let wet_l = comp_lo_l + comp_hi_l;
         let wet_r = comp_lo_r + comp_hi_r;
@@ -608,11 +644,15 @@ impl MsEq {
 
     pub fn process(&mut self, mid: f32, side: f32) -> (f32, f32) {
         let mut m = mid;
-        for b in &mut self.mid_bands { m = b.process(m); }
-        
+        for b in &mut self.mid_bands {
+            m = b.process(m);
+        }
+
         let mut s = side;
-        for b in &mut self.side_bands { s = b.process(s); }
-        
+        for b in &mut self.side_bands {
+            s = b.process(s);
+        }
+
         (m, s)
     }
 }
@@ -686,7 +726,10 @@ impl AutoLoudMeter {
             .expect("ebur128: failed to create AutoLoudMeter");
         // Enough headroom for a 5-second measurement window.
         let _ = analyzer.set_max_window(6000);
-        Self { analyzer, fed_samples: 0 }
+        Self {
+            analyzer,
+            fed_samples: 0,
+        }
     }
 
     /// Feed one buffer of planar stereo audio.
@@ -752,7 +795,10 @@ impl Default for RmsMeter {
 
 impl RmsMeter {
     pub fn new() -> Self {
-        Self { sum_sq: 0.0, count: 0 }
+        Self {
+            sum_sq: 0.0,
+            count: 0,
+        }
     }
 
     /// Feed one buffer of planar stereo audio.
@@ -812,7 +858,10 @@ impl Default for PeakMeter {
 
 impl PeakMeter {
     pub fn new() -> Self {
-        Self { peak: 0.0, count: 0 }
+        Self {
+            peak: 0.0,
+            count: 0,
+        }
     }
 
     /// Feed one buffer of planar stereo audio.
@@ -823,8 +872,12 @@ impl PeakMeter {
         for i in 0..n {
             let a = left[i].abs();
             let b = right[i].abs();
-            if a > p { p = a; }
-            if b > p { p = b; }
+            if a > p {
+                p = a;
+            }
+            if b > p {
+                p = b;
+            }
         }
         self.peak = p;
         self.count += n as u64;
@@ -864,7 +917,10 @@ struct BandLimiter {
 
 impl BandLimiter {
     fn new() -> Self {
-        Self { envelope: 0.0, gain: 1.0 }
+        Self {
+            envelope: 0.0,
+            gain: 1.0,
+        }
     }
 
     #[inline]
@@ -983,13 +1039,28 @@ impl MsBandLimiter {
         let (mid_lo, mid_hi) = self.xo_mid.process(mid);
 
         let mid_lo_out = self.lim_mid_lo.process(
-            mid_lo, thresh_mid_lo, att_mid_lo, rel_mid_lo, makeup_mid_lo, classic_mode,
+            mid_lo,
+            thresh_mid_lo,
+            att_mid_lo,
+            rel_mid_lo,
+            makeup_mid_lo,
+            classic_mode,
         );
         let mid_hi_out = self.lim_mid_hi.process(
-            mid_hi, thresh_mid_hi, att_mid_hi, rel_mid_hi, makeup_mid_hi, classic_mode,
+            mid_hi,
+            thresh_mid_hi,
+            att_mid_hi,
+            rel_mid_hi,
+            makeup_mid_hi,
+            classic_mode,
         );
         let side_out = self.lim_side.process(
-            side, thresh_side, att_side, rel_side, makeup_side, classic_mode,
+            side,
+            thresh_side,
+            att_side,
+            rel_side,
+            makeup_side,
+            classic_mode,
         );
 
         (
@@ -1019,6 +1090,12 @@ impl MsBandLimiter {
 pub struct FtzDazGuard {
     #[cfg(target_arch = "x86_64")]
     old_csr: u32,
+}
+
+impl Default for FtzDazGuard {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl FtzDazGuard {

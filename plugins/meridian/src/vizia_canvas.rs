@@ -1,9 +1,9 @@
 //! Meridian-specific compressor gain-reduction mini-graph.
 //! Generic views (Goniometer, StereoMeter, Spectrum) live in shared-ui.
 
+use shared_ui::{col, fill_paint, line, rgb, stroke_paint};
 use vizia::prelude::*;
 use vizia::vg;
-use shared_ui::{col, rgb, fill_paint, stroke_paint, line};
 
 pub struct CompressorEnvelopeView {
     pub history: Vec<f32>,
@@ -29,9 +29,16 @@ impl View for CompressorEnvelopeView {
         let max_gr = 12.0f32;
         let margin = 2.0f32;
 
-        canvas.draw_rect(vg::Rect::new(0.0, 0.0, w, h), &fill_paint(rgb(0.08, 0.08, 0.08)));
+        canvas.draw_rect(
+            vg::Rect::new(0.0, 0.0, w, h),
+            &fill_paint(rgb(0.08, 0.08, 0.08)),
+        );
 
-        let n = if self.history.is_empty() { 1 } else { self.history.len() + 1 };
+        let n = if self.history.is_empty() {
+            1
+        } else {
+            self.history.len() + 1
+        };
         let x_step = (w - margin * 2.0) / (n - 1).max(1) as f32;
         let val_to_y = |val: f32| h - margin - (val / max_gr).clamp(0.0, 1.0) * (h - margin * 2.0);
 
@@ -39,7 +46,10 @@ impl View for CompressorEnvelopeView {
         for (i, &val) in self.history.iter().enumerate() {
             points.push((margin + i as f32 * x_step, val_to_y(val)));
         }
-        points.push((margin + self.history.len() as f32 * x_step, val_to_y(self.current)));
+        points.push((
+            margin + self.history.len() as f32 * x_step,
+            val_to_y(self.current),
+        ));
 
         if points.len() >= 2 {
             let mut fb = vg::PathBuilder::new();
@@ -61,9 +71,25 @@ impl View for CompressorEnvelopeView {
             canvas.draw_path(&lb.detach(), &stroke_paint(rgb(1.0, 0.4, 0.2), 1.2));
         }
 
-        line(canvas, margin, margin, w - margin, margin, col(1.0, 1.0, 1.0, 0.1), 0.5);
+        line(
+            canvas,
+            margin,
+            margin,
+            w - margin,
+            margin,
+            col(1.0, 1.0, 1.0, 0.1),
+            0.5,
+        );
         let y6 = margin + (h - margin * 2.0) * (6.0 / max_gr);
-        line(canvas, margin, y6, w - margin, y6, col(1.0, 1.0, 1.0, 0.06), 0.5);
+        line(
+            canvas,
+            margin,
+            y6,
+            w - margin,
+            y6,
+            col(1.0, 1.0, 1.0, 0.06),
+            0.5,
+        );
 
         if self.peak_hold > 0.1 {
             let py = val_to_y(self.peak_hold);

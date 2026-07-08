@@ -1,4 +1,4 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_TOLERANCES: [f32; 5] = [1.5, 2.0, 3.5, 4.5, 4.5];
 
@@ -122,8 +122,12 @@ fn parse_frontmatter(content: &str) -> std::collections::HashMap<String, String>
     }
     for line in lines {
         let trimmed = line.trim();
-        if trimmed == "---" { break; }
-        if trimmed.starts_with("- ") { continue; }
+        if trimmed == "---" {
+            break;
+        }
+        if trimmed.starts_with("- ") {
+            continue;
+        }
         if let Some(pos) = trimmed.find(':') {
             let key = trimmed[..pos].trim().to_string();
             let val = trimmed[pos + 1..].trim().to_string();
@@ -143,7 +147,9 @@ fn parse_frontmatter_list(content: &str, key: &str) -> Vec<String> {
     }
     for line in lines {
         let trimmed = line.trim();
-        if trimmed == "---" { break; }
+        if trimmed == "---" {
+            break;
+        }
         if trimmed.starts_with(&format!("{}:", key)) {
             in_list = true;
             continue;
@@ -174,10 +180,12 @@ pub fn parse_preset_from_markdown(content: &str) -> Option<Profile> {
     }
 
     let tags = parse_frontmatter_list(content, "tags");
-    let version = frontmatter.get("version")
+    let version = frontmatter
+        .get("version")
         .and_then(|v| v.parse().ok())
         .unwrap_or(1);
-    let source = frontmatter.get("source")
+    let source = frontmatter
+        .get("source")
         .cloned()
         .unwrap_or_else(|| "manual".to_string());
 
@@ -199,11 +207,20 @@ pub fn parse_preset_from_markdown(content: &str) -> Option<Profile> {
                 name = trimmed[start..].replace("**", "").trim().to_string();
             }
         } else if trimmed.contains("**Notizen:**") || trimmed.contains("**Notes:**") {
-            let marker = if trimmed.contains("**Notizen:**") { "**Notizen:**" } else { "**Notes:**" };
+            let marker = if trimmed.contains("**Notizen:**") {
+                "**Notizen:**"
+            } else {
+                "**Notes:**"
+            };
             if let Some(pos) = trimmed.find(marker) {
-                notes = trimmed[pos + marker.len()..].replace("**", "").trim().to_string();
+                notes = trimmed[pos + marker.len()..]
+                    .replace("**", "")
+                    .trim()
+                    .to_string();
             }
-        } else if trimmed.contains("## Stereo Settings") || trimmed.contains("## Stereo-Einstellungen") {
+        } else if trimmed.contains("## Stereo Settings")
+            || trimmed.contains("## Stereo-Einstellungen")
+        {
             in_stereo_table = true;
         } else if trimmed.contains("## Mono Floor") {
             in_stereo_table = false;
@@ -256,7 +273,11 @@ pub fn parse_preset_from_markdown(content: &str) -> Option<Profile> {
             }
         }
         // Mono Floor Hz — single number line under ## Mono Floor
-        if !in_stereo_table && trimmed.chars().any(|c| c.is_ascii_digit()) && !trimmed.starts_with('|') && !trimmed.contains('#') {
+        if !in_stereo_table
+            && trimmed.chars().any(|c| c.is_ascii_digit())
+            && !trimmed.starts_with('|')
+            && !trimmed.contains('#')
+        {
             if let Some(hz_str) = trimmed.split_whitespace().next() {
                 if let Ok(hz) = hz_str.parse::<f32>() {
                     mono_floor_hz = hz;
@@ -266,8 +287,21 @@ pub fn parse_preset_from_markdown(content: &str) -> Option<Profile> {
     }
 
     if has_bands.iter().all(|&h| h) {
-        if name.is_empty() { name = "Unnamed".to_string(); }
-        Some(Profile { name, bands, tolerances, pans, widths, mono_floor_hz, tags, version, notes, source })
+        if name.is_empty() {
+            name = "Unnamed".to_string();
+        }
+        Some(Profile {
+            name,
+            bands,
+            tolerances,
+            pans,
+            widths,
+            mono_floor_hz,
+            tags,
+            version,
+            notes,
+            source,
+        })
     } else {
         None
     }
@@ -333,21 +367,23 @@ pub fn list_custom_presets(
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                let stem = path.file_stem()
+                let stem = path
+                    .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("")
                     .to_string();
                 if path.is_file()
                     && path.extension().is_some_and(|ext| ext == "md")
                     && !stem.starts_with("SNAPSHOT-")
-                    && seen_paths.insert(path.clone()) {
-                        if let Ok(content) = std::fs::read_to_string(&path) {
-                            if let Some(mut profile) = parse_preset_from_markdown(&content) {
-                                profile.name = stem.clone();
-                                presets.push((stem, path, profile));
-                            }
+                    && seen_paths.insert(path.clone())
+                {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        if let Some(mut profile) = parse_preset_from_markdown(&content) {
+                            profile.name = stem.clone();
+                            presets.push((stem, path, profile));
                         }
                     }
+                }
             }
         }
     };

@@ -22,7 +22,7 @@ pub struct SnapFFT {
     fft_output_cache: Vec<realfft::num_complex::Complex<f32>>,
 
     // SNAP accumulators (one per mode)
-    snap_accum: [Vec<f32>; 3],  // [Stereo, Mono, Delta]
+    snap_accum: [Vec<f32>; 3], // [Stereo, Mono, Delta]
     pub snap_fft_count: u32,
     pub snap_phase_prev: u8,
 }
@@ -66,7 +66,7 @@ impl SnapFFT {
 
         if self.fft_write_pos >= self.fft_input.len() {
             self.fft_write_pos = 0;
-            true  // FFT ready
+            true // FFT ready
         } else {
             false
         }
@@ -98,7 +98,11 @@ impl SnapFFT {
                 -90.0
             };
             let freq = k as f32 * sample_rate / fft_size;
-            let tilt = if freq > 20.0 { 4.5 * (freq / 1000.0).log2() } else { 0.0 };
+            let tilt = if freq > 20.0 {
+                4.5 * (freq / 1000.0).log2()
+            } else {
+                0.0
+            };
             *slot = (db + tilt).clamp(-90.0, 12.0);
         }
 
@@ -107,7 +111,12 @@ impl SnapFFT {
 
     /// Accumulate frame into SNAP buffer
     /// Returns true when snapshot is complete (fft_count reaches threshold)
-    pub fn accumulate_snap(&mut self, frame: &[f32; SPECTRUM_BINS], snap_phase: u8, threshold: u32) -> bool {
+    pub fn accumulate_snap(
+        &mut self,
+        frame: &[f32; SPECTRUM_BINS],
+        snap_phase: u8,
+        threshold: u32,
+    ) -> bool {
         // Determine which mode to accumulate
         let mode = match snap_phase {
             1 => SnapMode::Stereo,
@@ -127,7 +136,7 @@ impl SnapFFT {
         }
 
         // EMA-style accumulation
-        let alpha = 0.1;  // ~10 frames to converge
+        let alpha = 0.1; // ~10 frames to converge
         let accum = &mut self.snap_accum[mode as usize];
         for (k, &f) in frame.iter().enumerate() {
             accum[k] = accum[k] * (1.0 - alpha) + f * alpha;

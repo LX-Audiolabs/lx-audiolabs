@@ -1,9 +1,9 @@
 //! Equilibrium-specific 5-band spectrum view.
 //! Generic views (Goniometer, StereoMeter, Spectrum) live in shared-ui.
 
+use shared_ui::{col, fill_paint, line, rgb};
 use vizia::prelude::*;
 use vizia::vg;
-use shared_ui::{col, rgb, fill_paint, line};
 
 pub struct EqSpectrumView {
     pub band_levels: [f32; 5],
@@ -34,7 +34,10 @@ impl View for EqSpectrumView {
         let height = b.height();
         let col_width = width / 5.0;
 
-        canvas.draw_rect(vg::Rect::new(0.0, 0.0, width, height), &fill_paint(rgb(0.08, 0.08, 0.08)));
+        canvas.draw_rect(
+            vg::Rect::new(0.0, 0.0, width, height),
+            &fill_paint(rgb(0.08, 0.08, 0.08)),
+        );
 
         const TILT: [f32; 5] = [-1.5, 0.0, 1.5, 3.0, 4.5];
 
@@ -53,7 +56,9 @@ impl View for EqSpectrumView {
         // Target profiles are visual reference shapes and use the same pink-noise
         // display tilt as the live signal so that the built-in Pink Noise preset
         // (the negative of TILT) appears as a flat reference line.
-        let target_sum: f32 = (0..5).map(|i| (self.target_levels[i] + TILT[i]).max(-30.0)).sum();
+        let target_sum: f32 = (0..5)
+            .map(|i| (self.target_levels[i] + TILT[i]).max(-30.0))
+            .sum();
         let target_avg = target_sum / 5.0;
 
         let min_db = -30.0f32;
@@ -77,17 +82,26 @@ impl View for EqSpectrumView {
             line(canvas, x, 0.0, x, height, col(1.0, 1.0, 1.0, 0.05), 1.0);
         }
 
-        for b in 0..5 {
+        for (b, (&level, &tilt)) in self.band_levels.iter().zip(TILT.iter()).enumerate() {
             let col_x = b as f32 * col_width;
 
-            let bar_alpha = if self.listen_samples > 0.0 { 0.12 } else { 0.55 };
+            let bar_alpha = if self.listen_samples > 0.0 {
+                0.12
+            } else {
+                0.55
+            };
             if !is_silent {
-                let peak_db_t = self.band_levels[b].max(-50.0) + TILT[b];
+                let peak_db_t = level.max(-50.0) + tilt;
                 let norm_band_db = peak_db_t - band_avg;
                 let bar_top_y = db_to_y(norm_band_db);
                 let bar_h = (height - bar_top_y).max(0.0);
                 canvas.draw_rect(
-                    vg::Rect::new(col_x + 5.0, bar_top_y, col_x + col_width - 5.0, bar_top_y + bar_h),
+                    vg::Rect::new(
+                        col_x + 5.0,
+                        bar_top_y,
+                        col_x + col_width - 5.0,
+                        bar_top_y + bar_h,
+                    ),
                     &fill_paint(col(1.0, 0.45, 0.1, bar_alpha)),
                 );
             }
@@ -103,10 +117,23 @@ impl View for EqSpectrumView {
                 let corridor_h = (lower_y - upper_y).max(2.0);
 
                 canvas.draw_rect(
-                    vg::Rect::new(col_x + 1.0, upper_y, col_x + col_width - 1.0, upper_y + corridor_h),
+                    vg::Rect::new(
+                        col_x + 1.0,
+                        upper_y,
+                        col_x + col_width - 1.0,
+                        upper_y + corridor_h,
+                    ),
                     &fill_paint(col(1.0, 1.0, 1.0, 0.15)),
                 );
-                line(canvas, col_x, target_y, col_x + col_width, target_y, col(1.0, 1.0, 1.0, 0.55), 1.0);
+                line(
+                    canvas,
+                    col_x,
+                    target_y,
+                    col_x + col_width,
+                    target_y,
+                    col(1.0, 1.0, 1.0, 0.55),
+                    1.0,
+                );
             }
 
             if self.listen_samples > 100.0 {
@@ -123,7 +150,12 @@ impl View for EqSpectrumView {
                 let tolerance_h = (lower_y - upper_y).max(2.0);
 
                 canvas.draw_rect(
-                    vg::Rect::new(col_x + 1.0, upper_y, col_x + col_width - 1.0, upper_y + tolerance_h),
+                    vg::Rect::new(
+                        col_x + 1.0,
+                        upper_y,
+                        col_x + col_width - 1.0,
+                        upper_y + tolerance_h,
+                    ),
                     &fill_paint(col(1.0, 0.3, 0.3, 0.12)),
                 );
 
@@ -132,11 +164,24 @@ impl View for EqSpectrumView {
                 let l_lower_y = db_to_y(norm_listen_db - listen_tolerance);
                 let l_corridor_h = (l_lower_y - l_upper_y).max(2.0);
                 canvas.draw_rect(
-                    vg::Rect::new(col_x + 1.0, l_upper_y, col_x + col_width - 1.0, l_upper_y + l_corridor_h),
+                    vg::Rect::new(
+                        col_x + 1.0,
+                        l_upper_y,
+                        col_x + col_width - 1.0,
+                        l_upper_y + l_corridor_h,
+                    ),
                     &fill_paint(col(0.5, 0.5, 1.0, 0.10)),
                 );
 
-                line(canvas, col_x, listen_y, col_x + col_width, listen_y, col(1.0, 0.3, 0.3, 0.7), 1.5);
+                line(
+                    canvas,
+                    col_x,
+                    listen_y,
+                    col_x + col_width,
+                    listen_y,
+                    col(1.0, 0.3, 0.3, 0.7),
+                    1.5,
+                );
             }
         }
     }
