@@ -61,8 +61,12 @@ impl View for EqSpectrumView {
             .sum();
         let target_avg = target_sum / 5.0;
 
-        let min_db = -30.0f32;
-        let max_db = 12.0f32;
+        // Bars/targets are mean-normalized (0 dB = band average), so a single hot
+        // band deviates far more positively than the four quiet bands deviate
+        // negatively. Centre the 42 dB window closer to 0 dB (was -30..+12, which
+        // put 0 dB at 71% height and clipped bass-heavy material off the top).
+        let min_db = -20.0f32;
+        let max_db = 22.0f32;
         let db_range = max_db - min_db;
 
         let db_to_y = |db: f32| {
@@ -70,9 +74,9 @@ impl View for EqSpectrumView {
             height - (norm * height)
         };
 
-        for &db in &[-30.0f32, -24.0, -18.0, -12.0, -6.0, 0.0, 6.0, 12.0] {
+        for &db in &[-18.0f32, -12.0, -6.0, 0.0, 6.0, 12.0, 18.0] {
             let y = db_to_y(db);
-            let is_major = db == -30.0 || db == -18.0 || db == -6.0 || db == 6.0;
+            let is_major = db == 0.0 || db == 18.0 || db == -18.0;
             let alpha = if is_major { 0.20 } else { 0.10 };
             line(canvas, 0.0, y, width, y, col(1.0, 1.0, 1.0, alpha), 1.0);
         }
