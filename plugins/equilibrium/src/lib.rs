@@ -854,6 +854,36 @@ impl PluginLogic for Equilibrium {
             }
         }
 
+        // Pink noise carries equal energy per octave, so a band's total power
+        // scales with its octave span — wider bands read hotter and the display
+        // stair-steps upward. Divide each band's power by its octave width so a
+        // pink-noise reference lands on a flat spectrum. Applied to both the
+        // post-EQ meter and the pre-EQ LISTEN power so every downstream reading
+        // (bars, listen, min/max, learned targets) stays per-octave consistent.
+        // SUB_LO_HZ is the Sub band's lower edge — empirically the pink test
+        // source is band-limited near 20 Hz (not the 8 Hz DC highpass), so 20
+        // lands Sub flat. Air's upper edge is Nyquist, so band 4 is sample-rate
+        // dependent. CAL_TRIM_DB is the residual per-band calibration left after
+        // the octave model: measured by feeding pink noise and reading the bars
+        // flat. Air runs ~1 dB hot from LR2 (12 dB/oct) skirt overlap. Retune
+        // both only if a pink reference no longer sits flat.
+        const SUB_LO_HZ: f32 = 20.0;
+        const CAL_TRIM_DB: [f32; 5] = [0.0, 0.0, 0.0, 0.0, -1.0];
+        let band_octaves = [
+            (80.0f32 / SUB_LO_HZ).log2(),
+            (300.0f32 / 80.0).log2(),
+            (2000.0f32 / 300.0).log2(),
+            (6000.0f32 / 2000.0).log2(),
+            (sample_rate * 0.5 / 6000.0).log2(),
+        ];
+        for b in 0..BAND_COUNT {
+            // Fold octave width + calibration trim into one power divisor.
+            // trim adds dB to the reading, so divide power by 10^(-trim/10).
+            let div = band_octaves[b] * 10f32.powf(-CAL_TRIM_DB[b] / 10.0);
+            block_band_power[b] /= div;
+            block_input_band_power[b] /= div;
+        }
+
         let sample_weight = 1.0 / count_samples as f32;
         let buf_coef = 1.0 - (-(num_samples as f32) / (0.1 * sample_rate)).exp();
 
