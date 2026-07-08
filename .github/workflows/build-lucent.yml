@@ -54,3 +54,36 @@ jobs:
           name: lucent-v${{ steps.version.outputs.version }}-linux
           path: target/bundled/*.clap
           if-no-files-found: error
+
+  build-macos:
+    name: macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target/
+          key: macos-lucent-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: macos-lucent-
+      - name: Build Lucent
+        run: cargo build --release --package lucent --package lucent-relay
+      - name: Read version
+        id: version
+        run: echo "version=$(grep '^version' plugins/lucent/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
+      - name: Bundle CLAPs
+        run: |
+          rm -rf target/bundled
+          mkdir -p target/bundled
+          cp target/release/liblucent.dylib target/bundled/lucent.clap
+          cp target/release/liblucent_relay.dylib target/bundled/lucent-relay.clap
+          echo "✓ Created: 2 CLAPs"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: lucent-v${{ steps.version.outputs.version }}-macos
+          path: target/bundled/*.clap
+          if-no-files-found: error

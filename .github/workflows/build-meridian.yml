@@ -39,6 +39,9 @@ jobs:
             libgl-dev
       - name: Build Meridian
         run: cargo build --release --package meridian
+      - name: Read version
+        id: version
+        run: echo "version=$(grep '^version' plugins/meridian/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
       - name: Bundle CLAP
         run: |
           rm -rf target/bundled
@@ -47,6 +50,38 @@ jobs:
           echo "✓ Created: meridian.clap"
       - uses: actions/upload-artifact@v6
         with:
-          name: meridian-linux
+          name: meridian-v${{ steps.version.outputs.version }}-linux
+          path: target/bundled/*.clap
+          if-no-files-found: error
+
+  build-macos:
+    name: macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target/
+          key: macos-meridian-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: macos-meridian-
+      - name: Build Meridian
+        run: cargo build --release --package meridian
+      - name: Read version
+        id: version
+        run: echo "version=$(grep '^version' plugins/meridian/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
+      - name: Bundle CLAP
+        run: |
+          rm -rf target/bundled
+          mkdir -p target/bundled
+          cp target/release/libmeridian.dylib target/bundled/meridian.clap
+          echo "✓ Created: meridian.clap"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: meridian-v${{ steps.version.outputs.version }}-macos
           path: target/bundled/*.clap
           if-no-files-found: error

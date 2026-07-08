@@ -39,6 +39,9 @@ jobs:
             libgl-dev
       - name: Build Aether
         run: cargo build --release --package aether
+      - name: Read version
+        id: version
+        run: echo "version=$(grep '^version' plugins/aether/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
       - name: Bundle CLAP
         run: |
           rm -rf target/bundled
@@ -47,6 +50,38 @@ jobs:
           echo "✓ Created: aether.clap"
       - uses: actions/upload-artifact@v6
         with:
-          name: aether-linux
+          name: aether-v${{ steps.version.outputs.version }}-linux
+          path: target/bundled/*.clap
+          if-no-files-found: error
+
+  build-macos:
+    name: macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target/
+          key: macos-aether-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: macos-aether-
+      - name: Build Aether
+        run: cargo build --release --package aether
+      - name: Read version
+        id: version
+        run: echo "version=$(grep '^version' plugins/aether/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
+      - name: Bundle CLAP
+        run: |
+          rm -rf target/bundled
+          mkdir -p target/bundled
+          cp target/release/libaether.dylib target/bundled/aether.clap
+          echo "✓ Created: aether.clap"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: aether-v${{ steps.version.outputs.version }}-macos
           path: target/bundled/*.clap
           if-no-files-found: error

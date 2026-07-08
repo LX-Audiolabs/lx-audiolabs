@@ -39,6 +39,9 @@ jobs:
             libgl-dev
       - name: Build Equilibrium
         run: cargo build --release --package equilibrium
+      - name: Read version
+        id: version
+        run: echo "version=$(grep '^version' plugins/equilibrium/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
       - name: Bundle CLAP
         run: |
           rm -rf target/bundled
@@ -47,6 +50,38 @@ jobs:
           echo "✓ Created: equilibrium.clap"
       - uses: actions/upload-artifact@v6
         with:
-          name: equilibrium-linux
+          name: equilibrium-v${{ steps.version.outputs.version }}-linux
+          path: target/bundled/*.clap
+          if-no-files-found: error
+
+  build-macos:
+    name: macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target/
+          key: macos-equilibrium-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: macos-equilibrium-
+      - name: Build Equilibrium
+        run: cargo build --release --package equilibrium
+      - name: Read version
+        id: version
+        run: echo "version=$(grep '^version' plugins/equilibrium/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
+      - name: Bundle CLAP
+        run: |
+          rm -rf target/bundled
+          mkdir -p target/bundled
+          cp target/release/libequilibrium.dylib target/bundled/equilibrium.clap
+          echo "✓ Created: equilibrium.clap"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: equilibrium-v${{ steps.version.outputs.version }}-macos
           path: target/bundled/*.clap
           if-no-files-found: error

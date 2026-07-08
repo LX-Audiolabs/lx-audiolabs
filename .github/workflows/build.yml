@@ -60,6 +60,98 @@ jobs:
           echo "✓ Created: $(ls target/bundled/*.clap | wc -l) CLAPs"
       - uses: actions/upload-artifact@v6
         with:
-          name: all-plugins-linux
-          path: target/bundled/*.clap
+          name: aether-v${{ steps.version.outputs.aether }}-linux
+          path: target/bundled/aether.clap
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v6
+        with:
+          name: aurum-v${{ steps.version.outputs.aurum }}-linux
+          path: target/bundled/aurum.clap
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v6
+        with:
+          name: equilibrium-v${{ steps.version.outputs.equilibrium }}-linux
+          path: target/bundled/equilibrium.clap
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v6
+        with:
+          name: lucent-v${{ steps.version.outputs.lucent }}-linux
+          path: target/bundled/lucent.clap
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v6
+        with:
+          name: lucent-relay-v${{ steps.version.outputs.lucent }}-linux
+          path: target/bundled/lucent-relay.clap
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v6
+        with:
+          name: meridian-v${{ steps.version.outputs.meridian }}-linux
+          path: target/bundled/meridian.clap
+          if-no-files-found: error
+
+  build-macos:
+    name: macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target/
+          key: macos-all-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: macos-all-
+      - name: Build all plugins
+        run: cargo build --release -p aether -p aurum -p equilibrium -p lucent -p lucent-relay -p meridian
+      - name: Read versions
+        id: version
+        run: |
+          echo "aether=$(grep '^version' plugins/aether/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
+          echo "aurum=$(grep '^version' plugins/aurum/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
+          echo "equilibrium=$(grep '^version' plugins/equilibrium/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
+          echo "lucent=$(grep '^version' plugins/lucent/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
+          echo "meridian=$(grep '^version' plugins/meridian/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')" >> $GITHUB_OUTPUT
+      - name: Bundle CLAPs
+        run: |
+          rm -rf target/bundled
+          mkdir -p target/bundled
+          cp target/release/libaether.dylib target/bundled/aether.clap
+          cp target/release/libaurum.dylib target/bundled/aurum.clap
+          cp target/release/libequilibrium.dylib target/bundled/equilibrium.clap
+          cp target/release/liblucent.dylib target/bundled/lucent.clap
+          cp target/release/liblucent_relay.dylib target/bundled/lucent-relay.clap
+          cp target/release/libmeridian.dylib target/bundled/meridian.clap
+          echo "✓ Created: $(ls target/bundled/*.clap | wc -l) CLAPs"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: aether-v${{ steps.version.outputs.aether }}-macos
+          path: target/bundled/aether.clap
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v6
+        with:
+          name: aurum-v${{ steps.version.outputs.aurum }}-macos
+          path: target/bundled/aurum.clap
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v6
+        with:
+          name: equilibrium-v${{ steps.version.outputs.equilibrium }}-macos
+          path: target/bundled/equilibrium.clap
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v6
+        with:
+          name: lucent-v${{ steps.version.outputs.lucent }}-macos
+          path: target/bundled/lucent.clap
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v6
+        with:
+          name: lucent-relay-v${{ steps.version.outputs.lucent }}-macos
+          path: target/bundled/lucent-relay.clap
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v6
+        with:
+          name: meridian-v${{ steps.version.outputs.meridian }}-macos
+          path: target/bundled/meridian.clap
           if-no-files-found: error
