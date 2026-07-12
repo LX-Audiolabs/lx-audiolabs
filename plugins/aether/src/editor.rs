@@ -622,7 +622,10 @@ impl View for Ticker {
                 false
             }
         };
-        let mut needs_redraw = false;
+        let profile = shared_ui::ticker_profile_enabled();
+        let t0_total = if profile { Some(Instant::now()) } else { None };
+        let t0_tick = if profile && due { Some(Instant::now()) } else { None };
+        let mut telemetry_changed = false;
         if due {
             let mut acc = self.accum.borrow_mut();
             let in_peak = self.shared.input_peak.load(Ordering::Relaxed);
@@ -663,7 +666,7 @@ impl View for Ticker {
                             preset_names: names,
                             ..prev
                         });
-                        needs_redraw = true;
+                        telemetry_changed = true;
                     }
                     if let Ok(mut c) = self.preset_cache.lock() {
                         c.clear();
@@ -680,7 +683,7 @@ impl View for Ticker {
                 if let Ok(guard) = self.pending_presets.presets.lock() {
                     if let Some((scan_gen, ref scanned)) = *guard {
                         if scan_gen == current_gen {
-                            needs_redraw |= apply_scanned_presets(
+                            telemetry_changed |= apply_scanned_presets(
                                 scanned,
                                 &self.preset_opts,
                                 &self.telemetry,
@@ -718,11 +721,18 @@ impl View for Ticker {
             };
             if next != prev {
                 self.telemetry.set(next);
-                needs_redraw = true;
+                telemetry_changed = true;
             }
         }
-        if needs_redraw {
-            cx.needs_redraw();
+        let tick_us = t0_tick.map(|t| t.elapsed().as_micros() as u64).unwrap_or(0);
+        // Keep the render loop alive so the layer-cached views repaint their
+        // dynamic overlays every frame. The telemetry Signal is still only set
+        // when values actually change.
+        let _ = telemetry_changed;
+        cx.needs_redraw();
+        let total_us = t0_total.map(|t| t.elapsed().as_micros() as u64).unwrap_or(0);
+        if profile {
+            shared_ui::report_ticker(tick_us, total_us);
         }
     }
 }

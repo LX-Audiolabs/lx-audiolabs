@@ -315,7 +315,8 @@ impl View for GoniometerView {
                 if let Ok(samples) = self.samples.lock() {
                     let n = samples.len();
                     if n > 0 {
-                        let draw_count = n.min(2048);
+                        // ponytail: testing reduced point count for performance
+                        let draw_count = n.min(1024);
                         let third = draw_count / 3;
                         let wp = self.write_pos % n;
                         let inv_sqrt2 = std::f32::consts::FRAC_1_SQRT_2;
@@ -665,7 +666,8 @@ pub fn smooth_spectrum_third_octave_into(
     let taper_lo = F_LOW.ln();
     let taper_hi = F_HIGH.ln();
 
-    const STEPS: usize = 480;
+    // ponytail: testing reduced smoothing resolution for performance
+    const STEPS: usize = 240;
 
     let len = spectrum.len();
 

@@ -1138,9 +1138,12 @@ impl View for Ticker {
                 false
             }
         };
-        let mut needs_redraw = false;
+        let profile = shared_ui::ticker_profile_enabled();
+        let t0_total = if profile { Some(Instant::now()) } else { None };
+        let t0_tick = if profile && due { Some(Instant::now()) } else { None };
+        let mut telemetry_changed = false;
         if due {
-            needs_redraw = tick(
+            telemetry_changed = tick(
                 &self.shared,
                 &self.params,
                 &self.accum,
@@ -1148,8 +1151,15 @@ impl View for Ticker {
                 self.params_gen,
             );
         }
-        if needs_redraw {
-            cx.needs_redraw();
+        let tick_us = t0_tick.map(|t| t.elapsed().as_micros() as u64).unwrap_or(0);
+        // Keep the render loop alive so the layer-cached views repaint their
+        // dynamic overlays every frame. The telemetry Signal is still only set
+        // when values actually change.
+        let _ = telemetry_changed;
+        cx.needs_redraw();
+        let total_us = t0_total.map(|t| t.elapsed().as_micros() as u64).unwrap_or(0);
+        if profile {
+            shared_ui::report_ticker(tick_us, total_us);
         }
     }
 }

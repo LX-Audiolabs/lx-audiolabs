@@ -1,6 +1,7 @@
 pub mod buttons;
 pub mod canvas;
 pub mod layer_cache;
+pub mod profile;
 pub mod widgets;
 
 pub use buttons::{
@@ -13,4 +14,5 @@ pub use canvas::{
     col, fill_paint, fill_text, fmt_db, line, rgb, smooth_spectrum_third_octave, stroke_paint,
     EqCurve, GoniometerView, SpectrumConfig, SpectrumCurve, SpectrumView, StereoMeterView,
 };
+pub use profile::{report_ticker, ticker_profile_enabled};
 pub use widgets::{format_knob_value, Gesture, HSliderView, KnobView};
