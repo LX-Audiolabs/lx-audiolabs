@@ -1332,14 +1332,20 @@ fn build_footer(
                                 lens_listen.automate(K::ListenActive, norm);
                                 sig.set(norm as f32);
                             },
-                        );
+                        )
+                        .width(Pixels(110.0));
                     });
                 }
 
+                let listen_sig = bool_sigs.listen;
                 let shared_apply = shared_analyze.clone();
-                let lens_apply = lens_analyze.clone();
+                let shared_ra = shared_analyze.clone();
+
+                // APPLY / RESET are always clickable so they give hover
+                // feedback; the actual work is gated by the current Listen
+                // state read fresh from the shared param signal.
                 shared_ui::push_button_big(cx, "APPLY ANALYSIS", move |_cx| {
-                    if lens_apply.get(K::ListenActive) <= 0.5 {
+                    if listen_sig.get() <= 0.5 {
                         return;
                     }
                     let t = telemetry.get();
@@ -1351,12 +1357,11 @@ fn build_footer(
                                 .store(t.listen_tolerances[b], Ordering::Release);
                         }
                     }
-                });
+                })
+                .width(Pixels(120.0));
 
-                let shared_ra = shared_analyze.clone();
-                let lens_ra = lens_analyze.clone();
                 shared_ui::push_button_big(cx, "RESET ANALYSIS", move |_cx| {
-                    if lens_ra.get(K::ListenActive) <= 0.5 {
+                    if listen_sig.get() <= 0.5 {
                         return;
                     }
                     shared_ra.reset_analysis.store(true, Ordering::Release);
@@ -1365,15 +1370,16 @@ fn build_footer(
                         shared_ra.listen_levels[b].store(-90.0, Ordering::Release);
                         shared_ra.listen_tolerances[b].store(0.0, Ordering::Release);
                     }
-                });
+                })
+                .width(Pixels(120.0));
             })
-            .horizontal_gap(Pixels(12.0))
+            .horizontal_gap(Pixels(8.0))
             .alignment(Alignment::Center)
             .height(Auto);
         })
         .vertical_gap(Pixels(4.0))
         .alignment(Alignment::Center)
-        .width(Auto)
+        .width(Pixels(376.0))
         .padding(Pixels(5.0));
 
         Element::new(cx).width(Stretch(1.0));
@@ -1382,10 +1388,10 @@ fn build_footer(
             Label::new(cx, "MONO FLOOR")
                 .font_size(10.0)
                 .color(rgb(1.0, 0.55, 0.15));
-            // Mono Floor can move from outside a knob drag (RESET ALL),
-            // which bumps `params_gen` for exactly this reason - re-read
-            // the plain value on every bump so the knob doesn't go stale.
-            Binding::new(cx, params_gen, {
+            // Mono Floor can move from outside a knob drag (RESET ALL).
+            // Bind to the actual param signal so the knob rebuilds on any
+            // value change, not only on explicit `params_gen` bumps.
+            Binding::new(cx, lens_mono.value_signal(K::MonoFloor), {
                 let lens_mono = lens_mono.clone();
                 move |cx| {
                     let mf = lens_mono.get_plain(K::MonoFloor);
@@ -1439,12 +1445,12 @@ fn build_footer(
     })
     .width(Stretch(1.0))
     .height(Pixels(110.0))
-    .padding_left(Pixels(130.0))
+    .padding_left(Pixels(100.0))
     .padding_right(Pixels(8.0))
     .padding_top(Pixels(8.0))
     .padding_bottom(Pixels(8.0))
     .alignment(Alignment::Center)
-    .horizontal_gap(Pixels(15.0))
+    .horizontal_gap(Pixels(10.0))
     .background_color(rgb(0.08, 0.08, 0.08));
 }
 

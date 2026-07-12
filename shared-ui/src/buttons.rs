@@ -66,6 +66,13 @@ const BUTTON_CSS: &str = r#"
 .lx-btn.active.amber-text {
     color: #ffffff;
 }
+.lx-btn.disabled {
+    background-color: #1a1a1a;
+    color: #555555;
+}
+.lx-btn.disabled:hover {
+    background-color: #1a1a1a;
+}
 "#;
 
 /// Add the shared button stylesheet to the current `Context`.

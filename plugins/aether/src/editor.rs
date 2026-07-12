@@ -7,10 +7,11 @@
 //! so typing and dragging survive across ticks.
 
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use vizia::prelude::*;
@@ -138,9 +139,9 @@ fn set_eq_type(lens: &ParamLens<AetherParams>, i: usize, v: i32) {
 
 fn eq_curve_points(params: &AetherParams, sr: f32) -> Vec<(f32, f32)> {
     let mut bands: [Biquad; 5] = std::array::from_fn(|_| Biquad::new());
-    for (i, band) in bands.iter_mut().enumerate() {
+    for i in 0..5 {
         crate::set_band(
-            band,
+            &mut bands[i],
             eq_type_val(params, i),
             eq_freq_val(params, i),
             eq_gain_val(params, i),
@@ -162,7 +163,7 @@ fn eq_curve_points(params: &AetherParams, sr: f32) -> Vec<(f32, f32)> {
 
 // ─── Preset types ────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AetherProfile {
     pub name: String,
     pub bands: [(i32, f32, f32, f32); 5],
@@ -171,6 +172,31 @@ pub struct AetherProfile {
     pub cf_realism: i32,
     pub blend: f32,
     pub gain: f32,
+}
+
+type PresetEntry = (String, PathBuf, AetherProfile);
+
+/// Thread-safe holder for a background vault-scan result. The GUI thread
+/// swaps `ready` to false and copies the presets out; the scanner sets it
+/// to true after writing. `generation` lets the GUI thread ignore results
+/// from scans that were already stale when a new scan or save happened.
+struct PendingPresets {
+    ready: AtomicBool,
+    generation: AtomicU32,
+    presets: Mutex<Option<(u32, Vec<PresetEntry>)>>,
+}
+
+impl PendingPresets {
+    /// Invalidate any in-flight scan and return the next generation number.
+    fn bump_generation(&self) -> u32 {
+        let new = self.generation.load(Ordering::Relaxed).wrapping_add(1);
+        self.generation.store(new, Ordering::Release);
+        self.ready.store(false, Ordering::Release);
+        if let Ok(mut guard) = self.presets.lock() {
+            *guard = None;
+        }
+        new
+    }
 }
 
 pub(crate) fn harman_flat_profile() -> AetherProfile {
@@ -370,22 +396,30 @@ fn apply_profile(_params: &AetherParams, lens: &ParamLens<AetherParams>, p: &Aet
     );
 }
 
-fn save_last_preset(vault_path: &Option<String>, name: &str) {
-    let mut cfg = shared_analysis::load_config("Aether");
-    cfg.vault_path = vault_path.clone();
-    cfg.last_preset = Some(name.to_string());
-    let _ = shared_analysis::save_config("Aether", &cfg);
+fn last_profile_cache_path() -> PathBuf {
+    shared_analysis::get_plugin_dir("Aether").join("last_profile.json")
 }
 
-fn resolve_last_preset(
-    presets: &[(String, Option<PathBuf>, AetherProfile)],
-    config: &shared_analysis::PluginConfig,
-) -> Option<AetherProfile> {
-    let name = config.last_preset.as_ref()?;
-    presets
-        .iter()
-        .find(|(n, _, _)| n == name)
-        .map(|(_, _, p)| p.clone())
+fn load_cached_last_profile() -> Option<AetherProfile> {
+    let path = last_profile_cache_path();
+    if let Ok(content) = std::fs::read_to_string(path) {
+        if let Ok(profile) = serde_json::from_str::<AetherProfile>(&content) {
+            return Some(profile);
+        }
+    }
+    None
+}
+
+fn save_last_preset(vault_path: &Option<String>, profile: &AetherProfile) {
+    let mut cfg = shared_analysis::load_config("Aether");
+    cfg.vault_path = vault_path.clone();
+    cfg.last_preset = Some(profile.name.clone());
+    let _ = shared_analysis::save_config("Aether", &cfg);
+    let path = last_profile_cache_path();
+    let _ = std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")));
+    if let Ok(content) = serde_json::to_string_pretty(profile) {
+        let _ = std::fs::write(path, content);
+    }
 }
 
 fn find_profile(name: &str, vault_path: &Option<String>) -> Option<AetherProfile> {
@@ -395,13 +429,40 @@ fn find_profile(name: &str, vault_path: &Option<String>) -> Option<AetherProfile
         }
     }
     if let Some(vp) = vault_path {
-        for (n, _, p) in scan_aether_presets(std::path::Path::new(vp)) {
+        for (n, _, p) in scan_aether_presets(Path::new(vp)) {
             if n == name {
                 return Some(p);
             }
         }
     }
     None
+}
+
+fn spawn_vault_scan(vp: String, pending: Arc<PendingPresets>, generation: u32) {
+    std::thread::spawn(move || {
+        let scanned = scan_aether_presets(Path::new(&vp));
+        if let Ok(mut guard) = pending.presets.lock() {
+            *guard = Some((generation, scanned));
+        }
+        pending.ready.store(true, Ordering::Release);
+    });
+}
+
+fn apply_scanned_presets(
+    scanned: &[PresetEntry],
+    preset_opts: &Signal<Vec<String>>,
+    telemetry: &Signal<Telemetry>,
+    cache: &Mutex<Vec<PresetEntry>>,
+) {
+    let mut names: Vec<String> = default_presets().into_iter().map(|(n, _, _)| n).collect();
+    names.extend(scanned.iter().map(|(n, _, _)| n.clone()));
+    if let Ok(mut c) = cache.lock() {
+        *c = scanned.to_vec();
+    }
+    preset_opts.set(names.clone());
+    telemetry.update(|t| {
+        t.preset_names = names;
+    });
 }
 
 fn build_profile_md(params: &AetherParams) -> String {
@@ -453,6 +514,24 @@ fn build_profile_md(params: &AetherParams) -> String {
     s
 }
 
+fn profile_from_params(params: &AetherParams) -> AetherProfile {
+    AetherProfile {
+        name: String::new(),
+        bands: [
+            (eq_type_val(params, 0), eq_freq_val(params, 0), eq_gain_val(params, 0), eq_q_val(params, 0)),
+            (eq_type_val(params, 1), eq_freq_val(params, 1), eq_gain_val(params, 1), eq_q_val(params, 1)),
+            (eq_type_val(params, 2), eq_freq_val(params, 2), eq_gain_val(params, 2), eq_q_val(params, 2)),
+            (eq_type_val(params, 3), eq_freq_val(params, 3), eq_gain_val(params, 3), eq_q_val(params, 3)),
+            (eq_type_val(params, 4), eq_freq_val(params, 4), eq_gain_val(params, 4), eq_q_val(params, 4)),
+        ],
+        cf_angle: params.cf_angle.raw_target() as f32,
+        cf_amount: params.cf_amount.raw_target() as f32,
+        cf_realism: params.cf_realism.value_i32(),
+        blend: params.blend.raw_target() as f32,
+        gain: params.gain.raw_target() as f32,
+    }
+}
+
 // ─── Telemetry ─────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -466,8 +545,7 @@ struct Telemetry {
 struct TickAccum {
     in_peak_hold: f32,
     in_peak_hold_ticks: u32,
-    preset_refresh_counter: u32,
-    /// Last vault path we scanned, so a path change refreshes the preset list immediately.
+    /// Last vault path we handled, so a path change refreshes the preset list.
     last_vault_path: Option<String>,
 }
 
@@ -479,10 +557,14 @@ struct Ticker {
     telemetry: Signal<Telemetry>,
     accum: Rc<RefCell<TickAccum>>,
     vault_path: Signal<Option<String>>,
+    preset_opts: Signal<Vec<String>>,
+    pending_presets: Arc<PendingPresets>,
+    preset_cache: Arc<Mutex<Vec<PresetEntry>>>,
     last_tick: RefCell<Instant>,
 }
 
 impl Ticker {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         cx: &mut Context,
         params: Arc<AetherParams>,
@@ -490,6 +572,9 @@ impl Ticker {
         telemetry: Signal<Telemetry>,
         accum: Rc<RefCell<TickAccum>>,
         vault_path: Signal<Option<String>>,
+        preset_opts: Signal<Vec<String>>,
+        pending_presets: Arc<PendingPresets>,
+        preset_cache: Arc<Mutex<Vec<PresetEntry>>>,
     ) -> Handle<'_, Self> {
         Self {
             params,
@@ -497,6 +582,9 @@ impl Ticker {
             telemetry,
             accum,
             vault_path,
+            preset_opts,
+            pending_presets,
+            preset_cache,
             last_tick: RefCell::new(Instant::now()),
         }
         .build(cx, |_| {})
@@ -504,7 +592,6 @@ impl Ticker {
 }
 
 const TICK_MS: Duration = Duration::from_millis(33);
-const PRESET_REFRESH_INTERVAL_TICKS: u32 = 60; // ~2 s at 33 ms/tick
 
 impl View for Ticker {
     fn element(&self) -> Option<&'static str> {
@@ -531,25 +618,56 @@ impl View for Ticker {
             } else {
                 acc.in_peak_hold = (acc.in_peak_hold - 0.5).max(in_peak);
             }
+
             let current_vp = self.vault_path.get();
             let vault_changed = acc.last_vault_path != current_vp;
-            let refresh_due = acc
-                .preset_refresh_counter
-                .is_multiple_of(PRESET_REFRESH_INTERVAL_TICKS);
-            if vault_changed || refresh_due {
+            if vault_changed {
                 acc.last_vault_path = current_vp.clone();
-                let mut preset_names: Vec<String> =
-                    default_presets().into_iter().map(|(n, _, _)| n).collect();
+                // Bump generation so any in-flight scan result is ignored.
+                let new_gen = self
+                    .pending_presets
+                    .generation
+                    .load(Ordering::Relaxed)
+                    .wrapping_add(1);
+                self.pending_presets.generation.store(new_gen, Ordering::Release);
+                self.pending_presets.ready.store(false, Ordering::Release);
+                if let Ok(mut guard) = self.pending_presets.presets.lock() {
+                    *guard = None;
+                }
                 if let Some(ref vp) = current_vp {
-                    for (name, _, _) in scan_aether_presets(std::path::Path::new(&vp)) {
-                        preset_names.push(name);
+                    spawn_vault_scan(vp.clone(), self.pending_presets.clone(), new_gen);
+                } else {
+                    let names: Vec<String> =
+                        default_presets().into_iter().map(|(n, _, _)| n).collect();
+                    self.preset_opts.set(names.clone());
+                    self.telemetry.update(|t| {
+                        t.preset_names = names;
+                    });
+                    if let Ok(mut c) = self.preset_cache.lock() {
+                        c.clear();
                     }
                 }
-                self.telemetry.update(|t| {
-                    t.preset_names = preset_names;
-                });
             }
-            acc.preset_refresh_counter += 1;
+
+            // Drain any completed background vault scan and update the
+            // dropdown / cache. This keeps editor::build() free of sync
+            // file I/O so Reaper startup isn't blocked while the FX window
+            // is restored. Only accept results matching the current generation.
+            if self.pending_presets.ready.swap(false, Ordering::Acquire) {
+                let current_gen = self.pending_presets.generation.load(Ordering::Acquire);
+                if let Ok(guard) = self.pending_presets.presets.lock() {
+                    if let Some((scan_gen, ref scanned)) = *guard {
+                        if scan_gen == current_gen {
+                            apply_scanned_presets(
+                                scanned,
+                                &self.preset_opts,
+                                &self.telemetry,
+                                &self.preset_cache,
+                            );
+                        }
+                    }
+                }
+            }
 
             let sr = self.shared.sample_rate.load(Ordering::Relaxed).max(1.0);
             let curve = eq_curve_points(&self.params, sr);
@@ -588,26 +706,46 @@ pub fn build(
 ) {
     shared_ui::load_theme(cx);
     let config = shared_analysis::load_config("Aether");
-    let mut presets = default_presets();
     let vault_path_init = config.vault_path.clone();
     let vault_path_init_for_signal = vault_path_init.clone();
-    if let Some(vp) = &vault_path_init {
-        for (name, path, profile) in scan_aether_presets(std::path::Path::new(&vp)) {
-            presets.push((name, Some(path), profile));
-        }
-    }
-    let preset_names_init: Vec<String> = presets.iter().map(|(n, _, _)| n.clone()).collect();
+
+    // Start with only the built-in preset. The full vault scan is deferred
+    // to a background thread so opening the editor (and therefore Reaper
+    // startup when the FX window is restored) isn't blocked by disk I/O.
+    let preset_names_init: Vec<String> =
+        default_presets().into_iter().map(|(n, _, _)| n).collect();
     let preset_names_for_signal = preset_names_init.clone();
 
     let preset_name_signal = Signal::new(config.last_preset.clone().unwrap_or_default());
 
-    if let Some(last) = resolve_last_preset(&presets, &config) {
-        apply_profile(&params, &lens, &last);
+    // Apply the last-used preset. Try the local JSON cache first so Reaper
+    // startup is instant; fall back to a targeted vault search if the cache
+    // is missing or stale.
+    if let Some(last) = config.last_preset.as_ref() {
+        let profile = load_cached_last_profile()
+            .filter(|p| &p.name == last)
+            .or_else(|| find_profile(last, &vault_path_init));
+        if let Some(pf) = profile {
+            apply_profile(&params, &lens, &pf);
+        }
     }
 
     let vault_path_signal = Signal::new(vault_path_init_for_signal);
     let show_setup = Signal::new(false);
     let vault_path_input = Signal::new(config.vault_path.unwrap_or_default());
+
+    let preset_opts = Signal::new(preset_names_init.clone());
+    let pending_presets = Arc::new(PendingPresets {
+        ready: AtomicBool::new(false),
+        generation: AtomicU32::new(1),
+        presets: Mutex::new(None),
+    });
+    let preset_cache: Arc<Mutex<Vec<PresetEntry>>> = Arc::new(Mutex::new(Vec::new()));
+
+    // Kick off the vault scan in the background before the UI tree is built.
+    if let Some(ref vp) = vault_path_init {
+        spawn_vault_scan(vp.clone(), pending_presets.clone(), 1);
+    }
 
     let telemetry = Signal::new(Telemetry {
         curve_points: Vec::new(),
@@ -618,7 +756,6 @@ pub fn build(
     let accum = Rc::new(RefCell::new(TickAccum {
         in_peak_hold: -90.0,
         in_peak_hold_ticks: 0,
-        preset_refresh_counter: 0,
         last_vault_path: vault_path_init.clone(),
     }));
     let ui_gen = Signal::new(0u32);
@@ -630,6 +767,9 @@ pub fn build(
         telemetry,
         accum,
         vault_path_signal,
+        preset_opts,
+        pending_presets.clone(),
+        preset_cache.clone(),
     )
     .width(Pixels(1.0))
     .height(Pixels(1.0));
@@ -637,6 +777,9 @@ pub fn build(
     let lens_for_body = lens.clone();
     let params_for_body = params.clone();
     let shared_for_body = shared.clone();
+    let preset_opts_for_body = preset_opts;
+    let preset_cache_for_body = preset_cache;
+    let pending_presets_for_body = pending_presets.clone();
     let bypass_sig = lens.value_signal(AetherParamsParamId::Bypass);
     VStack::new(cx, move |cx| {
         // ── HEADER ──────────────────────────────────────────────────────────
@@ -674,12 +817,12 @@ pub fn build(
             Element::new(cx).width(Stretch(1.0));
 
             // Preset Dropdown with arrow + Textbox
-            let preset_opts = Signal::new(preset_names_init.clone());
-            let names_for_popup = preset_opts;
+            let names_for_popup = preset_opts_for_body.clone();
             let selected_preset_name = preset_name_signal;
             let lens_preset = lens.clone();
             let params_preset = params.clone();
             let vp_p = vault_path_signal;
+            let cache_p = preset_cache_for_body.clone();
             // Common look for the preset dropdown trigger and the adjacent name textbox.
             const PRESET_W: f32 = 130.0;
             const PRESET_H: f32 = 22.0;
@@ -728,15 +871,17 @@ pub fn build(
                     let params = params_preset.clone();
                     let lens = lens_preset.clone();
                     let sel_name = selected_preset_name;
+                    let cache_popup = cache_p.clone();
                     ScrollView::new(cx, move |cx| {
                         VStack::new(cx, move |cx| {
                             for name in &names {
                                 let name_clone = name.clone();
-                                let vp_c = vp;
+                                let vp_c = vp.clone();
                                 let params_c = params.clone();
                                 let lens_c = lens.clone();
                                 let sel_c = sel_name;
                                 let name_for_press = name_clone.clone();
+                                let cache_c = cache_popup.clone();
                                 HStack::new(cx, move |cx| {
                                     Label::new(cx, name_clone)
                                         .font_size(11.0)
@@ -750,11 +895,18 @@ pub fn build(
                                 .alignment(Alignment::Center)
                                 .on_press(move |cx| {
                                     let n = name_for_press.clone();
-                                    if let Some(pf) = find_profile(&n, &vp_c.get()) {
-                                        apply_profile(&params_c, &lens_c, &pf);
+                                    let profile = {
+                                        let cache = cache_c.lock().unwrap();
+                                        cache.iter().find(|(name, _, _)| name == &n).map(|(_, _, p)| p.clone())
+                                    }
+                                    .or_else(|| find_profile(&n, &vp_c.get()));
+                                    if let Some(ref pf) = profile {
+                                        apply_profile(&params_c, &lens_c, pf);
                                     }
                                     sel_c.set(n.clone());
-                                    save_last_preset(&vp_c.get(), &n);
+                                    if let Some(pf) = profile {
+                                        save_last_preset(&vp_c.get(), &pf);
+                                    }
                                     cx.emit(PopupEvent::Close);
                                 });
                             }
@@ -786,6 +938,9 @@ pub fn build(
             // Buttons: SAVE, SETUP, BYPASS — all from shared-ui
             let params_save = params.clone();
             let vp_save = vault_path_signal;
+            let preset_opts_save = preset_opts_for_body.clone();
+            let preset_cache_save = preset_cache_for_body.clone();
+            let pending_presets_save = pending_presets_for_body.clone();
             shared_ui::push_button_big(cx, "SAVE", move |_cx| {
                 let name = preset_name_signal.get();
                 if !name.is_empty() {
@@ -797,14 +952,31 @@ pub fn build(
                     let _ = std::fs::create_dir_all(&dir);
                     let fp = dir.join(format!("{name}.md"));
                     if std::fs::write(&fp, md).is_ok() {
-                        save_last_preset(&vp_save.get(), &name);
-                        let mut names = preset_opts.get();
+                        let mut names = preset_opts_save.get();
                         if !names.contains(&name) {
                             names.push(name.clone());
-                            preset_opts.set(names.clone());
+                            preset_opts_save.set(names.clone());
                         }
                         if let Some(idx) = names.iter().position(|n| n == &name) {
                             preset_name_signal.set(names[idx].clone());
+                        }
+                        // Keep the cache in sync so selecting the newly saved
+                        // preset does not need another file read.
+                        let mut profile = profile_from_params(&params_save);
+                        profile.name = name.clone();
+                        if let Ok(mut c) = preset_cache_save.lock() {
+                            if let Some(pos) = c.iter().position(|(n, _, _)| n == &name) {
+                                c[pos] = (name.clone(), fp.clone(), profile.clone());
+                            } else {
+                                c.push((name.clone(), fp.clone(), profile.clone()));
+                            }
+                        }
+                        save_last_preset(&vp_save.get(), &profile);
+                        // Trigger a background rescan so the dropdown reflects
+                        // the saved preset without waiting for a path change.
+                        if let Some(ref vp) = vp_save.get() {
+                            let scan_gen = pending_presets_save.bump_generation();
+                            spawn_vault_scan(vp.clone(), pending_presets_save.clone(), scan_gen);
                         }
                     }
                 }
@@ -838,24 +1010,24 @@ pub fn build(
         .horizontal_gap(Pixels(4.0));
 
         // Setup or main
-        let ui_gen_for_binding = ui_gen;
+        let ui_gen_for_binding = ui_gen.clone();
         Binding::new(cx, show_setup, move |cx| {
             if show_setup.get() {
                 build_setup(cx, vault_path_input, vault_path_signal, show_setup);
             } else {
-                let telemetry_c = telemetry;
+                let telemetry_c = telemetry.clone();
                 let lens_c = lens_for_body.clone();
                 let params_c = params_for_body.clone();
                 let shared_c = shared_for_body.clone();
-                let ui_gen_c = ui_gen;
+                let ui_gen_c = ui_gen.clone();
                 Binding::new(cx, ui_gen_for_binding, move |cx| {
                     build_main(
                         cx,
-                        telemetry_c,
+                        telemetry_c.clone(),
                         lens_c.clone(),
                         params_c.clone(),
                         shared_c.clone(),
-                        ui_gen_c,
+                        ui_gen_c.clone(),
                         bypass_sig,
                     );
                 });
@@ -1102,7 +1274,8 @@ fn build_blend_reset(
 
         let lr = l.clone();
         shared_ui::danger_button(cx, "RESET", move |_cx| {
-            for (i, &(fd, qd, td)) in BAND_DEF.iter().enumerate() {
+            for i in 0..5 {
+                let (fd, qd, td) = BAND_DEF[i];
                 set_eq_freq(&lr, i, fd);
                 set_eq_gain(&lr, i, 0.0);
                 set_eq_q(&lr, i, qd);
