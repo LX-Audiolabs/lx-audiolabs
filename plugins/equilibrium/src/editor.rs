@@ -95,7 +95,9 @@ fn load_presets(vault_path: Option<&str>) -> Vec<(String, Option<PathBuf>, EqPre
         "Pink Noise".to_string(),
         None,
         EqPreset {
-            bands: [1.5, 0.0, -1.5, -3.0, -4.5],
+            // Band power is normalized per octave in the DSP, so pink noise
+            // reads flat; the Pink Noise reference target is therefore flat too.
+            bands: [0.0, 0.0, 0.0, 0.0, 0.0],
             tolerances: shared_analysis::DEFAULT_TOLERANCES,
             pans: [0.0; 5],
             widths: [100.0; 5],
@@ -121,7 +123,7 @@ fn load_presets(vault_path: Option<&str>) -> Vec<(String, Option<PathBuf>, EqPre
 
 // ─── Telemetry (tick-frequency display state) ───────────────────────────────
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct Telemetry {
     band_levels: [f32; 5],
     target_levels: [f32; 5],
@@ -160,7 +162,7 @@ fn tick(
     accum: &Arc<Mutex<TickAccum>>,
     telemetry: Signal<Telemetry>,
     params_gen: Signal<u32>,
-) {
+) -> bool {
     let acc = accum.lock().unwrap();
 
     let mut band_levels = [0.0f32; 5];
@@ -225,30 +227,36 @@ fn tick(
     // which reset their internal drag state and caused stuttering /
     // dropped drags.
 
-    telemetry.update(move |t| {
-        t.band_levels = band_levels;
-        t.target_levels = target_levels;
-        t.target_tolerances = target_tolerances;
-        t.listen_levels = listen_levels;
-        t.listen_tolerances = listen_tolerances;
-        t.listen_level_min = listen_level_min;
-        t.listen_level_max = listen_level_max;
-        t.listen_samples = listen_samples;
-        t.phase_correlation = phase_correlation;
-        t.peak_l = peak_l;
-        t.peak_r = peak_r;
-        t.peak_hold_l = peak_hold_l;
-        t.peak_hold_r = peak_hold_r;
-        t.peak_hold = peak_hold;
-        t.balance = balance;
-        t.auto_loud_measuring = measuring;
+    let prev = telemetry.get();
+    let next = Telemetry {
+        band_levels,
+        target_levels,
+        target_tolerances,
+        listen_levels,
+        listen_tolerances,
+        listen_level_min,
+        listen_level_max,
+        listen_samples,
+        phase_correlation,
+        peak_l,
+        peak_r,
+        peak_hold_l,
+        peak_hold_r,
+        peak_hold,
+        balance,
+        auto_loud_measuring: measuring,
+        snap_active: snap_now,
+        snap_blink_counter: if snap_now {
+            prev.snap_blink_counter.wrapping_add(1)
+        } else {
+            0
+        },
+    };
 
-        let was_active = t.snap_active;
-        t.snap_active = snap_now;
-        if snap_now {
-            t.snap_blink_counter = t.snap_blink_counter.wrapping_add(1);
-        } else if was_active {
-            t.snap_blink_counter = 0;
+    let changed = next != prev || auto_loud_applied;
+    if changed {
+        telemetry.set(next);
+        if !snap_now && prev.snap_active {
             if let Some(vp) = vault_path
                 && !vp.is_empty()
             {
@@ -285,7 +293,9 @@ fn tick(
                 let _ = std::fs::write(std::path::Path::new(&vp).join(&fname), &md);
             }
         }
-    });
+    }
+
+    changed
 }
 
 // ─── Ticker (drives `tick()` without vizia_core's buggy timer API) ──────────
@@ -338,8 +348,9 @@ impl View for Ticker {
                 false
             }
         };
+        let mut needs_redraw = false;
         if due {
-            tick(
+            needs_redraw = tick(
                 &self.shared,
                 &self.params,
                 &self.accum,
@@ -347,7 +358,9 @@ impl View for Ticker {
                 self.params_gen,
             );
         }
-        cx.needs_redraw();
+        if needs_redraw {
+            cx.needs_redraw();
+        }
     }
 }
 
@@ -619,7 +632,6 @@ pub fn build(
 
 // ─── Sidebar (TARGET PROFILES) ───────────────────────────────────────────────
 
-#[allow(clippy::too_many_arguments)]
 fn build_sidebar(
     cx: &mut Context,
     accum: Arc<Mutex<TickAccum>>,
@@ -1295,7 +1307,6 @@ fn build_right_sidebar(
 
 // ─── Footer (analyze / mono floor / reset all) ──────────────────────────────
 
-#[allow(clippy::too_many_arguments)]
 fn build_footer(
     cx: &mut Context,
     telemetry: Signal<Telemetry>,
@@ -1636,7 +1647,6 @@ fn snap_filename(vault_path: &str) -> String {
     format!("SNAPSHOT-{:03}.md", max_n + 1)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn snap_markdown(
     stereo: &[f32],
     mono: &[f32],

@@ -1,7 +1,7 @@
 [vendor]
 name = "LX Audiolabs"
 id = "be.lxndr"
-url = "https://lx-audiolabs.be"
+url = "https://lx-audiolabs.github.io"
 au_manufacturer = "LxAL"
 
 [[plugin]]

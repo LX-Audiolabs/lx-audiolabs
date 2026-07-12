@@ -31,8 +31,13 @@ panic = "abort"
 [profile.shell]
 inherits = "release"
 
-# Debug-symbol preserving variant of the release profile, used for
-# Windows crash analysis when full symbols are needed.
+# Temporary, for the Lucent-Vizia hang debugging session (see CLAP-vault
+# features/2026-07-04-truce-2.0-upgrade-plan.md) - `strip = true` on
+# [profile.release] erases every symbol, so WinDbg's stack traces show
+# raw offsets against the nearest exported name instead of real function
+# names. Keeps everything else (opt-level/lto/codegen-units) identical to
+# release so the hang still reproduces at the same optimization level -
+# only symbols differ. Delete this profile once the hang is root-caused.
 [profile.dbg]
 inherits = "release"
 strip = false
@@ -40,18 +45,94 @@ debug = "full"
 
 [patch.crates-io]
 truce-clap = { path = "truce-clap-local" }
-# Pin truce-params/truce-core to the same git tag truce-vizia uses so
-# Cargo resolves a single source and the `Params` trait is unified across
-# all workspace crates.
+# equilibrium-egui's truce-egui dep pulls `baseview` from crates.io as
+# `baseview-truce` (see truce's own workspace Cargo.toml, `package =
+# "baseview-truce"`) rather than the git fork patched below
+# ([patch."https://github.com/vizia/baseview.git"]) - that patch only
+# rewrites the git SourceId, not this crates.io one, so it never applied
+# here. `baseview-truce` 0.1.1-truce.12's `after_create`
+# (src/win/window.rs) called `SetProcessDpiAwarenessContext`
+# unconditionally on every window open, including WS_CHILD (embedded)
+# windows - same bug class already root-caused for baseview-local: a
+# process-wide DPI call fired from inside an embedded plugin's GUI-open
+# path on every editor open/reopen, which correlated with a host editor
+# hang/crash on repeat open-close cycles (equilibrium-egui: FX window
+# closed then reopened in Reaper -> crash). Byte-for-byte vendor of
+# baseview-truce-0.1.1-truce.12 with the same one-line guard
+# (WS_CHILD-gated) already applied to baseview-local. Not yet DAW-verified.
+baseview-truce = { path = "baseview-truce-local" }
+# truce-vizia (git dep, Lucent/Lucent-Relay) pulls its own truce-params +
+# truce-core via `path = "../..."` relative to ITS git checkout - Cargo
+# never unifies that with a local-path patch (different SourceId even at
+# matching version), so ParamLens<P: Params> sees two different `Params`
+# traits and every plugin using truce-vizia fails to compile. Pointing
+# these two at the identical git tag truce-vizia uses makes Cargo resolve
+# the same checkout, unifying the types.
+#
+# The Percent-unit display bug (format_param_value assumed a 0-1
+# fraction, ours are already real percent) is fixed per-plugin via a
+# `fmt_pct()` override instead of a truce-params fork - see
+# plugins/equilibrium/src/lib.rs and siblings. Upstream fix tracked at
+# truce-audio/truce#177 (unmerged); drop the per-plugin overrides once
+# released and this git-tag patch can point at a release tag again.
 truce-params = { git = "https://github.com/truce-audio/truce", tag = "v3.1.4" }
 truce-core = { git = "https://github.com/truce-audio/truce", tag = "v3.1.4" }
+
+# ponytail: tried patching baseview to truce-audio's `baseview-truce-vizia`
+# fork here (same mechanism as the truce-params/truce-core fix above -
+# truce-vizia's own nested-workspace patch to this fork doesn't propagate
+# to us as an external git dependency). Made it WORSE: Lucent's editor
+# hang went from "plugin window stuck, Reaper alive" to "whole Reaper
+# frozen, force-kill required". Rolled back. The vault handoff already
+# flagged this as an unverified risk ("ob gepatchter Baseview-Fork das
+# Embedding-Problem behebt, noch nicht verifiziert auf unserer Hardware")
+# - now verified: it doesn't, at least not with this fork/branch as-is.
+#
+# Own narrow fork instead: `baseview-local` is a byte-for-byte vendor of
+# vizia/baseview.git @ 70e4e05 (the exact rev vizia's own workspace pins,
+# see crates/truce-vizia's git dep chain) with exactly one guard added in
+# src/win/window.rs - `SetProcessDpiAwarenessContext` is process-wide and
+# can only be set once; it's only called for baseview's own top-level
+# (`!parented`) window now, never for a window embedded into a host
+# process that already set its own DPI awareness at its own startup.
+# Root-caused via source review (features/2026-07-04-truce-2.0-upgrade-plan.md
+# HANDOFF section has the full trail); not yet DAW-verified.
+# truce-local: flat single-crate vendors (crates.io-normalized style,
+# like truce-clap-local above - no `workspace = true` inheritance, so no
+# need to drag in the rest of the truce-audio/truce monorepo) of
+# truce-gui + truce-gpu at v3.1.4. Patches `editor_wgpu_backends()` in
+# truce-gui/src/platform.rs: Windows was hard-pinned to DX12-only with no
+# fallback (same failure class as the old iced/tiny-skia GL breakage -
+# see ui/gui-framework-evaluation.md in the vault) - now falls back to GL
+# when no DX12 adapter exists. Also adds the `gles` wgpu feature to
+# truce-gui/truce-gpu's Windows target deps (the fallback backend has to
+# be compiled in, not just requested at runtime). Submitted upstream as
+# truce-audio/truce PR from branch fix/editor-wgpu-windows-gl-fallback
+# (based on upstream dev/v3.1.3) - drop this patch once merged/released.
+# `truce-gpu/src/platform.rs::editor_wgpu_backends()` had the same
+# DX12-only gap (its own copy, kept in sync by hand with truce-gui's -
+# see the doc comment on both) - fixed the same way.
+#
+[patch."https://github.com/truce-audio/truce"]
+truce-gui = { path = "truce-local/truce-gui" }
+truce-gpu = { path = "truce-local/truce-gpu" }
 
 [patch."https://github.com/vizia/baseview.git"]
 baseview = { path = "baseview-local" }
 
-# Local vizia fork carrying a timer-handling fix until it is accepted
-# upstream. The full workspace is vendored because vizia's sibling crates
-# reference each other via relative paths.
+# vizia-local: fixes a real infinite-loop bug in vizia_core 0.4.0's
+# Context::modify_timer (crates/vizia_core/src/context/mod.rs) - the search
+# loop only ever peeks the running-timers min-heap's top and never advances
+# past a non-matching entry, so a target timer that isn't currently at the
+# top busy-spins forever (no blocking wait, so it doesn't show as a hung
+# thread). Two simultaneously-running timers are enough to trigger it - e.g.
+# vizia_core's own Environment::caret_timer (always registered, every vizia
+# app) racing a plugin's own meter-refresh timer (truce-vizia starts one
+# after our editor setup closure returns). Byte-for-byte vendor of the whole
+# vizia workspace at the pinned rev (multi-crate, unlike baseview - vizia_core
+# depends on its sibling crates via relative path, so a single-crate vendor
+# doesn't resolve), examples/assets stripped, one function patched. Local fix
+# only for now - not yet submitted upstream to vizia/vizia.
 [patch."https://github.com/vizia/vizia.git"]
 vizia = { path = "vizia-local" }
 vizia_core = { path = "vizia-local/crates/vizia_core" }

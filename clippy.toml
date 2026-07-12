@@ -1,0 +1,6 @@
+# Project-wide Clippy configuration for LX Audiolabs.
+# Run with: cargo clippy --workspace
+
+msrv = '1.87'
+check-private-items = true
+too-many-lines-threshold = 150

@@ -7,9 +7,6 @@ use vizia::vg;
 
 use crate::canvas::col;
 
-/// Shorthand for the boxed callback used by gesture-aware widgets.
-type GestureCallback = Box<dyn Fn(&mut EventContext, Gesture)>;
-
 /// DAW-automation gesture lifecycle.
 #[derive(Debug, Clone, Copy)]
 pub enum Gesture {
@@ -17,6 +14,10 @@ pub enum Gesture {
     Change(f32),
     End,
 }
+
+/// Boxed callback for knob/slider gesture events — extracted to avoid
+/// `type_complexity` warnings on widget structs.
+pub type GestureHandler = Box<dyn Fn(&mut EventContext, Gesture)>;
 
 // ─── KnobView ────────────────────────────────────────────────────────────────
 
@@ -33,7 +34,7 @@ pub struct KnobView {
     /// Tracked manually because Vizia's `hovered` check compares against
     /// `cx.current()`, which isn't always the knob itself during drag.
     hovered: bool,
-    on_gesture: GestureCallback,
+    on_gesture: GestureHandler,
 }
 
 impl KnobView {
@@ -300,7 +301,7 @@ pub struct HSliderView {
     dragging: bool,
     last_click: Option<Instant>,
     hovered: bool,
-    on_gesture: GestureCallback,
+    on_gesture: GestureHandler,
 }
 
 impl HSliderView {

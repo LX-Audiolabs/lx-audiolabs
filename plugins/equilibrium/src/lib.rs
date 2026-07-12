@@ -860,13 +860,13 @@ impl PluginLogic for Equilibrium {
         // pink-noise reference lands on a flat spectrum. Applied to both the
         // post-EQ meter and the pre-EQ LISTEN power so every downstream reading
         // (bars, listen, min/max, learned targets) stays per-octave consistent.
-        // SUB_LO_HZ is the Sub band's lower edge — empirically the pink test
-        // source is band-limited near 20 Hz (not the 8 Hz DC highpass), so 20
-        // lands Sub flat. Air's upper edge is Nyquist, so band 4 is sample-rate
-        // dependent. CAL_TRIM_DB is the residual per-band calibration left after
-        // the octave model: measured by feeding pink noise and reading the bars
-        // flat. Air runs ~1 dB hot from LR2 (12 dB/oct) skirt overlap. Retune
-        // both only if a pink reference no longer sits flat.
+        // ponytail: SUB_LO_HZ is the Sub band's lower edge — empirically the pink
+        // test source is band-limited near 20 Hz (not the 8 Hz DC highpass), so
+        // 20 lands Sub flat. Air's upper edge is Nyquist, so band 4 is
+        // sample-rate dependent. CAL_TRIM_DB is the residual per-band calibration
+        // left after the octave model: measured by feeding pink noise and reading
+        // the bars flat. Air runs ~1 dB hot from LR2 (12 dB/oct) skirt overlap.
+        // Retune both only if a pink reference no longer sits flat.
         const SUB_LO_HZ: f32 = 20.0;
         const CAL_TRIM_DB: [f32; 5] = [0.0, 0.0, 0.0, 0.0, -1.0];
         let band_octaves = [

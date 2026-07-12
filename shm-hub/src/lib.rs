@@ -72,10 +72,14 @@ pub const STALE_MS: u64 = 500;
 /// `_v5`: publisher slots gained a `generation` counter — a stale-reclaimed
 /// slot's original (evicted) owner can now detect it lost the slot and stop
 /// writing, instead of racing the new owner forever (see `write`/`touch`).
-const SHM_OS_ID: &str = "lxaudiolabs_lucent_relay_v5";
+/// `_v6`: `active` changed from `UnsafeCell<u32>` to `AtomicU32` and is now
+/// written *after* payload data with `Release` ordering, fixing a cross-process
+/// data race where readers saw `active=1` before the seqlock-protected payload
+/// was actually visible.
+const SHM_OS_ID: &str = "lxaudiolabs_lucent_relay_v6";
 /// "LXRD" — marks a fully-initialized segment.
 const MAGIC: u32 = 0x4C58_5244;
-const VERSION: u32 = 5;
+const VERSION: u32 = 6;
 /// Number of EQ bands for band-energy reporting.
 pub const EQ_BANDS: usize = 5;
 
@@ -97,7 +101,9 @@ struct PublisherSlot {
     heartbeat_ms: AtomicU64,
     /// Payload (seqlock-protected, accessed via raw pointers):
     name_len: UnsafeCell<u32>,
-    active: UnsafeCell<u32>,
+    /// Set to 1 atomically *after* the payload is fully written. Readers check
+    /// this inside the seqlock so they never observe `active=1` with stale data.
+    active: AtomicU32,
     name: UnsafeCell<[u8; MAX_NAME_LEN]>,
     /// Target consumer instance name; empty = broadcast to every consumer.
     target_len: UnsafeCell<u32>,
@@ -194,7 +200,11 @@ pub fn display_name(name: &str, slot: u8) -> String {
 }
 
 /// Copy a UTF-8 name into a fixed slot buffer, returning the written length.
-/// # Safety: `buf` must point to `MAX_NAME_LEN` writable bytes.
+///
+/// # Safety
+///
+/// `buf` must point to at least `MAX_NAME_LEN` writable bytes. The caller must
+/// ensure no other thread reads the buffer until this function returns.
 unsafe fn write_name_bytes(buf: *mut u8, name: &str) -> u32 {
     let bytes = name.as_bytes();
     let len = bytes.len().min(MAX_NAME_LEN);
@@ -444,7 +454,6 @@ impl RelayHub {
         fence(Ordering::Release);
 
         unsafe {
-            *s.active.get() = 1;
             *s.name_len.get() = write_name_bytes(s.name.get() as *mut u8, label);
             *s.target_len.get() = write_name_bytes(s.target.get() as *mut u8, target);
 
@@ -462,6 +471,10 @@ impl RelayHub {
                 *be_ptr.add(i) = -90.0;
             }
         }
+
+        // Mark payload ready *after* all payload writes are done. This is the
+        // only ordering-sensitive flag read outside the seqlock fast-path.
+        s.active.store(1, Ordering::Release);
 
         fence(Ordering::Release);
         s.seq.store(seq0.wrapping_add(2), Ordering::Release);
@@ -509,10 +522,11 @@ impl RelayHub {
         fence(Ordering::Release);
 
         unsafe {
-            *s.active.get() = 1;
             *s.name_len.get() = write_name_bytes(s.name.get() as *mut u8, label);
             *s.target_len.get() = write_name_bytes(s.target.get() as *mut u8, target);
         }
+
+        s.active.store(1, Ordering::Release);
 
         fence(Ordering::Release);
         s.seq.store(seq0.wrapping_add(2), Ordering::Release);
@@ -543,7 +557,7 @@ impl RelayHub {
     ///
     /// # Retry behavior
     ///
-    /// Each slot is read up to 4 times if the writer interferes (seqlock conflict).
+    /// Each slot is read up to 16 times if the writer interferes (seqlock conflict).
     /// If all retries fail, that slot is silently skipped.
     pub fn read_active(&self, my_name: &str, now_ms: u64) -> Vec<(String, Vec<f32>)> {
         let mut out = Vec::new();
@@ -555,16 +569,19 @@ impl RelayHub {
                 continue;
             }
 
-            for _ in 0..4 {
+            for _ in 0..16 {
                 let seq1 = s.seq.load(Ordering::Acquire);
                 if seq1 & 1 != 0 {
                     continue;
+                }
+                if s.active.load(Ordering::Acquire) == 0 {
+                    break;
                 }
 
                 let mut name_buf = [0u8; MAX_NAME_LEN];
                 let mut target_buf = [0u8; MAX_NAME_LEN];
                 let mut bins = vec![0.0f32; SPECTRUM_BINS];
-                let (active, name_len, target_len) = unsafe {
+                let (name_len, target_len) = unsafe {
                     std::ptr::copy_nonoverlapping(
                         s.bins.get() as *const f32,
                         bins.as_mut_ptr(),
@@ -581,7 +598,6 @@ impl RelayHub {
                         MAX_NAME_LEN,
                     );
                     (
-                        *s.active.get(),
                         (*s.name_len.get() as usize).min(MAX_NAME_LEN),
                         (*s.target_len.get() as usize).min(MAX_NAME_LEN),
                     )
@@ -590,18 +606,99 @@ impl RelayHub {
                 fence(Ordering::Acquire);
                 let seq2 = s.seq.load(Ordering::Acquire);
                 if seq1 == seq2 {
-                    if active != 0 {
-                        let target = String::from_utf8_lossy(&target_buf[..target_len]);
-                        if target.is_empty() || target == my_name {
-                            let name = String::from_utf8_lossy(&name_buf[..name_len]).into_owned();
-                            out.push((name, bins));
-                        }
+                    let target = String::from_utf8_lossy(&target_buf[..target_len]);
+                    if target.is_empty() || target == my_name {
+                        let name = String::from_utf8_lossy(&name_buf[..name_len]).into_owned();
+                        out.push((name, bins));
                     }
                     break;
                 }
             }
         }
         out
+    }
+
+    /// Diagnostic dump of all publisher slots — which are active, their labels,
+    /// targets, and whether they match `my_name`. Not audio-thread optimal
+    /// (allocates strings per slot); use only for debugging routing issues.
+    pub fn diagnose_publishers(
+        &self,
+        my_name: &str,
+        now_ms: u64,
+    ) -> Vec<(u8, bool, i64, String, String, bool)> {
+        let mut out = Vec::with_capacity(MAX_SLOTS);
+        for idx in 0..MAX_SLOTS {
+            let s = unsafe { &(*self.shared).slots[idx] };
+            let hb = s.heartbeat_ms.load(Ordering::Acquire);
+            let age = if hb == 0 {
+                i64::MAX
+            } else {
+                now_ms.wrapping_sub(hb) as i64
+            };
+            let stale = hb == 0 || age > STALE_MS as i64;
+
+            let mut label = String::new();
+            let mut target = String::new();
+            let mut matches = false;
+            let mut raw_active = false;
+
+            if !stale {
+                for _ in 0..16 {
+                    let seq1 = s.seq.load(Ordering::Acquire);
+                    if seq1 & 1 != 0 {
+                        continue;
+                    }
+                    if s.active.load(Ordering::Acquire) == 0 {
+                        break;
+                    }
+                    raw_active = true;
+                    let mut name_buf = [0u8; MAX_NAME_LEN];
+                    let mut target_buf = [0u8; MAX_NAME_LEN];
+                    let (name_len, target_len) = unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            s.name.get() as *const u8,
+                            name_buf.as_mut_ptr(),
+                            MAX_NAME_LEN,
+                        );
+                        std::ptr::copy_nonoverlapping(
+                            s.target.get() as *const u8,
+                            target_buf.as_mut_ptr(),
+                            MAX_NAME_LEN,
+                        );
+                        (
+                            (*s.name_len.get() as usize).min(MAX_NAME_LEN),
+                            (*s.target_len.get() as usize).min(MAX_NAME_LEN),
+                        )
+                    };
+                    fence(Ordering::Acquire);
+                    if seq1 == s.seq.load(Ordering::Acquire) {
+                        label = String::from_utf8_lossy(&name_buf[..name_len]).into_owned();
+                        target = String::from_utf8_lossy(&target_buf[..target_len]).into_owned();
+                        matches = target.is_empty() || target == my_name;
+                        break;
+                    }
+                }
+            }
+
+            out.push((idx as u8, raw_active, age, label, target, matches));
+        }
+        out
+    }
+
+    /// Raw atomic snapshot of a slot: (claimed, generation, seq, heartbeat_ms).
+    /// For debugging — no seqlock, just the admin fields.
+    pub fn slot_raw_state(&self, slot: u8) -> Option<(u32, u32, u32, u64)> {
+        let idx = slot as usize;
+        if idx >= MAX_SLOTS {
+            return None;
+        }
+        let s = unsafe { &(*self.shared).slots[idx] };
+        Some((
+            s.claimed.load(Ordering::Acquire),
+            s.generation.load(Ordering::Acquire),
+            s.seq.load(Ordering::Acquire),
+            s.heartbeat_ms.load(Ordering::Acquire),
+        ))
     }
 
     /// Read band energy levels from a specific publisher slot.
@@ -636,10 +733,13 @@ impl RelayHub {
             return None;
         }
 
-        for _ in 0..4 {
+        for _ in 0..16 {
             let seq1 = s.seq.load(Ordering::Acquire);
             if seq1 & 1 != 0 {
                 continue;
+            }
+            if s.active.load(Ordering::Acquire) == 0 {
+                return None;
             }
             let mut energy = [0.0f32; EQ_BANDS];
             unsafe {
@@ -683,10 +783,13 @@ impl RelayHub {
                 continue;
             }
 
-            for _ in 0..4 {
+            for _ in 0..16 {
                 let seq1 = s.seq.load(Ordering::Acquire);
                 if seq1 & 1 != 0 {
                     continue;
+                }
+                if s.active.load(Ordering::Acquire) == 0 {
+                    break;
                 }
                 let mut name_buf = [0u8; MAX_NAME_LEN];
                 let name_len = unsafe {

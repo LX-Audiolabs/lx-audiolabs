@@ -3,8 +3,8 @@
 //! frequency grid. Stateless draw-only View: all data arrives via struct
 //! fields reinstantiated by the caller inside a `Binding`.
 //!
-//! Inline helpers instead of pulling in vizia_canvas.rs from Lucent — Aether
-//! only needs this one simple curve view, not spectrum/goniometer.
+//! ponytail: inline helpers instead of pulling in vizia_canvas.rs from Lucent
+//! — Aether only needs this one simple curve view, not spectrum/goniometer.
 
 use vizia::prelude::*;
 use vizia::vg;

@@ -453,16 +453,22 @@ fn apply_scanned_presets(
     preset_opts: &Signal<Vec<String>>,
     telemetry: &Signal<Telemetry>,
     cache: &Mutex<Vec<PresetEntry>>,
-) {
+) -> bool {
     let mut names: Vec<String> = default_presets().into_iter().map(|(n, _, _)| n).collect();
     names.extend(scanned.iter().map(|(n, _, _)| n.clone()));
     if let Ok(mut c) = cache.lock() {
         *c = scanned.to_vec();
     }
+    let prev = telemetry.get();
+    let changed = names != prev.preset_names;
     preset_opts.set(names.clone());
-    telemetry.update(|t| {
-        t.preset_names = names;
-    });
+    if changed {
+        telemetry.set(Telemetry {
+            preset_names: names,
+            ..prev
+        });
+    }
+    changed
 }
 
 fn build_profile_md(params: &AetherParams) -> String {
@@ -534,7 +540,7 @@ fn profile_from_params(params: &AetherParams) -> AetherProfile {
 
 // ─── Telemetry ─────────────────────────────────────────────────────────────
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct Telemetry {
     curve_points: Vec<(f32, f32)>,
     in_peak: f32,
@@ -542,11 +548,20 @@ struct Telemetry {
     preset_names: Vec<String>,
 }
 
+/// Cache key for the Aether EQ curve so it is only recomputed when relevant
+/// band parameters change.
+#[derive(Clone, Copy, PartialEq)]
+struct EqCurveKey {
+    sr: f32,
+    bands: [(i32, f32, f32, f32); 5],
+}
+
 struct TickAccum {
     in_peak_hold: f32,
     in_peak_hold_ticks: u32,
     /// Last vault path we handled, so a path change refreshes the preset list.
     last_vault_path: Option<String>,
+    eq_curve_key: Option<EqCurveKey>,
 }
 
 // ─── Ticker ────────────────────────────────────────────────────────────────
@@ -607,6 +622,7 @@ impl View for Ticker {
                 false
             }
         };
+        let mut needs_redraw = false;
         if due {
             let mut acc = self.accum.borrow_mut();
             let in_peak = self.shared.input_peak.load(Ordering::Relaxed);
@@ -639,10 +655,16 @@ impl View for Ticker {
                 } else {
                     let names: Vec<String> =
                         default_presets().into_iter().map(|(n, _, _)| n).collect();
+                    let prev = self.telemetry.get();
+                    let preset_names_changed = names != prev.preset_names;
                     self.preset_opts.set(names.clone());
-                    self.telemetry.update(|t| {
-                        t.preset_names = names;
-                    });
+                    if preset_names_changed {
+                        self.telemetry.set(Telemetry {
+                            preset_names: names,
+                            ..prev
+                        });
+                        needs_redraw = true;
+                    }
                     if let Ok(mut c) = self.preset_cache.lock() {
                         c.clear();
                     }
@@ -658,7 +680,7 @@ impl View for Ticker {
                 if let Ok(guard) = self.pending_presets.presets.lock() {
                     if let Some((scan_gen, ref scanned)) = *guard {
                         if scan_gen == current_gen {
-                            apply_scanned_presets(
+                            needs_redraw |= apply_scanned_presets(
                                 scanned,
                                 &self.preset_opts,
                                 &self.telemetry,
@@ -670,15 +692,38 @@ impl View for Ticker {
             }
 
             let sr = self.shared.sample_rate.load(Ordering::Relaxed).max(1.0);
-            let curve = eq_curve_points(&self.params, sr);
+            let prev = self.telemetry.get();
+            let key = EqCurveKey {
+                sr,
+                bands: [
+                    (eq_type_val(&self.params, 0), eq_freq_val(&self.params, 0), eq_gain_val(&self.params, 0), eq_q_val(&self.params, 0)),
+                    (eq_type_val(&self.params, 1), eq_freq_val(&self.params, 1), eq_gain_val(&self.params, 1), eq_q_val(&self.params, 1)),
+                    (eq_type_val(&self.params, 2), eq_freq_val(&self.params, 2), eq_gain_val(&self.params, 2), eq_q_val(&self.params, 2)),
+                    (eq_type_val(&self.params, 3), eq_freq_val(&self.params, 3), eq_gain_val(&self.params, 3), eq_q_val(&self.params, 3)),
+                    (eq_type_val(&self.params, 4), eq_freq_val(&self.params, 4), eq_gain_val(&self.params, 4), eq_q_val(&self.params, 4)),
+                ],
+            };
+            let curve = if acc.eq_curve_key == Some(key) {
+                prev.curve_points.clone()
+            } else {
+                acc.eq_curve_key = Some(key);
+                eq_curve_points(&self.params, sr)
+            };
 
-            self.telemetry.update(|t| {
-                t.curve_points = curve;
-                t.in_peak = in_peak;
-                t.in_peak_hold = acc.in_peak_hold;
-            });
+            let next = Telemetry {
+                curve_points: curve,
+                in_peak,
+                in_peak_hold: acc.in_peak_hold,
+                preset_names: prev.preset_names.clone(),
+            };
+            if next != prev {
+                self.telemetry.set(next);
+                needs_redraw = true;
+            }
         }
-        cx.needs_redraw();
+        if needs_redraw {
+            cx.needs_redraw();
+        }
     }
 }
 
@@ -757,6 +802,7 @@ pub fn build(
         in_peak_hold: -90.0,
         in_peak_hold_ticks: 0,
         last_vault_path: vault_path_init.clone(),
+        eq_curve_key: None,
     }));
     let ui_gen = Signal::new(0u32);
 

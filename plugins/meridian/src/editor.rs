@@ -39,6 +39,31 @@ use shared_ui::{
     SpectrumView, StereoMeterView, fmt_db, format_knob_value, rgb as vg_rgb,
 };
 
+/// Cache key for the EQ curve so it is only recomputed when relevant params change.
+#[derive(Clone, Copy, PartialEq)]
+struct EqCurveKey {
+    hpf_freq: f32,
+    lpf_freq: f32,
+    cut_slope: i64,
+    bass_gain: f32,
+    bass_slope: i64,
+    lo_mid_gain: f32,
+    lo_mid_slope: i64,
+    mid_gain: f32,
+    mid_slope: i64,
+    high_gain: f32,
+    high_slope: i64,
+    excite_gain: f32,
+    excite_slope: i64,
+    eq_freq_1: f32,
+    eq_freq_2: f32,
+    eq_freq_3: f32,
+    eq_freq_4: f32,
+    eq_freq_5: f32,
+    tilt_gain: f32,
+    sample_rate: f32,
+}
+
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// `vizia::prelude::Color` (CSS-style, used by `.color()`/`.background_color()`
@@ -796,7 +821,6 @@ fn snap_filename(vault_path: &str) -> String {
     format!("SNAPSHOT-{:03}.md", max_n + 1)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn snap_markdown(
     stereo: &[f32],
     mono: &[f32],
@@ -853,7 +877,7 @@ fn snap_markdown(
 
 // ─── Telemetry (tick-frequency display state) ───────────────────────────────
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct Telemetry {
     band_levels: [f32; 5],
     phase_correlation: f32,
@@ -869,6 +893,7 @@ struct Telemetry {
     auto_loud_measuring: bool,
     snap_active: bool,
     snap_blink_counter: u32,
+    eq_curve: Option<EqCurve>,
 }
 
 /// Bookkeeping that persists across ticks but never touches the UI directly.
@@ -885,6 +910,7 @@ struct TickAccum {
     /// mid-drag, resetting their internal drag state and making interaction
     /// stutter.
     _reserved: u32,
+    eq_curve_key: Option<EqCurveKey>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -894,12 +920,12 @@ fn tick(
     accum: &Arc<Mutex<TickAccum>>,
     telemetry: Signal<Telemetry>,
     params_gen: Signal<u32>,
-) {
+) -> bool {
     let mut acc = accum.lock().unwrap();
 
     let mut band_levels = [0.0f32; 5];
-    for (b, lvl) in band_levels.iter_mut().enumerate() {
-        *lvl = shared.band_levels[b].load(Ordering::Acquire);
+    for b in 0..5 {
+        band_levels[b] = shared.band_levels[b].load(Ordering::Acquire);
     }
     let phase_correlation = shared.phase_correlation.load(Ordering::Acquire);
     let balance = shared.balance.load(Ordering::Acquire);
@@ -943,6 +969,38 @@ fn tick(
     let snap_now = shared.snap_active.load(Ordering::Acquire);
     let vault_path = acc.vault_path.clone();
     let sr = shared.sample_rate.load(Ordering::Acquire);
+
+    // Cache EQ curve: only recompute when the 19 relevant parameters change.
+    let eq_curve_key = EqCurveKey {
+        hpf_freq: params.hpf_freq.raw_target() as f32,
+        lpf_freq: params.lpf_freq.raw_target() as f32,
+        cut_slope: params.cut_slope.value(),
+        bass_gain: params.bass_gain.raw_target() as f32,
+        bass_slope: params.bass_slope.value(),
+        lo_mid_gain: params.lo_mid_gain.raw_target() as f32,
+        lo_mid_slope: params.lo_mid_slope.value(),
+        mid_gain: params.mid_gain.raw_target() as f32,
+        mid_slope: params.mid_slope.value(),
+        high_gain: params.high_gain.raw_target() as f32,
+        high_slope: params.high_slope.value(),
+        excite_gain: params.excite_gain.raw_target() as f32,
+        excite_slope: params.excite_slope.value(),
+        eq_freq_1: params.eq_freq_1.raw_target() as f32,
+        eq_freq_2: params.eq_freq_2.raw_target() as f32,
+        eq_freq_3: params.eq_freq_3.raw_target() as f32,
+        eq_freq_4: params.eq_freq_4.raw_target() as f32,
+        eq_freq_5: params.eq_freq_5.raw_target() as f32,
+        tilt_gain: params.tilt_gain.raw_target() as f32,
+        sample_rate: sr,
+    };
+    let prev_telemetry = telemetry.get();
+    let eq_curve = if acc.eq_curve_key == Some(eq_curve_key) {
+        prev_telemetry.eq_curve.clone()
+    } else {
+        acc.eq_curve_key = Some(eq_curve_key);
+        compute_eq_curve(params, sr)
+    };
+
     // Drop the lock before telemetry.update()/params_gen.update(): vizia_reactive
     // runs pending effects synchronously inside Signal::update, and the SNAP
     // button's Memo (build_sidebar) reads accum.lock() itself - held across
@@ -963,26 +1021,33 @@ fn tick(
         params_gen.update(|g| *g = g.wrapping_add(1));
     }
 
-    telemetry.update(move |t| {
-        t.band_levels = band_levels;
-        t.phase_correlation = phase_correlation;
-        t.balance = balance;
-        t.peak_l = peak_l;
-        t.peak_r = peak_r;
-        t.peak_hold_l = peak_hold_l;
-        t.peak_hold_r = peak_hold_r;
-        t.peak_hold = peak_hold;
-        t.gain_reduction = gain_reduction;
-        t.gr_peak_hold = gr_peak_hold;
-        t.gr_history = gr_history;
-        t.auto_loud_measuring = measuring;
+    let prev = prev_telemetry;
+    let next = Telemetry {
+        band_levels,
+        phase_correlation,
+        balance,
+        peak_l,
+        peak_r,
+        peak_hold_l,
+        peak_hold_r,
+        peak_hold,
+        gain_reduction,
+        gr_peak_hold,
+        gr_history,
+        auto_loud_measuring: measuring,
+        snap_active: snap_now,
+        snap_blink_counter: if snap_now {
+            prev.snap_blink_counter.wrapping_add(1)
+        } else {
+            0
+        },
+        eq_curve,
+    };
 
-        let was_active = t.snap_active;
-        t.snap_active = snap_now;
-        if snap_now {
-            t.snap_blink_counter = t.snap_blink_counter.wrapping_add(1);
-        } else if was_active {
-            t.snap_blink_counter = 0;
+    let changed = next != prev || auto_loud_applied;
+    if changed {
+        telemetry.set(next);
+        if !snap_now && prev.snap_active {
             if let Some(vp) = vault_path
                 && !vp.is_empty()
             {
@@ -1018,7 +1083,9 @@ fn tick(
                 let _ = std::fs::write(std::path::Path::new(&vp).join(&fname), &md);
             }
         }
-    });
+    }
+
+    changed
 }
 
 // ─── Ticker (drives `tick()` without vizia_core's buggy timer API) ──────────
@@ -1071,8 +1138,9 @@ impl View for Ticker {
                 false
             }
         };
+        let mut needs_redraw = false;
         if due {
-            tick(
+            needs_redraw = tick(
                 &self.shared,
                 &self.params,
                 &self.accum,
@@ -1080,7 +1148,9 @@ impl View for Ticker {
                 self.params_gen,
             );
         }
-        cx.needs_redraw();
+        if needs_redraw {
+            cx.needs_redraw();
+        }
     }
 }
 
@@ -1171,6 +1241,7 @@ pub fn build(
         auto_loud_measuring: false,
         snap_active: false,
         snap_blink_counter: 0,
+        eq_curve: None,
     });
 
     let show_setup = Signal::new(false);
@@ -1184,6 +1255,7 @@ pub fn build(
         vault_path: config.vault_path,
         gr_peak_hold_ticks: 0,
         _reserved: 0,
+        eq_curve_key: None,
     }));
 
     Ticker::new(
@@ -1931,7 +2003,6 @@ fn build_main_panel(
     });
 
     // ── Spectrum + EQ curve overlay - passive display, rebuilt every tick ──
-    let params_spec = params.clone();
     Binding::new(cx, telemetry, move |cx| {
         let t = telemetry.get();
         let spectrum = shared
@@ -1940,7 +2011,7 @@ fn build_main_panel(
             .map(|g| g.clone())
             .unwrap_or_default();
         let sr = shared.sample_rate.load(Ordering::Acquire);
-        let eq_curve = compute_eq_curve(&params_spec, sr);
+        let eq_curve = t.eq_curve.clone();
         SpectrumView::new(
             cx,
             SpectrumView {
@@ -2156,7 +2227,6 @@ fn linear_knob_group<'a>(
 
 /// A single unipolar knob (Inflate Effect) - same shape as one
 /// `linear_knob_group` entry, without the group label wrapper.
-#[allow(clippy::too_many_arguments)]
 fn plain_knob(
     cx: &mut Context,
     lens: &ParamLens<MeridianParams>,
@@ -2208,7 +2278,6 @@ fn plain_knob(
 }
 
 /// A single bipolar knob (Tilt, Pan, Width, Inflate Curve, Out Gain).
-#[allow(clippy::too_many_arguments)]
 fn bipolar_knob(
     cx: &mut Context,
     lens: &ParamLens<MeridianParams>,

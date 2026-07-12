@@ -60,6 +60,16 @@ const BUTTON_CSS: &str = r#"
 .lx-btn.danger:active {
     background-color: #5c2020;
 }
+.lx-btn.danger.active {
+    background-color: #cc2222;
+    color: #ffffff;
+}
+.lx-btn.danger.active:hover {
+    background-color: #dd3333;
+}
+.lx-btn.danger.active:active {
+    background-color: #ee4444;
+}
 .lx-btn.amber-text {
     color: #ff731a;
 }
@@ -107,6 +117,21 @@ pub fn toggle_button_small<'a>(
         .on_press(on_press)
         .height(Pixels(BUTTON_HEIGHT_SMALL))
         .class("lx-btn")
+        .toggle_class("active", active)
+}
+
+/// Red-when-active small toggle — MASKING ON/OFF in Lucent.
+pub fn toggle_button_small_danger<'a>(
+    cx: &'a mut Context,
+    label: &'static str,
+    active: bool,
+    on_press: impl Fn(&mut EventContext) + 'static + Send + Sync,
+) -> Handle<'a, impl View> {
+    Button::new(cx, move |cx| Label::new(cx, label).font_size(9.0))
+        .on_press(on_press)
+        .height(Pixels(BUTTON_HEIGHT_SMALL))
+        .class("lx-btn")
+        .class("danger")
         .toggle_class("active", active)
 }
 

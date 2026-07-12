@@ -854,8 +854,8 @@ impl Context {
 
     /// Modifies the state of an existing timer with the provided `Timer` id.
     ///
-    /// Local `vizia-local` fork fix (see root `Cargo.toml` `[patch]`): the
-    /// original loop only ever `peek()`s the heap's top and
+    /// ponytail-upstream-fix (local `vizia-local` fork, see root `Cargo.toml`
+    /// `[patch]`): the original loop only ever `peek()`s the heap's top and
     /// never advances past a non-matching entry, so a target `timer` that
     /// isn't currently the top-of-heap causes an infinite busy-spin (no
     /// blocking wait, so it doesn't show up as a hung/waiting thread). Two
