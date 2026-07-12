@@ -12,13 +12,13 @@ members = [
 resolver = "3"
 
 [workspace.dependencies]
-truce           = { version = "3.1.2", default-features = false }
-truce-core      = "3.1.2"
-truce-params    = "3.1.2"
-truce-clap      = "3.1.2"
-truce-vst3      = "3.1.2"
-truce-loader    = "3.1.2"
-truce-test      = "3.1.2"
+truce           = { version = "3.1.4", default-features = false }
+truce-core      = "3.1.4"
+truce-params    = "3.1.4"
+truce-clap      = "3.1.4"
+truce-vst3      = "3.1.4"
+truce-loader    = "3.1.4"
+truce-test      = "3.1.4"
 clap-sys        = "0.5"
 
 [profile.release]
@@ -43,8 +43,8 @@ truce-clap = { path = "truce-clap-local" }
 # Pin truce-params/truce-core to the same git tag truce-vizia uses so
 # Cargo resolves a single source and the `Params` trait is unified across
 # all workspace crates.
-truce-params = { git = "https://github.com/truce-audio/truce", tag = "v3.1.2" }
-truce-core = { git = "https://github.com/truce-audio/truce", tag = "v3.1.2" }
+truce-params = { git = "https://github.com/truce-audio/truce", tag = "v3.1.4" }
+truce-core = { git = "https://github.com/truce-audio/truce", tag = "v3.1.4" }
 
 [patch."https://github.com/vizia/baseview.git"]
 baseview = { path = "baseview-local" }
