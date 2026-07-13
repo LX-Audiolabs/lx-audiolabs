@@ -4,11 +4,11 @@
 //! port follows): tick-frequency telemetry lives in one `Signal<Telemetry>`
 //! updated every ~33ms by `Ticker` (not `cx.add_timer`/`start_timer` -
 //! vizia_core 0.4.0's `modify_timer` has a real infinite-loop bug), passive
-//! display regions are wrapped in `Binding`s keyed to it, and drag widgets
-//! (sliders/knobs) are built once outside any tick-driven Binding so a drag
-//! survives across ticks. Slider/knob positions instead refresh on
-//! `params_gen`, a Signal bumped only by discrete actions (ResetAll,
-//! SelectPreset) - see its doc comment in `build()`.
+//! display regions are wrapped in `Binding`s keyed to it. Drag widgets
+//! (sliders/knobs) bind to each param's `ParamLens::value_signal` so
+//! `truce-vizia`'s `refresh_params` idle poll repaints host automation without
+//! rebuilding unrelated widgets. `params_gen` remains for preset-list
+//! refresh and other discrete bulk updates (ResetAll, SelectPreset).
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, atomic::Ordering};
@@ -161,7 +161,6 @@ fn tick(
     params: &EquilibriumParams,
     accum: &Arc<Mutex<TickAccum>>,
     telemetry: Signal<Telemetry>,
-    params_gen: Signal<u32>,
 ) -> bool {
     let acc = accum.lock().unwrap();
 
@@ -191,7 +190,6 @@ fn tick(
     let balance = shared.balance.load(Ordering::Acquire);
 
     let measuring = shared.auto_loud_measuring.load(Ordering::Acquire);
-    let mut auto_loud_applied = false;
     if !measuring {
         let offset = shared.auto_loud_gain_offset.load(Ordering::Acquire);
         if offset.abs() > 0.05 {
@@ -200,32 +198,15 @@ fn tick(
                 .output_gain
                 .set_value((cur + offset).clamp(-12.0, 12.0) as f64);
             shared.auto_loud_gain_offset.store(0.0, Ordering::Release);
-            auto_loud_applied = true;
         }
     }
 
     let snap_now = shared.snap_active.load(Ordering::Acquire);
     let vault_path = acc.vault_path.clone();
-    // Drop the lock before params_gen.update()/telemetry.update(): both run
-    // vizia_reactive effects synchronously, and the SNAP button's Memo
-    // (build_sidebar) locks `accum` itself - held across either call, it
-    // self-deadlocks the UI thread on this same non-reentrant Mutex.
+    // Drop the lock before telemetry.update(): it runs vizia_reactive effects
+    // synchronously, and the SNAP button's Memo (build_sidebar) locks `accum`
+    // itself - held across the call, it self-deadlocks the UI thread.
     drop(acc);
-
-    // set_value() is an atomic store only (no UI notify) - bump params_gen
-    // so the Output Gain knob's Binding re-reads it (Auto Loud moves this
-    // param from outside any knob drag). Placed after `drop(acc)` for the
-    // same self-deadlock reason noted on `params_gen` elsewhere in this file.
-    if auto_loud_applied {
-        params_gen.update(|g| *g = g.wrapping_add(1));
-    }
-    // params_gen is intentionally NOT bumped on a timer. Slider/knob
-    // widgets live inside `Binding::new(cx, params_gen, ...)` so they
-    // rebuild on discrete actions (ResetAll, SelectPreset, SavePreset,
-    // vault-path save, Auto Loud) to pick up new values. A periodic bump
-    // here (~330ms) made the widgets rebuild while the user was dragging,
-    // which reset their internal drag state and caused stuttering /
-    // dropped drags.
 
     let prev = telemetry.get();
     let next = Telemetry {
@@ -253,7 +234,7 @@ fn tick(
         },
     };
 
-    let changed = next != prev || auto_loud_applied;
+    let changed = next != prev;
     if changed {
         telemetry.set(next);
         if !snap_now && prev.snap_active {
@@ -305,7 +286,6 @@ struct Ticker {
     params: Arc<EquilibriumParams>,
     accum: Arc<Mutex<TickAccum>>,
     telemetry: Signal<Telemetry>,
-    params_gen: Signal<u32>,
     last_tick: RefCell<Instant>,
 }
 
@@ -316,14 +296,12 @@ impl Ticker {
         params: Arc<EquilibriumParams>,
         accum: Arc<Mutex<TickAccum>>,
         telemetry: Signal<Telemetry>,
-        params_gen: Signal<u32>,
     ) -> Handle<'_, Self> {
         Self {
             shared,
             params,
             accum,
             telemetry,
-            params_gen,
             last_tick: RefCell::new(Instant::now()),
         }
         .build(cx, |_| {})
@@ -353,13 +331,7 @@ impl View for Ticker {
         let t0_tick = if profile && due { Some(Instant::now()) } else { None };
         let mut telemetry_changed = false;
         if due {
-            telemetry_changed = tick(
-                &self.shared,
-                &self.params,
-                &self.accum,
-                self.telemetry,
-                self.params_gen,
-            );
+            telemetry_changed = tick(&self.shared, &self.params, &self.accum, self.telemetry);
         }
         let tick_us = t0_tick.map(|t| t.elapsed().as_micros() as u64).unwrap_or(0);
         // Keep the render loop alive so the layer-cached views repaint their
@@ -523,7 +495,6 @@ pub fn build(
         params.clone(),
         accum.clone(),
         telemetry,
-        params_gen,
     )
     .width(Pixels(1.0))
     .height(Pixels(1.0));
@@ -609,7 +580,7 @@ pub fn build(
                         params_gen,
                     );
                 } else {
-                    build_main_panel(cx, telemetry, lens_middle.clone(), params_gen);
+                    build_main_panel(cx, telemetry, lens_middle.clone());
                 }
             });
         })
@@ -617,13 +588,7 @@ pub fn build(
         .height(Stretch(1.0))
         .background_color(rgb(0.06, 0.06, 0.06));
 
-        build_right_sidebar(
-            cx,
-            telemetry,
-            lens_body.clone(),
-            shared_body.clone(),
-            params_gen,
-        );
+        build_right_sidebar(cx, telemetry, lens_body.clone(), shared_body.clone());
     })
     .width(Stretch(1.0))
     .height(Stretch(1.0));
@@ -959,7 +924,6 @@ fn build_main_panel(
     cx: &mut Context,
     telemetry: Signal<Telemetry>,
     lens: ParamLens<EquilibriumParams>,
-    params_gen: Signal<u32>,
 ) {
     // Spectrum + band labels - passive display, safe to rebuild every tick.
     Binding::new(cx, telemetry, move |cx| {
@@ -993,101 +957,108 @@ fn build_main_panel(
         .height(Pixels(20.0));
     });
 
-    // Slider columns - drag widgets, rebuilt only on `params_gen` (ResetAll /
-    // SelectPreset), never on the 33ms tick. See module doc.
-    Binding::new(cx, params_gen, move |cx| {
-        // `Binding`'s setup closure is `Fn`, callable again on every
-        // `params_gen` bump - `lens` is captured by reference into it, so a
-        // fresh clone is made per invocation rather than moving the
-        // captured `lens` itself into the nested `HStack` closure.
-        let lens_row = lens.clone();
-        HStack::new(cx, move |cx| {
-            for b in 0..5 {
-                let lens_col = lens_row.clone();
-                VStack::new(cx, move |cx| {
-                    let gain = lens_col.get_plain(GAIN_IDS[b]);
-                    let width = lens_col.get_plain(WIDTH_IDS[b]);
-                    let pan = lens_col.get_plain(PAN_IDS[b]);
-
-                    Label::new(cx, "Gain")
-                        .font_size(12.0)
-                        .color(col(0.75, 0.75, 0.75, 1.0));
-                    let gain_display = Signal::new(gain);
-                    let lens_gain = lens_col.clone();
-                    HSliderView::new(cx, -12.0, 12.0, gain, 0.0, move |_cx, g| match g {
-                        Gesture::Start => lens_gain.begin_edit(GAIN_IDS[b]),
-                        Gesture::Change(v) => {
-                            let range = 24.0f64;
-                            let norm = ((v as f64) + 12.0) / range;
-                            lens_gain.set(GAIN_IDS[b], norm.clamp(0.0, 1.0));
-                            gain_display.set(v);
-                        }
-                        Gesture::End => lens_gain.end_edit(GAIN_IDS[b]),
-                    })
-                    .width(Stretch(1.0))
-                    .height(Pixels(22.0));
-                    Label::new(
-                        cx,
-                        Memo::new(move |_| format!("{:.1} dB", gain_display.get())),
-                    )
-                    .font_size(11.0)
-                    .color(col(0.8, 0.8, 0.8, 1.0));
-
-                    Label::new(cx, "Width")
-                        .font_size(12.0)
-                        .color(col(0.75, 0.75, 0.75, 1.0));
-                    let width_display = Signal::new(width);
-                    let lens_width = lens_col.clone();
-                    HSliderView::new(cx, 0.0, 150.0, width, 100.0, move |_cx, g| match g {
-                        Gesture::Start => lens_width.begin_edit(WIDTH_IDS[b]),
-                        Gesture::Change(v) => {
-                            let norm = (v as f64) / 150.0;
-                            lens_width.set(WIDTH_IDS[b], norm.clamp(0.0, 1.0));
-                            width_display.set(v);
-                        }
-                        Gesture::End => lens_width.end_edit(WIDTH_IDS[b]),
-                    })
-                    .width(Stretch(1.0))
-                    .height(Pixels(22.0));
-                    Label::new(
-                        cx,
-                        Memo::new(move |_| format!("{:.0}%", width_display.get())),
-                    )
-                    .font_size(11.0)
-                    .color(col(0.8, 0.8, 0.8, 1.0));
-
-                    Label::new(cx, "Pan")
-                        .font_size(12.0)
-                        .color(col(0.75, 0.75, 0.75, 1.0));
-                    let pan_display = Signal::new(pan);
-                    let lens_pan = lens_col.clone();
-                    HSliderView::new(cx, -1.0, 1.0, pan, 0.0, move |_cx, g| match g {
-                        Gesture::Start => lens_pan.begin_edit(PAN_IDS[b]),
-                        Gesture::Change(v) => {
-                            let norm = ((v as f64) + 1.0) / 2.0;
-                            lens_pan.set(PAN_IDS[b], norm.clamp(0.0, 1.0));
-                            pan_display.set(v);
-                        }
-                        Gesture::End => lens_pan.end_edit(PAN_IDS[b]),
-                    })
-                    .width(Stretch(1.0))
-                    .height(Pixels(22.0));
-                    Label::new(cx, Memo::new(move |_| format_pan(pan_display.get())))
+    // Per-band sliders keyed to each param's value_signal — host automation
+    // refreshes only the affected column via truce-vizia::refresh_params.
+    let lens_row = lens.clone();
+    HStack::new(cx, move |cx| {
+        for b in 0..5 {
+            let lens_col = lens_row.clone();
+            VStack::new(cx, move |cx| {
+                Label::new(cx, "Gain")
+                    .font_size(12.0)
+                    .color(col(0.75, 0.75, 0.75, 1.0));
+                Binding::new(cx, lens_col.value_signal(GAIN_IDS[b]), {
+                    let lens_col = lens_col.clone();
+                    move |cx| {
+                        let gain = lens_col.get_plain(GAIN_IDS[b]);
+                        let gain_display = Signal::new(gain);
+                        let lens_gain = lens_col.clone();
+                        HSliderView::new(cx, -12.0, 12.0, gain, 0.0, move |_cx, g| match g {
+                            Gesture::Start => lens_gain.begin_edit(GAIN_IDS[b]),
+                            Gesture::Change(v) => {
+                                let norm = ((v as f64) + 12.0) / 24.0;
+                                lens_gain.set(GAIN_IDS[b], norm.clamp(0.0, 1.0));
+                                gain_display.set(v);
+                            }
+                            Gesture::End => lens_gain.end_edit(GAIN_IDS[b]),
+                        })
+                        .width(Stretch(1.0))
+                        .height(Pixels(22.0));
+                        Label::new(
+                            cx,
+                            Memo::new(move |_| format!("{:.1} dB", gain_display.get())),
+                        )
                         .font_size(11.0)
                         .color(col(0.8, 0.8, 0.8, 1.0));
+                    }
+                });
 
-                    styled_toggle_dyn(cx, lens_col.clone(), SOLO_IDS[b], "SOLO", "SOLO ON");
-                })
-                .vertical_gap(Pixels(4.0))
-                .alignment(Alignment::Center)
-                .width(Stretch(1.0));
-            }
-        })
-        .width(Stretch(1.0))
-        .height(Auto)
-        .horizontal_gap(Pixels(10.0))
-        .padding(Pixels(10.0));
-    });
+                Label::new(cx, "Width")
+                    .font_size(12.0)
+                    .color(col(0.75, 0.75, 0.75, 1.0));
+                Binding::new(cx, lens_col.value_signal(WIDTH_IDS[b]), {
+                    let lens_col = lens_col.clone();
+                    move |cx| {
+                        let width = lens_col.get_plain(WIDTH_IDS[b]);
+                        let width_display = Signal::new(width);
+                        let lens_width = lens_col.clone();
+                        HSliderView::new(cx, 0.0, 150.0, width, 100.0, move |_cx, g| match g {
+                            Gesture::Start => lens_width.begin_edit(WIDTH_IDS[b]),
+                            Gesture::Change(v) => {
+                                let norm = (v as f64) / 150.0;
+                                lens_width.set(WIDTH_IDS[b], norm.clamp(0.0, 1.0));
+                                width_display.set(v);
+                            }
+                            Gesture::End => lens_width.end_edit(WIDTH_IDS[b]),
+                        })
+                        .width(Stretch(1.0))
+                        .height(Pixels(22.0));
+                        Label::new(
+                            cx,
+                            Memo::new(move |_| format!("{:.0}%", width_display.get())),
+                        )
+                        .font_size(11.0)
+                        .color(col(0.8, 0.8, 0.8, 1.0));
+                    }
+                });
+
+                Label::new(cx, "Pan")
+                    .font_size(12.0)
+                    .color(col(0.75, 0.75, 0.75, 1.0));
+                Binding::new(cx, lens_col.value_signal(PAN_IDS[b]), {
+                    let lens_col = lens_col.clone();
+                    move |cx| {
+                        let pan = lens_col.get_plain(PAN_IDS[b]);
+                        let pan_display = Signal::new(pan);
+                        let lens_pan = lens_col.clone();
+                        HSliderView::new(cx, -1.0, 1.0, pan, 0.0, move |_cx, g| match g {
+                            Gesture::Start => lens_pan.begin_edit(PAN_IDS[b]),
+                            Gesture::Change(v) => {
+                                let norm = ((v as f64) + 1.0) / 2.0;
+                                lens_pan.set(PAN_IDS[b], norm.clamp(0.0, 1.0));
+                                pan_display.set(v);
+                            }
+                            Gesture::End => lens_pan.end_edit(PAN_IDS[b]),
+                        })
+                        .width(Stretch(1.0))
+                        .height(Pixels(22.0));
+                        Label::new(cx, Memo::new(move |_| format_pan(pan_display.get())))
+                            .font_size(11.0)
+                            .color(col(0.8, 0.8, 0.8, 1.0));
+                    }
+                });
+
+                styled_toggle_dyn(cx, lens_col.clone(), SOLO_IDS[b], "SOLO", "SOLO ON");
+            })
+            .vertical_gap(Pixels(4.0))
+            .alignment(Alignment::Center)
+            .width(Stretch(1.0));
+        }
+    })
+    .width(Stretch(1.0))
+    .height(Auto)
+    .horizontal_gap(Pixels(10.0))
+    .padding(Pixels(10.0));
 }
 
 // ─── Right sidebar (output level, pre-master, auto loud, goniometer) ───────
@@ -1097,7 +1068,6 @@ fn build_right_sidebar(
     telemetry: Signal<Telemetry>,
     lens: ParamLens<EquilibriumParams>,
     shared: Arc<SharedState>,
-    params_gen: Signal<u32>,
 ) {
     VStack::new(cx, move |cx| {
         Label::new(cx, "OUTPUT LEVEL")
@@ -1107,11 +1077,7 @@ fn build_right_sidebar(
         let lens_hs = lens.clone();
         let shared_hs = shared.clone();
         HStack::new(cx, move |cx| {
-            // OutputGain can move from outside a knob drag (Auto Loud applies
-            // its offset in `tick()`, which bumps `params_gen` for exactly
-            // this reason) - re-read the plain value on every bump so the
-            // knob doesn't go stale like it did before this Binding existed.
-            Binding::new(cx, params_gen, {
+            Binding::new(cx, lens_hs.value_signal(K::OutputGain), {
                 let lens_hs = lens_hs.clone();
                 move |cx| {
                     let out_gain = lens_hs.get_plain(K::OutputGain);
@@ -1161,11 +1127,7 @@ fn build_right_sidebar(
                         });
                     });
                 }
-                // PreMasterTargetDb can move from outside a slider drag
-                // (RESET ALL), which bumps `params_gen` for exactly this
-                // reason - re-read the plain value on every bump so the
-                // slider doesn't go stale.
-                Binding::new(cx, params_gen, {
+                Binding::new(cx, lens_hs.value_signal(K::PreMasterTargetDb), {
                     let lens_hs = lens_hs.clone();
                     move |cx| {
                         let pre_target = lens_hs.get_plain(K::PreMasterTargetDb);
@@ -1409,9 +1371,6 @@ fn build_footer(
             Label::new(cx, "MONO FLOOR")
                 .font_size(10.0)
                 .color(rgb(1.0, 0.55, 0.15));
-            // Mono Floor can move from outside a knob drag (RESET ALL).
-            // Bind to the actual param signal so the knob rebuilds on any
-            // value change, not only on explicit `params_gen` bumps.
             Binding::new(cx, lens_mono.value_signal(K::MonoFloor), {
                 let lens_mono = lens_mono.clone();
                 move |cx| {

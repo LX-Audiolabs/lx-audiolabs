@@ -53,10 +53,8 @@ pub fn compute_spectrum_bins(
 
 /// Shared real-time analyzer values for the GUI.
 ///
-/// ## Plugin ownership
-///
-/// TODO: split into per-plugin state structs before multi-plugin migration -
-/// current monolith works but gets painful fast.
+/// ## Plugin ownership (ponytail: split into per-plugin state structs before
+/// multi-plugin migration — current monolith works but gets painful fast)
 ///
 /// ── Equilibrium ──
 ///   band_levels, target_levels, target_tolerances, listen_*,

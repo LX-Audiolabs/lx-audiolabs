@@ -6,12 +6,10 @@
 //! ~33ms by `Ticker` (not `cx.add_timer`/`start_timer` - vizia_core 0.4.0's
 //! `modify_timer` has a real infinite-loop bug), passive display regions
 //! (spectrum+EQ-curve, meters, goniometer, GR envelope) are wrapped in
-//! `Binding`s keyed to it, and drag widgets (knobs/sliders) are built once
-//! outside any tick-driven Binding so a drag survives across ticks. The
-//! preset list and the header's MONO/DELTA/BYPASS toggles instead key off
-//! `params_gen` / the param's own value signal - bumped only by discrete
-//! actions, never by `tick()` - so their Buttons never hit the
-//! rebuild-drops-clicks issue documented on `Ticker` below.
+//! `Binding`s keyed to it. Drag widgets (knobs/sliders) bind to each param's
+//! `ParamLens::value_signal` so `truce-vizia`'s `refresh_params` idle poll
+//! repaints host automation without rebuilding unrelated widgets. `params_gen`
+//! remains for preset-list refresh and other discrete bulk updates.
 //!
 //! Every `FloatParam`/`IntParam` write goes through the param's own
 //! `.info.range.normalize(plain)` rather than a hand-rolled linear formula:
@@ -905,10 +903,7 @@ struct TickAccum {
     vault_path: Option<String>,
     gr_peak_hold_ticks: u32,
     /// params_gen is only bumped on discrete user actions (preset load/save,
-    /// RESET ALL, Auto Loud, vault-path save) so slider/knob Bindings rebuild
-    /// only when necessary. A periodic timer bump caused widgets to rebuild
-    /// mid-drag, resetting their internal drag state and making interaction
-    /// stutter.
+    /// RESET ALL, vault-path save) so the preset list rebuilds when needed.
     _reserved: u32,
     eq_curve_key: Option<EqCurveKey>,
 }
@@ -919,7 +914,7 @@ fn tick(
     params: &MeridianParams,
     accum: &Arc<Mutex<TickAccum>>,
     telemetry: Signal<Telemetry>,
-    params_gen: Signal<u32>,
+    _params_gen: Signal<u32>,
 ) -> bool {
     let mut acc = accum.lock().unwrap();
 
@@ -1008,18 +1003,7 @@ fn tick(
     // Mutex.
     drop(acc);
 
-    // Bump params_gen only on discrete events. Sliders/knobs live inside
-    // `Binding::new(cx, params_gen, ...)` so they rebuild and re-read fresh
-    // values on ResetAll / SelectPreset / SavePreset / vault-path save /
-    // Auto Loud. A periodic bump here made them rebuild during a drag and
-    // stutter - this used to also fire from a ~5s vault-rescan timer;
-    // removed rather than routed to a second signal, since the preset list
-    // already refreshes on every discrete list-touching action (Save,
-    // vault-path Save, RESET, Select) and a session-long stale list between
-    // those is an acceptable trade-off for never rebuilding knobs off a timer.
-    if auto_loud_applied {
-        params_gen.update(|g| *g = g.wrapping_add(1));
-    }
+    let _ = auto_loud_applied;
 
     let prev = prev_telemetry;
     let next = Telemetry {
@@ -1381,7 +1365,6 @@ pub fn build(
                         lens_middle.clone(),
                         params_middle.clone(),
                         shared_middle.clone(),
-                        params_gen,
                     );
                 }
             });
@@ -1763,20 +1746,12 @@ fn build_main_panel(
     lens: ParamLens<MeridianParams>,
     params: Arc<MeridianParams>,
     shared: Arc<SharedState>,
-    params_gen: Signal<u32>,
 ) {
     // ── Top strip: Filter / Warmth / Exciter / Tilt ──
-    // Wrapped in `Binding(params_gen)` so RESET / preset-load refreshes these
-    // drag widgets - they snapshot `lens.get_plain()` once at construction and
-    // otherwise never see a value changed from outside their own gesture.
-    Binding::new(cx, params_gen, {
+    HStack::new(cx, {
         let lens = lens.clone();
         let params = params.clone();
         move |cx| {
-            HStack::new(cx, {
-                let lens = lens.clone();
-                let params = params.clone();
-                move |cx| {
                     let strip_label = |cx: &mut Context, t: &'static str| {
                         Label::new(cx, t)
                             .font_size(10.0)
@@ -1789,11 +1764,17 @@ fn build_main_panel(
                         move |cx| {
                             strip_label(cx, "FILTER");
                             HStack::new(cx, move |cx| {
-                                let hpf = lens.get_plain(K::HpfFreq);
+                                let lens_hpf_outer = lens.clone();
+                                let params_hpf_outer = params.clone();
+                                Binding::new(cx, lens_hpf_outer.value_signal(K::HpfFreq), {
+                                    let lens_hpf_outer = lens_hpf_outer.clone();
+                                    let params_hpf_outer = params_hpf_outer.clone();
+                                    move |cx| {
+                                let hpf = lens_hpf_outer.get_plain(K::HpfFreq);
                                 let hpf_display = Signal::new(hpf);
-                                let lens_hpf = lens.clone();
-                                let params_hpf = params.clone();
-                                VStack::new(cx, move |cx| {
+                                let lens_hpf = lens_hpf_outer.clone();
+                                let params_hpf = params_hpf_outer.clone();
+                                VStack::new(cx, |cx| {
                                     let hpf_default = params_hpf.hpf_freq.info.default_plain as f32;
                                     let hpf_default_norm = ((hpf_default.ln() - 2.0f32.ln())
                                         / (2000.0f32.ln() - 2.0f32.ln()))
@@ -1849,14 +1830,22 @@ fn build_main_panel(
                                 })
                                 .alignment(Alignment::Center)
                                 .width(Pixels(40.0));
+                                    }
+                                });
 
                                 cut_slope_selector(cx, lens.clone(), params.clone(), K::CutSlope);
 
-                                let lpf = lens.get_plain(K::LpfFreq);
+                                let lens_lpf_outer = lens.clone();
+                                let params_lpf_outer = params.clone();
+                                Binding::new(cx, lens_lpf_outer.value_signal(K::LpfFreq), {
+                                    let lens_lpf_outer = lens_lpf_outer.clone();
+                                    let params_lpf_outer = params_lpf_outer.clone();
+                                    move |cx| {
+                                let lpf = lens_lpf_outer.get_plain(K::LpfFreq);
                                 let lpf_display = Signal::new(lpf);
-                                let lens_lpf = lens.clone();
-                                let params_lpf = params.clone();
-                                VStack::new(cx, move |cx| {
+                                let lens_lpf = lens_lpf_outer.clone();
+                                let params_lpf = params_lpf_outer.clone();
+                                VStack::new(cx, |cx| {
                                     let lpf_default = params_lpf.lpf_freq.info.default_plain as f32;
                                     let lpf_default_norm = ((lpf_default.ln() - 200.0f32.ln())
                                         / (35000.0f32.ln() - 200.0f32.ln()))
@@ -1910,6 +1899,8 @@ fn build_main_panel(
                                 })
                                 .alignment(Alignment::Center)
                                 .width(Pixels(40.0));
+                                    }
+                                });
                             })
                             .horizontal_gap(Pixels(15.0))
                             .alignment(Alignment::Center)
@@ -2009,8 +2000,6 @@ fn build_main_panel(
             .horizontal_gap(Pixels(15.0))
             .alignment(Alignment::Center)
             .padding(Pixels(5.0));
-        }
-    });
 
     // ── Spectrum + EQ curve overlay - passive display, rebuilt every tick ──
     Binding::new(cx, telemetry, move |cx| {
@@ -2039,6 +2028,7 @@ fn build_main_panel(
                 resonance_peaks: Vec::new(),
                 masking: Vec::new(),
                 eq_curve,
+                hovered_freq: std::cell::Cell::new(None),
             },
         )
         .width(Stretch(1.0))
@@ -2046,52 +2036,45 @@ fn build_main_panel(
         let _ = t;
     });
 
-    // ── 5-band EQ row - drag widgets, rebuilt only on `params_gen` (RESET /
-    // preset load), same reasoning as the top strip above.
-    Binding::new(cx, params_gen, {
-        let lens = lens.clone();
-        let params = params.clone();
-        move |cx| {
-            HStack::new(cx, move |cx| {
-                for label in HZ_LABELS {
-                    Label::new(cx, label)
-                        .font_size(10.0)
-                        .color(rgb(1.0, 0.55, 0.15))
-                        .width(Stretch(1.0))
-                        .alignment(Alignment::Center);
-                }
-            })
-            .width(Stretch(1.0))
-            .height(Pixels(15.0));
+    // ── 5-band EQ row - per-slider value_signal bindings ──
+    HStack::new(cx, move |cx| {
+        for label in HZ_LABELS {
+            Label::new(cx, label)
+                .font_size(10.0)
+                .color(rgb(1.0, 0.55, 0.15))
+                .width(Stretch(1.0))
+                .alignment(Alignment::Center);
+        }
+    })
+    .width(Stretch(1.0))
+    .height(Pixels(15.0));
 
-            let lens = lens.clone();
-            let params = params.clone();
-            HStack::new(cx, move |cx| {
-                for b in 0..5 {
-                    let gain_field = GAIN_FIELDS[b];
-                    let freq_field = FREQ_FIELDS[b];
-                    let slope_field = SLOPE_FIELDS[b];
-                    let (fmin, fmax, fdef) = FREQ_RANGES[b];
-                    let gain_id = GAIN_IDS[b];
-                    let freq_id = FREQ_IDS[b];
+    let lens_row = lens.clone();
+    let params_row = params.clone();
+    HStack::new(cx, move |cx| {
+        for b in 0..5 {
+            let gain_field = GAIN_FIELDS[b];
+            let freq_field = FREQ_FIELDS[b];
+            let slope_field = SLOPE_FIELDS[b];
+            let (fmin, fmax, fdef) = FREQ_RANGES[b];
+            let gain_id = GAIN_IDS[b];
+            let freq_id = FREQ_IDS[b];
+            let lens_col = lens_row.clone();
+            let params_col = params_row.clone();
 
-                    let gain = lens.get_plain(gain_id);
-                    let freq = lens.get_plain(freq_id);
-                    let gain_display = Signal::new(gain);
-                    let freq_display = Signal::new(freq);
+            VStack::new(cx, move |cx| {
+                Label::new(cx, BAND_NAMES[b])
+                    .font_size(11.0)
+                    .color(col(0.85, 0.85, 0.85, 1.0));
 
-                    let lens_gain = lens.clone();
-                    let lens_freq = lens.clone();
-                    let params_gain = params.clone();
-                    let params_freq = params.clone();
-                    let lens_slope = lens.clone();
-                    let params_slope = params.clone();
-
-                    VStack::new(cx, move |cx| {
-                        Label::new(cx, BAND_NAMES[b])
-                            .font_size(11.0)
-                            .color(col(0.85, 0.85, 0.85, 1.0));
-
+                Binding::new(cx, lens_col.value_signal(gain_id), {
+                    let lens_col = lens_col.clone();
+                    let params_col = params_col.clone();
+                    move |cx| {
+                        let gain = lens_col.get_plain(gain_id);
+                        let gain_display = Signal::new(gain);
+                        let lens_gain = lens_col.clone();
+                        let params_gain = params_col.clone();
                         HSliderView::new(cx, -12.0, 12.0, gain, 0.0, move |_cx, g| match g {
                             Gesture::Start => lens_gain.begin_edit(gain_id),
                             Gesture::Change(v) => {
@@ -2111,7 +2094,17 @@ fn build_main_panel(
                         )
                         .font_size(11.0)
                         .color(col(0.8, 0.8, 0.8, 1.0));
+                    }
+                });
 
+                Binding::new(cx, lens_col.value_signal(freq_id), {
+                    let lens_col = lens_col.clone();
+                    let params_col = params_col.clone();
+                    move |cx| {
+                        let freq = lens_col.get_plain(freq_id);
+                        let freq_display = Signal::new(freq);
+                        let lens_freq = lens_col.clone();
+                        let params_freq = params_col.clone();
                         HSliderView::new(cx, fmin, fmax, freq, fdef, move |_cx, g| match g {
                             Gesture::Start => lens_freq.begin_edit(freq_id),
                             Gesture::Change(v) => {
@@ -2128,37 +2121,37 @@ fn build_main_panel(
                         Label::new(cx, Memo::new(move |_| short_freq(freq_display.get())))
                             .font_size(10.0)
                             .color(rgb(0.7, 0.85, 1.0));
+                    }
+                });
 
-                        Label::new(
-                            cx,
-                            if BAND_IS_SHELF[b] {
-                                "Shelf Slope"
-                            } else {
-                                "Filter Q"
-                            },
-                        )
-                        .font_size(10.0)
-                        .color(col(0.55, 0.55, 0.55, 1.0));
-                        slope_selector(
-                            cx,
-                            lens_slope.clone(),
-                            params_slope.clone(),
-                            slope_field,
-                            SLOPE_IDS[b],
-                            3,
-                        );
-                    })
-                    .vertical_gap(Pixels(4.0))
-                    .alignment(Alignment::Center)
-                    .width(Stretch(1.0));
-                }
+                Label::new(
+                    cx,
+                    if BAND_IS_SHELF[b] {
+                        "Shelf Slope"
+                    } else {
+                        "Filter Q"
+                    },
+                )
+                .font_size(10.0)
+                .color(col(0.55, 0.55, 0.55, 1.0));
+                slope_selector(
+                    cx,
+                    lens_col.clone(),
+                    params_col.clone(),
+                    slope_field,
+                    SLOPE_IDS[b],
+                    3,
+                );
             })
-            .width(Stretch(1.0))
-            .height(Auto)
-            .horizontal_gap(Pixels(10.0))
-            .padding(Pixels(10.0));
+            .vertical_gap(Pixels(4.0))
+            .alignment(Alignment::Center)
+            .width(Stretch(1.0));
         }
-    });
+    })
+    .width(Stretch(1.0))
+    .height(Auto)
+    .horizontal_gap(Pixels(10.0))
+    .padding(Pixels(10.0));
 }
 
 fn vsep(cx: &mut Context) {
@@ -2188,42 +2181,53 @@ fn linear_knob_group<'a>(
             for (label, id, field, min, max) in knobs.clone() {
                 let lens = lens.clone();
                 let params = params.clone();
-                let value = lens.get_plain(id);
-                let default = field(&params).info.default_plain as f32;
-                let display = Signal::new(value);
-                let norm = ((value - min) / (max - min)).clamp(0.0, 1.0);
-                let default_norm = ((default - min) / (max - min)).clamp(0.0, 1.0);
-                VStack::new(cx, move |cx| {
-                    KnobView::new(
-                        cx,
-                        norm,
-                        default_norm,
-                        min,
-                        max,
-                        false,
-                        move |_cx, g| match g {
-                            Gesture::Start => lens.begin_edit(id),
-                            Gesture::Change(v) => {
-                                lens.set(id, field(&params).info.range.normalize(v as f64));
-                                display.set(v);
-                            }
-                            Gesture::End => lens.end_edit(id),
-                        },
-                    )
-                    .width(Pixels(40.0))
-                    .height(Pixels(40.0));
-                    Label::new(
-                        cx,
-                        Memo::new(move |_| format_knob_value(display.get(), max)),
-                    )
-                    .font_size(9.0)
-                    .color(rgb(1.0, 0.65, 0.3));
-                    Label::new(cx, label)
+                Binding::new(cx, lens.value_signal(id), {
+                    let lens = lens.clone();
+                    let params = params.clone();
+                    move |cx| {
+                        let value = lens.get_plain(id);
+                        let default = field(&params).info.default_plain as f32;
+                        let display = Signal::new(value);
+                        let norm = ((value - min) / (max - min)).clamp(0.0, 1.0);
+                        let default_norm = ((default - min) / (max - min)).clamp(0.0, 1.0);
+                        let lens_knob = lens.clone();
+                        let params_knob = params.clone();
+                        VStack::new(cx, |cx| {
+                            KnobView::new(
+                                cx,
+                                norm,
+                                default_norm,
+                                min,
+                                max,
+                                false,
+                                move |_cx, g| match g {
+                                    Gesture::Start => lens_knob.begin_edit(id),
+                                    Gesture::Change(v) => {
+                                        lens_knob.set(
+                                            id,
+                                            field(&params_knob).info.range.normalize(v as f64),
+                                        );
+                                        display.set(v);
+                                    }
+                                    Gesture::End => lens_knob.end_edit(id),
+                                },
+                            )
+                        .width(Pixels(40.0))
+                        .height(Pixels(40.0));
+                        Label::new(
+                            cx,
+                            Memo::new(move |_| format_knob_value(display.get(), max)),
+                        )
                         .font_size(9.0)
-                        .color(col(0.75, 0.75, 0.75, 1.0));
-                })
-                .alignment(Alignment::Center)
-                .width(Pixels(40.0));
+                        .color(rgb(1.0, 0.65, 0.3));
+                        Label::new(cx, label)
+                            .font_size(9.0)
+                            .color(col(0.75, 0.75, 0.75, 1.0));
+                        })
+                        .alignment(Alignment::Center)
+                        .width(Pixels(40.0));
+                    }
+                });
             }
         })
         .horizontal_gap(Pixels(15.0))
@@ -2247,44 +2251,56 @@ fn plain_knob(
     max: f32,
     label: &'static str,
 ) {
+    let sig = lens.value_signal(id);
     let lens = lens.clone();
     let params = params.clone();
-    let value = lens.get_plain(id);
-    let default = field(&params).info.default_plain as f32;
-    let display = Signal::new(value);
-    let norm = ((value - min) / (max - min)).clamp(0.0, 1.0);
-    let default_norm = ((default - min) / (max - min)).clamp(0.0, 1.0);
-    VStack::new(cx, move |cx| {
-        KnobView::new(
-            cx,
-            norm,
-            default_norm,
-            min,
-            max,
-            false,
-            move |_cx, g| match g {
-                Gesture::Start => lens.begin_edit(id),
-                Gesture::Change(v) => {
-                    lens.set(id, field(&params).info.range.normalize(v as f64));
-                    display.set(v);
-                }
-                Gesture::End => lens.end_edit(id),
-            },
-        )
-        .width(Pixels(40.0))
-        .height(Pixels(40.0));
-        Label::new(
-            cx,
-            Memo::new(move |_| format_knob_value(display.get(), max)),
-        )
-        .font_size(9.0)
-        .color(rgb(1.0, 0.65, 0.3));
-        Label::new(cx, label)
-            .font_size(9.0)
-            .color(col(0.75, 0.75, 0.75, 1.0));
-    })
-    .alignment(Alignment::Center)
-    .width(Pixels(40.0));
+    Binding::new(cx, sig, {
+        let lens = lens.clone();
+        let params = params.clone();
+        move |cx| {
+            let value = lens.get_plain(id);
+            let default = field(&params).info.default_plain as f32;
+            let display = Signal::new(value);
+            let norm = ((value - min) / (max - min)).clamp(0.0, 1.0);
+            let default_norm = ((default - min) / (max - min)).clamp(0.0, 1.0);
+            let lens_knob = lens.clone();
+            let params_knob = params.clone();
+            VStack::new(cx, |cx| {
+                KnobView::new(
+                    cx,
+                    norm,
+                    default_norm,
+                    min,
+                    max,
+                    false,
+                    move |_cx, g| match g {
+                        Gesture::Start => lens_knob.begin_edit(id),
+                        Gesture::Change(v) => {
+                            lens_knob.set(
+                                id,
+                                field(&params_knob).info.range.normalize(v as f64),
+                            );
+                            display.set(v);
+                        }
+                        Gesture::End => lens_knob.end_edit(id),
+                    },
+                )
+                .width(Pixels(40.0))
+                .height(Pixels(40.0));
+                Label::new(
+                    cx,
+                    Memo::new(move |_| format_knob_value(display.get(), max)),
+                )
+                .font_size(9.0)
+                .color(rgb(1.0, 0.65, 0.3));
+                Label::new(cx, label)
+                    .font_size(9.0)
+                    .color(col(0.75, 0.75, 0.75, 1.0));
+            })
+            .alignment(Alignment::Center)
+            .width(Pixels(40.0));
+        }
+    });
 }
 
 /// A single bipolar knob (Tilt, Pan, Width, Inflate Curve, Out Gain).
@@ -2299,42 +2315,54 @@ fn bipolar_knob(
     default: f32,
     label: &'static str,
 ) {
+    let sig = lens.value_signal(id);
     let lens = lens.clone();
     let params = params.clone();
-    let value = lens.get_plain(id);
-    let display = Signal::new(value);
-    let norm = ((value - min) / (max - min)).clamp(0.0, 1.0);
-    VStack::new(cx, move |cx| {
-        KnobView::new(
-            cx,
-            norm,
-            ((default - min) / (max - min)).clamp(0.0, 1.0),
-            min,
-            max,
-            true,
-            move |_cx, g| match g {
-                Gesture::Start => lens.begin_edit(id),
-                Gesture::Change(v) => {
-                    lens.set(id, field(&params).info.range.normalize(v as f64));
-                    display.set(v);
-                }
-                Gesture::End => lens.end_edit(id),
-            },
-        )
-        .width(Pixels(40.0))
-        .height(Pixels(40.0));
-        Label::new(
-            cx,
-            Memo::new(move |_| format_knob_value(display.get(), max.abs().max(min.abs()))),
-        )
-        .font_size(9.0)
-        .color(rgb(1.0, 0.65, 0.3));
-        Label::new(cx, label)
-            .font_size(9.0)
-            .color(col(0.75, 0.75, 0.75, 1.0));
-    })
-    .alignment(Alignment::Center)
-    .width(Pixels(40.0));
+    Binding::new(cx, sig, {
+        let lens = lens.clone();
+        let params = params.clone();
+        move |cx| {
+            let value = lens.get_plain(id);
+            let display = Signal::new(value);
+            let norm = ((value - min) / (max - min)).clamp(0.0, 1.0);
+            let lens_knob = lens.clone();
+            let params_knob = params.clone();
+            VStack::new(cx, |cx| {
+                KnobView::new(
+                    cx,
+                    norm,
+                    ((default - min) / (max - min)).clamp(0.0, 1.0),
+                    min,
+                    max,
+                    true,
+                    move |_cx, g| match g {
+                        Gesture::Start => lens_knob.begin_edit(id),
+                        Gesture::Change(v) => {
+                            lens_knob.set(
+                                id,
+                                field(&params_knob).info.range.normalize(v as f64),
+                            );
+                            display.set(v);
+                        }
+                        Gesture::End => lens_knob.end_edit(id),
+                    },
+                )
+                .width(Pixels(40.0))
+                .height(Pixels(40.0));
+                Label::new(
+                    cx,
+                    Memo::new(move |_| format_knob_value(display.get(), max.abs().max(min.abs()))),
+                )
+                .font_size(9.0)
+                .color(rgb(1.0, 0.65, 0.3));
+                Label::new(cx, label)
+                    .font_size(9.0)
+                    .color(col(0.75, 0.75, 0.75, 1.0));
+            })
+            .alignment(Alignment::Center)
+            .width(Pixels(40.0));
+        }
+    });
 }
 
 // ─── Right sidebar (output level, auto loud, goniometer) ────────────────────
@@ -2345,7 +2373,7 @@ fn build_right_sidebar(
     lens: ParamLens<MeridianParams>,
     params: Arc<MeridianParams>,
     shared: Arc<SharedState>,
-    params_gen: Signal<u32>,
+    _params_gen: Signal<u32>,
 ) {
     VStack::new(cx, move |cx| {
         Label::new(cx, "OUTPUT LEVEL")
@@ -2357,32 +2385,21 @@ fn build_right_sidebar(
             let params = params.clone();
             let shared = shared.clone();
             move |cx| {
-                // OutputGain can move from outside a knob drag (Auto Loud
-                // applies its offset in `tick()`, which bumps `params_gen`
-                // for exactly this reason) - re-read the plain value from
-                // the param on every bump so the knob doesn't go stale like
-                // it did before this Binding existed.
                 VStack::new(cx, {
                     let lens = lens.clone();
                     let params = params.clone();
                     move |cx| {
-                        Binding::new(cx, params_gen, {
-                            let lens = lens.clone();
-                            let params = params.clone();
-                            move |cx| {
-                                bipolar_knob(
-                                    cx,
-                                    &lens,
-                                    &params,
-                                    K::OutputGain,
-                                    |p| &p.output_gain,
-                                    -12.0,
-                                    12.0,
-                                    0.0,
-                                    "OUT GAIN",
-                                );
-                            }
-                        });
+                        bipolar_knob(
+                            cx,
+                            &lens,
+                            &params,
+                            K::OutputGain,
+                            |p| &p.output_gain,
+                            -12.0,
+                            12.0,
+                            0.0,
+                            "OUT GAIN",
+                        );
                     }
                 })
                 .alignment(Alignment::Center)
@@ -2527,15 +2544,11 @@ fn build_footer(
                     let lens = lens.clone();
                     let params = params.clone();
                     move |cx| {
-                        Binding::new(cx, params_gen, {
+                        HStack::new(cx, {
                             let lens = lens.clone();
                             let params = params.clone();
                             move |cx| {
-                                HStack::new(cx, {
-                                    let lens = lens.clone();
-                                    let params = params.clone();
-                                    move |cx| {
-                                        for (label, id, field, min, max, default) in [
+                                for (label, id, field, min, max, default) in [
                                             (
                                                 "THRESH",
                                                 K::CompThreshold,
@@ -2590,59 +2603,75 @@ fn build_footer(
                                         ] {
                                             let lens = lens.clone();
                                             let params = params.clone();
-                                            let value = lens.get_plain(id);
-                                            let display = Signal::new(value);
-                                            let norm =
-                                                ((value - min) / (max - min)).clamp(0.0, 1.0);
-                                            let default_norm =
-                                                ((default - min) / (max - min)).clamp(0.0, 1.0);
-                                            VStack::new(cx, move |cx| {
-                                                KnobView::new(
-                                                    cx,
-                                                    norm,
-                                                    default_norm,
-                                                    min,
-                                                    max,
-                                                    false,
-                                                    move |_cx, g| match g {
-                                                        Gesture::Start => lens.begin_edit(id),
-                                                        Gesture::Change(v) => {
-                                                            lens.set(
-                                                                id,
-                                                                field(&params)
-                                                                    .info
-                                                                    .range
-                                                                    .normalize(v as f64),
-                                                            );
-                                                            display.set(v);
-                                                        }
-                                                        Gesture::End => lens.end_edit(id),
-                                                    },
-                                                )
-                                                .width(Pixels(40.0))
-                                                .height(Pixels(40.0));
-                                                Label::new(
-                                                    cx,
-                                                    Memo::new(move |_| {
-                                                        format_knob_value(display.get(), max)
-                                                    }),
-                                                )
-                                                .font_size(9.0)
-                                                .color(rgb(1.0, 0.65, 0.3));
-                                                Label::new(cx, label)
-                                                    .font_size(9.0)
-                                                    .color(col(0.75, 0.75, 0.75, 1.0));
-                                            })
-                                            .alignment(Alignment::Center)
-                                            .width(Pixels(40.0));
+                                            Binding::new(cx, lens.value_signal(id), {
+                                                let lens = lens.clone();
+                                                let params = params.clone();
+                                                move |cx| {
+                                                    let value = lens.get_plain(id);
+                                                    let display = Signal::new(value);
+                                                    let norm = ((value - min) / (max - min))
+                                                        .clamp(0.0, 1.0);
+                                                    let default_norm =
+                                                        ((default - min) / (max - min))
+                                                            .clamp(0.0, 1.0);
+                                                    let lens_knob = lens.clone();
+                                                    let params_knob = params.clone();
+                                                    VStack::new(cx, |cx| {
+                                                        KnobView::new(
+                                                            cx,
+                                                            norm,
+                                                            default_norm,
+                                                            min,
+                                                            max,
+                                                            false,
+                                                            move |_cx, g| match g {
+                                                                Gesture::Start => {
+                                                                    lens_knob.begin_edit(id)
+                                                                }
+                                                                Gesture::Change(v) => {
+                                                                    lens_knob.set(
+                                                                        id,
+                                                                        field(&params_knob)
+                                                                            .info
+                                                                            .range
+                                                                            .normalize(v as f64),
+                                                                    );
+                                                                    display.set(v);
+                                                                }
+                                                                Gesture::End => {
+                                                                    lens_knob.end_edit(id)
+                                                                }
+                                                            },
+                                                        )
+                                                        .width(Pixels(40.0))
+                                                        .height(Pixels(40.0));
+                                                        Label::new(
+                                                            cx,
+                                                            Memo::new(move |_| {
+                                                                format_knob_value(
+                                                                    display.get(),
+                                                                    max,
+                                                                )
+                                                            }),
+                                                        )
+                                                        .font_size(9.0)
+                                                        .color(rgb(1.0, 0.65, 0.3));
+                                                        Label::new(cx, label)
+                                                            .font_size(9.0)
+                                                            .color(col(
+                                                                0.75, 0.75, 0.75, 1.0,
+                                                            ));
+                                                    })
+                                                    .alignment(Alignment::Center)
+                                                    .width(Pixels(40.0));
+                                                }
+                                            });
                                         }
                                     }
                                 })
                                 .horizontal_gap(Pixels(16.0))
                                 .alignment(Alignment::Center)
                                 .height(Auto);
-                            }
-                        });
 
                         Binding::new(cx, telemetry, move |cx| {
                             let t = telemetry.get();
@@ -2696,50 +2725,44 @@ fn build_footer(
                     .font_size(10.0)
                     .color(rgb(1.0, 0.55, 0.15));
                 HStack::new(cx, move |cx| {
-                    Binding::new(cx, params_gen, {
+                    VStack::new(cx, {
                         let lens = lens.clone();
                         let params = params.clone();
                         move |cx| {
-                            VStack::new(cx, {
-                                let lens = lens.clone();
-                                let params = params.clone();
-                                move |cx| {
-                                    plain_knob(
-                                        cx,
-                                        &lens,
-                                        &params,
-                                        K::InflateEffect,
-                                        |p| &p.inflate_effect,
-                                        0.0,
-                                        100.0,
-                                        "EFFECT",
-                                    );
-                                }
-                            })
-                            .alignment(Alignment::Center)
-                            .width(Pixels(40.0));
-
-                            VStack::new(cx, {
-                                let lens = lens.clone();
-                                let params = params.clone();
-                                move |cx| {
-                                    bipolar_knob(
-                                        cx,
-                                        &lens,
-                                        &params,
-                                        K::InflateCurve,
-                                        |p| &p.inflate_curve,
-                                        -50.0,
-                                        50.0,
-                                        0.0,
-                                        "CURVE",
-                                    );
-                                }
-                            })
-                            .alignment(Alignment::Center)
-                            .width(Pixels(40.0));
+                            plain_knob(
+                                cx,
+                                &lens,
+                                &params,
+                                K::InflateEffect,
+                                |p| &p.inflate_effect,
+                                0.0,
+                                100.0,
+                                "EFFECT",
+                            );
                         }
-                    });
+                    })
+                    .alignment(Alignment::Center)
+                    .width(Pixels(40.0));
+
+                    VStack::new(cx, {
+                        let lens = lens.clone();
+                        let params = params.clone();
+                        move |cx| {
+                            bipolar_knob(
+                                cx,
+                                &lens,
+                                &params,
+                                K::InflateCurve,
+                                |p| &p.inflate_curve,
+                                -50.0,
+                                50.0,
+                                0.0,
+                                "CURVE",
+                            );
+                        }
+                    })
+                    .alignment(Alignment::Center)
+                    .width(Pixels(40.0));
 
                     VStack::new(cx, {
                         let lens = lens.clone();
@@ -2772,50 +2795,44 @@ fn build_footer(
                     .font_size(10.0)
                     .color(rgb(1.0, 0.55, 0.15));
                 HStack::new(cx, move |cx| {
-                    Binding::new(cx, params_gen, {
+                    VStack::new(cx, {
                         let lens = lens.clone();
                         let params = params.clone();
                         move |cx| {
-                            VStack::new(cx, {
-                                let lens = lens.clone();
-                                let params = params.clone();
-                                move |cx| {
-                                    bipolar_knob(
-                                        cx,
-                                        &lens,
-                                        &params,
-                                        K::Pan,
-                                        |p| &p.pan,
-                                        -1.0,
-                                        1.0,
-                                        0.0,
-                                        "PAN",
-                                    );
-                                }
-                            })
-                            .alignment(Alignment::Center)
-                            .width(Pixels(40.0));
-                            VStack::new(cx, {
-                                let lens = lens.clone();
-                                let params = params.clone();
-                                move |cx| {
-                                    bipolar_knob(
-                                        cx,
-                                        &lens,
-                                        &params,
-                                        K::StereoWidth,
-                                        |p| &p.stereo_width,
-                                        0.0,
-                                        200.0,
-                                        100.0,
-                                        "WIDTH",
-                                    );
-                                }
-                            })
-                            .alignment(Alignment::Center)
-                            .width(Pixels(40.0));
+                            bipolar_knob(
+                                cx,
+                                &lens,
+                                &params,
+                                K::Pan,
+                                |p| &p.pan,
+                                -1.0,
+                                1.0,
+                                0.0,
+                                "PAN",
+                            );
                         }
-                    });
+                    })
+                    .alignment(Alignment::Center)
+                    .width(Pixels(40.0));
+                    VStack::new(cx, {
+                        let lens = lens.clone();
+                        let params = params.clone();
+                        move |cx| {
+                            bipolar_knob(
+                                cx,
+                                &lens,
+                                &params,
+                                K::StereoWidth,
+                                |p| &p.stereo_width,
+                                0.0,
+                                200.0,
+                                100.0,
+                                "WIDTH",
+                            );
+                        }
+                    })
+                    .alignment(Alignment::Center)
+                    .width(Pixels(40.0));
                 })
                 .horizontal_gap(Pixels(20.0))
                 .alignment(Alignment::Center)

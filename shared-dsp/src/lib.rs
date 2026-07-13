@@ -1092,12 +1092,6 @@ pub struct FtzDazGuard {
     old_csr: u32,
 }
 
-impl Default for FtzDazGuard {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl FtzDazGuard {
     /// Capture the current MXCSR, set FTZ/DAZ, and return the guard.
     #[allow(deprecated)]
@@ -1112,6 +1106,12 @@ impl FtzDazGuard {
         {
             Self {}
         }
+    }
+}
+
+impl Default for FtzDazGuard {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

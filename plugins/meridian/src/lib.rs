@@ -1,3 +1,5 @@
+#![allow(unsafe_op_in_unsafe_fn)]
+
 // Meridian — Track and group shaper (truce port).
 //
 // 5-band EQ with slope control, soft-knee compressor, exciter, tube warmth,
@@ -8,7 +10,6 @@
 //   Warmth → Inflate → Pan → Stereo Width → Mono/Delta → Gain → clamp
 
 use realfft::RealFftPlanner;
-use shared_dsp::state_migration;
 use std::f32::consts::FRAC_PI_4;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -444,8 +445,9 @@ impl MeridianParams {
 
 // ─── Plugin ──────────────────────────────────────────────────────────────────
 
-pub struct Meridian {
-    params: Arc<MeridianParams>,
+pub struct Meridian;
+
+pub struct MeridianDspState {
 
     // HPF/LPF
     hpf_l: Biquad,
@@ -548,11 +550,10 @@ pub struct Meridian {
     cached_sample_rate: f32,
 }
 
-impl Meridian {
-    pub fn new(params: Arc<MeridianParams>) -> Self {
+impl Default for MeridianDspState {
+    fn default() -> Self {
         let fft_size = SPECTRUM_BINS * 2;
         Self {
-            params,
             hpf_l: Biquad::new(),
             hpf_r: Biquad::new(),
             lpf_l: Biquad::new(),
@@ -603,27 +604,23 @@ impl Meridian {
             pre_sat_buf_r: Vec::new(),
             scope_vis_envelope: 1e-4,
             fft_planner: RealFftPlanner::new(),
-            fft_input: vec![0.0f32; fft_size],
+            fft_input: vec![0.0; fft_size],
             fft_write_pos: 0,
             fft_hann: (0..fft_size)
                 .map(|i| {
                     let n = fft_size;
-                    let pi2 = 2.0 * std::f32::consts::PI;
-                    let norm = i as f32 / (n - 1) as f32;
-                    let a0 = 0.35875;
-                    let a1 = 0.48829;
-                    let a2 = 0.14128;
-                    let a3 = 0.01168;
-                    a0 - a1 * (pi2 * norm).cos() + a2 * (2.0 * pi2 * norm).cos()
-                        - a3 * (3.0 * pi2 * norm).cos()
+                    0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (n - 1) as f32).cos())
                 })
                 .collect(),
-            fft_windowed: vec![0.0f32; fft_size],
-            fft_output_cache: vec![
-                realfft::num_complex::Complex::new(0.0f32, 0.0f32);
-                SPECTRUM_BINS + 1
-            ],
+            fft_windowed: vec![0.0; fft_size],
+            fft_output_cache: {
+                let mut planner = RealFftPlanner::new();
+                let fwd = planner.plan_fft_forward(fft_size);
+                fwd.make_output_vec()
+            },
             snap_fft: SnapFFT::new(),
+            // -999 sentinels: must not match param defaults or dirty-flag coef
+            // updates skip and Biquad::default() (zero coefs) silences output.
             cached_hpf_freq: -999.0,
             cached_lpf_freq: -999.0,
             cached_cut_slope: -999,
@@ -649,139 +646,51 @@ impl Meridian {
     }
 }
 
+
+
+
 // ─── PluginLogic ─────────────────────────────────────────────────────────────
 
 impl PluginLogic for Meridian {
     type Params = MeridianParams;
+    type DspState = MeridianDspState;
 
-    fn reset(&mut self, sr: f64, _max: usize) {
-        let sr = sr as f32;
-
-        self.compressor.set_sample_rate(sr);
-
-        self.xo_inflate_lo_l.set_cutoff(300.0, sr);
-        self.xo_inflate_lo_r.set_cutoff(300.0, sr);
-        self.xo_inflate_hi_l.set_cutoff(3000.0, sr);
-        self.xo_inflate_hi_r.set_cutoff(3000.0, sr);
-
-        // Recreate Auto-Loud meters at host sample rate
-        self.auto_loud_in = AutoLoudMeter::new(sr);
-        self.auto_loud_pre_sat = AutoLoudMeter::new(sr);
-        self.auto_loud_out = AutoLoudMeter::new(sr);
-
-        // Crossover frequencies (constant for GUI visualizer)
-        for (xo_l, xo_r, fc) in [
-            (&mut self.xo_bass_mid_l, &mut self.xo_bass_mid_r, 400.0),
-            (&mut self.xo_low_bass_l, &mut self.xo_low_bass_r, 100.0),
-            (&mut self.xo_mid_high_l, &mut self.xo_mid_high_r, 1500.0),
-            (
-                &mut self.xo_highmid_high_l,
-                &mut self.xo_highmid_high_r,
-                8000.0,
-            ),
-        ] {
-            xo_l.set_cutoff(fc, sr);
-            xo_r.set_cutoff(fc, sr);
-        }
-
-        self.correlation_decay_coef = 1.0 - (-1.0 / (0.1 * sr)).exp();
-        self.cached_sample_rate = sr;
-
-        self.params
-            .shared
-            .sample_rate
-            .store(sr, std::sync::atomic::Ordering::Release);
+    fn bus_layouts() -> Vec<BusLayout> {
+        vec![BusLayout::stereo()]
     }
 
-    fn process(
-        &mut self,
-        buffer: &mut AudioBuffer,
-        _events: &EventList,
-        _ctx: &mut ProcessContext,
-    ) -> ProcessStatus {
-        let _ftz = FtzDazGuard::new();
+    fn reset(state: &mut MeridianDspState, params: &MeridianParams, config: &AudioConfig) {
+        let sr = config.sample_rate as f32;
+        let sr = sr as f32;
 
-        if buffer.num_input_channels() < 2 {
-            return ProcessStatus::Normal;
+        state.compressor.set_sample_rate(sr);
+
+        // ponytail: seed all biquads at reset — 6.1.2 migration zeroed dirty-flag
+        // caches so filters matching defaults (esp. tilt @ 0 dB) never got coefs.
+        let hpf_f = params.hpf_freq.raw_target() as f32;
+        let lpf_f = params.lpf_freq.raw_target() as f32;
+        let cut_slope_val = params.cut_slope.value();
+        const Q1: f32 = 0.541_196_1;
+        const Q2: f32 = 1.306_563;
+        if cut_slope_val >= 1 {
+            state.hpf_l.set_butterworth_hp_q(hpf_f, Q1, sr);
+            state.hpf_r.set_butterworth_hp_q(hpf_f, Q1, sr);
+            state.hpf2_l.set_butterworth_hp_q(hpf_f, Q2, sr);
+            state.hpf2_r.set_butterworth_hp_q(hpf_f, Q2, sr);
+            state.lpf_l.set_butterworth_lp_q(lpf_f, Q1, sr);
+            state.lpf_r.set_butterworth_lp_q(lpf_f, Q1, sr);
+            state.lpf2_l.set_butterworth_lp_q(lpf_f, Q2, sr);
+            state.lpf2_r.set_butterworth_lp_q(lpf_f, Q2, sr);
+        } else {
+            state.hpf_l.set_butterworth_hp(hpf_f, sr);
+            state.hpf_r.set_butterworth_hp(hpf_f, sr);
+            state.lpf_l.set_butterworth_lp(lpf_f, sr);
+            state.lpf_r.set_butterworth_lp(lpf_f, sr);
+            state.hpf2_l.set_identity();
+            state.hpf2_r.set_identity();
+            state.lpf2_l.set_identity();
+            state.lpf2_r.set_identity();
         }
-
-        let bypass = self.params.bypass_active.value();
-
-        // Reset analysis
-        if self
-            .params
-            .shared
-            .reset_analysis
-            .swap(false, Ordering::Acquire)
-        {
-            self.fft_input.fill(0.0);
-            self.fft_write_pos = 0;
-            if let Ok(mut avg) = self.params.shared.spectrum_avg.try_lock() {
-                avg.fill(-90.0);
-            }
-            if let Ok(mut bins) = self.params.shared.spectrum_bins.try_lock() {
-                bins.fill(-90.0);
-            }
-            self.hpf_l.reset();
-            self.hpf_r.reset();
-            self.lpf_l.reset();
-            self.lpf_r.reset();
-            self.hpf2_l.reset();
-            self.hpf2_r.reset();
-            self.lpf2_l.reset();
-            self.lpf2_r.reset();
-            self.bass_l.reset();
-            self.bass_r.reset();
-            self.lo_mid_l.reset();
-            self.lo_mid_r.reset();
-            self.mid_l.reset();
-            self.mid_r.reset();
-            self.high_l.reset();
-            self.high_r.reset();
-            self.excite_l.reset();
-            self.excite_r.reset();
-            self.tilt_l.reset();
-            self.tilt_r.reset();
-            self.excite_hp_l.reset();
-            self.excite_hp_r.reset();
-            self.xo_inflate_lo_l.reset();
-            self.xo_inflate_lo_r.reset();
-            self.xo_inflate_hi_l.reset();
-            self.xo_inflate_hi_r.reset();
-            self.xo_bass_mid_l.reset();
-            self.xo_bass_mid_r.reset();
-            self.xo_low_bass_l.reset();
-            self.xo_low_bass_r.reset();
-            self.xo_mid_high_l.reset();
-            self.xo_mid_high_r.reset();
-            self.xo_highmid_high_l.reset();
-            self.xo_highmid_high_r.reset();
-        }
-
-        let sample_rate = self.params.shared.sample_rate.load(Ordering::Acquire);
-        self.compressor.set_sample_rate(sample_rate);
-
-        // Dirty-flag coefficient update
-        let hpf_f = self.params.hpf_freq.raw_target() as f32;
-        let lpf_f = self.params.lpf_freq.raw_target() as f32;
-        let cut_slope_val = self.params.cut_slope.value();
-        let bass_gain_val = self.params.bass_gain.raw_target() as f32;
-        let bass_slope_val = self.params.bass_slope.value();
-        let lo_mid_gain_val = self.params.lo_mid_gain.raw_target() as f32;
-        let lo_mid_slope_val = self.params.lo_mid_slope.value();
-        let mid_gain_val = self.params.mid_gain.raw_target() as f32;
-        let mid_slope_val = self.params.mid_slope.value();
-        let high_gain_val = self.params.high_gain.raw_target() as f32;
-        let high_slope_val = self.params.high_slope.value();
-        let excite_gain_val = self.params.excite_gain.raw_target() as f32;
-        let excite_slope_val = self.params.excite_slope.value();
-        let eq_f1 = self.params.eq_freq_1.raw_target() as f32;
-        let eq_f2 = self.params.eq_freq_2.raw_target() as f32;
-        let eq_f3 = self.params.eq_freq_3.raw_target() as f32;
-        let eq_f4 = self.params.eq_freq_4.raw_target() as f32;
-        let eq_f5 = self.params.eq_freq_5.raw_target() as f32;
-        let tilt_db = self.params.tilt_gain.raw_target() as f32;
-        let excite_freq = self.params.excite_freq.raw_target() as f32;
 
         let slope_val = |slope_idx: i64| -> f32 {
             match slope_idx {
@@ -798,194 +707,395 @@ impl PluginLogic for Meridian {
             }
         };
 
-        let coef_dirty = sample_rate != self.cached_sample_rate;
-        self.cached_sample_rate = sample_rate;
+        let eq_f1 = params.eq_freq_1.raw_target() as f32;
+        let eq_f2 = params.eq_freq_2.raw_target() as f32;
+        let eq_f3 = params.eq_freq_3.raw_target() as f32;
+        let eq_f4 = params.eq_freq_4.raw_target() as f32;
+        let eq_f5 = params.eq_freq_5.raw_target() as f32;
+        let bass_gain = params.bass_gain.raw_target() as f32;
+        let lo_mid_gain = params.lo_mid_gain.raw_target() as f32;
+        let mid_gain = params.mid_gain.raw_target() as f32;
+        let high_gain = params.high_gain.raw_target() as f32;
+        let excite_gain = params.excite_gain.raw_target() as f32;
+        let tilt_db = params.tilt_gain.raw_target() as f32;
+        let excite_freq = params.excite_freq.raw_target() as f32;
 
-        if hpf_f != self.cached_hpf_freq
-            || lpf_f != self.cached_lpf_freq
-            || cut_slope_val != self.cached_cut_slope
+        state.bass_l
+            .set_low_shelf(eq_f1, bass_gain, slope_val(params.bass_slope.value()), sr);
+        state.bass_r
+            .set_low_shelf(eq_f1, bass_gain, slope_val(params.bass_slope.value()), sr);
+        state.lo_mid_l.set_peaking_eq(
+            eq_f2,
+            lo_mid_gain,
+            q_val(params.lo_mid_slope.value()),
+            sr,
+        );
+        state.lo_mid_r.set_peaking_eq(
+            eq_f2,
+            lo_mid_gain,
+            q_val(params.lo_mid_slope.value()),
+            sr,
+        );
+        state.mid_l
+            .set_peaking_eq(eq_f3, mid_gain, q_val(params.mid_slope.value()), sr);
+        state.mid_r
+            .set_peaking_eq(eq_f3, mid_gain, q_val(params.mid_slope.value()), sr);
+        state.high_l.set_peaking_eq(
+            eq_f4,
+            high_gain,
+            q_val(params.high_slope.value()),
+            sr,
+        );
+        state.high_r.set_peaking_eq(
+            eq_f4,
+            high_gain,
+            q_val(params.high_slope.value()),
+            sr,
+        );
+        state.excite_l.set_high_shelf(
+            eq_f5,
+            excite_gain,
+            slope_val(params.excite_slope.value()),
+            sr,
+        );
+        state.excite_r.set_high_shelf(
+            eq_f5,
+            excite_gain,
+            slope_val(params.excite_slope.value()),
+            sr,
+        );
+        state.tilt_l.set(1000.0, tilt_db, sr);
+        state.tilt_r.set(1000.0, tilt_db, sr);
+        state.excite_hp_l.set_butterworth_hp(excite_freq, sr);
+        state.excite_hp_r.set_butterworth_hp(excite_freq, sr);
+
+        state.xo_inflate_lo_l.set_cutoff(300.0, sr);
+        state.xo_inflate_lo_r.set_cutoff(300.0, sr);
+        state.xo_inflate_hi_l.set_cutoff(3000.0, sr);
+        state.xo_inflate_hi_r.set_cutoff(3000.0, sr);
+
+        // Recreate Auto-Loud meters at host sample rate
+        state.auto_loud_in = AutoLoudMeter::new(sr);
+        state.auto_loud_pre_sat = AutoLoudMeter::new(sr);
+        state.auto_loud_out = AutoLoudMeter::new(sr);
+
+        // Crossover frequencies (constant for GUI visualizer)
+        for (xo_l, xo_r, fc) in [
+            (&mut state.xo_bass_mid_l, &mut state.xo_bass_mid_r, 400.0),
+            (&mut state.xo_low_bass_l, &mut state.xo_low_bass_r, 100.0),
+            (&mut state.xo_mid_high_l, &mut state.xo_mid_high_r, 1500.0),
+            (
+                &mut state.xo_highmid_high_l,
+                &mut state.xo_highmid_high_r,
+                8000.0,
+            ),
+        ] {
+            xo_l.set_cutoff(fc, sr);
+            xo_r.set_cutoff(fc, sr);
+        }
+
+        state.correlation_decay_coef = 1.0 - (-1.0 / (0.1 * sr)).exp();
+        state.cached_sample_rate = sr;
+
+        params
+            .shared
+            .sample_rate
+            .store(sr, std::sync::atomic::Ordering::Release);
+    }
+
+    fn process(
+        state: &mut MeridianDspState,
+        params: &MeridianParams,
+        buffer: &mut AudioBuffer,
+        _events: &EventList,
+        _ctx: &mut ProcessContext,
+    ) -> ProcessStatus {
+        let _ftz = FtzDazGuard::new();
+
+        if buffer.num_input_channels() < 2 {
+            return ProcessStatus::Normal;
+        }
+
+        let bypass = params.bypass_active.value();
+
+        // Reset analysis
+        if params
+            .shared
+            .reset_analysis
+            .swap(false, Ordering::Acquire)
+        {
+            state.fft_input.fill(0.0);
+            state.fft_write_pos = 0;
+            if let Ok(mut avg) = params.shared.spectrum_avg.try_lock() {
+                avg.fill(-90.0);
+            }
+            if let Ok(mut bins) = params.shared.spectrum_bins.try_lock() {
+                bins.fill(-90.0);
+            }
+            state.hpf_l.reset();
+            state.hpf_r.reset();
+            state.lpf_l.reset();
+            state.lpf_r.reset();
+            state.hpf2_l.reset();
+            state.hpf2_r.reset();
+            state.lpf2_l.reset();
+            state.lpf2_r.reset();
+            state.bass_l.reset();
+            state.bass_r.reset();
+            state.lo_mid_l.reset();
+            state.lo_mid_r.reset();
+            state.mid_l.reset();
+            state.mid_r.reset();
+            state.high_l.reset();
+            state.high_r.reset();
+            state.excite_l.reset();
+            state.excite_r.reset();
+            state.tilt_l.reset();
+            state.tilt_r.reset();
+            state.excite_hp_l.reset();
+            state.excite_hp_r.reset();
+            state.xo_inflate_lo_l.reset();
+            state.xo_inflate_lo_r.reset();
+            state.xo_inflate_hi_l.reset();
+            state.xo_inflate_hi_r.reset();
+            state.xo_bass_mid_l.reset();
+            state.xo_bass_mid_r.reset();
+            state.xo_low_bass_l.reset();
+            state.xo_low_bass_r.reset();
+            state.xo_mid_high_l.reset();
+            state.xo_mid_high_r.reset();
+            state.xo_highmid_high_l.reset();
+            state.xo_highmid_high_r.reset();
+        }
+
+        let sample_rate = params.shared.sample_rate.load(Ordering::Acquire);
+        state.compressor.set_sample_rate(sample_rate);
+
+        // Dirty-flag coefficient update
+        let hpf_f = params.hpf_freq.raw_target() as f32;
+        let lpf_f = params.lpf_freq.raw_target() as f32;
+        let cut_slope_val = params.cut_slope.value();
+        let bass_gain_val = params.bass_gain.raw_target() as f32;
+        let bass_slope_val = params.bass_slope.value();
+        let lo_mid_gain_val = params.lo_mid_gain.raw_target() as f32;
+        let lo_mid_slope_val = params.lo_mid_slope.value();
+        let mid_gain_val = params.mid_gain.raw_target() as f32;
+        let mid_slope_val = params.mid_slope.value();
+        let high_gain_val = params.high_gain.raw_target() as f32;
+        let high_slope_val = params.high_slope.value();
+        let excite_gain_val = params.excite_gain.raw_target() as f32;
+        let excite_slope_val = params.excite_slope.value();
+        let eq_f1 = params.eq_freq_1.raw_target() as f32;
+        let eq_f2 = params.eq_freq_2.raw_target() as f32;
+        let eq_f3 = params.eq_freq_3.raw_target() as f32;
+        let eq_f4 = params.eq_freq_4.raw_target() as f32;
+        let eq_f5 = params.eq_freq_5.raw_target() as f32;
+        let tilt_db = params.tilt_gain.raw_target() as f32;
+        let excite_freq = params.excite_freq.raw_target() as f32;
+
+        let slope_val = |slope_idx: i64| -> f32 {
+            match slope_idx {
+                0 => 0.5,
+                1 => 1.0,
+                _ => 2.0,
+            }
+        };
+        let q_val = |slope_idx: i64| -> f32 {
+            match slope_idx {
+                0 => 0.4,
+                1 => 0.7,
+                _ => 1.5,
+            }
+        };
+
+        let coef_dirty = sample_rate != state.cached_sample_rate;
+        state.cached_sample_rate = sample_rate;
+
+        if hpf_f != state.cached_hpf_freq
+            || lpf_f != state.cached_lpf_freq
+            || cut_slope_val != state.cached_cut_slope
             || coef_dirty
         {
             // Safety: reset filter state on >4 octave jump (right-click reset fix)
-            let hpf_jump = if self.cached_hpf_freq > 1.0 && hpf_f > 1.0 {
-                (hpf_f / self.cached_hpf_freq).max(self.cached_hpf_freq / hpf_f)
-            } else if hpf_f != self.cached_hpf_freq {
+            let hpf_jump = if state.cached_hpf_freq > 1.0 && hpf_f > 1.0 {
+                (hpf_f / state.cached_hpf_freq).max(state.cached_hpf_freq / hpf_f)
+            } else if hpf_f != state.cached_hpf_freq {
                 4.1
             } else {
                 1.0
             };
-            let lpf_jump = if self.cached_lpf_freq > 1.0 && lpf_f > 1.0 {
-                (lpf_f / self.cached_lpf_freq).max(self.cached_lpf_freq / lpf_f)
-            } else if lpf_f != self.cached_lpf_freq {
+            let lpf_jump = if state.cached_lpf_freq > 1.0 && lpf_f > 1.0 {
+                (lpf_f / state.cached_lpf_freq).max(state.cached_lpf_freq / lpf_f)
+            } else if lpf_f != state.cached_lpf_freq {
                 4.1
             } else {
                 1.0
             };
             if hpf_jump > 4.0 {
-                self.hpf_l.reset();
-                self.hpf_r.reset();
-                self.hpf2_l.reset();
-                self.hpf2_r.reset();
+                state.hpf_l.reset();
+                state.hpf_r.reset();
+                state.hpf2_l.reset();
+                state.hpf2_r.reset();
             }
             if lpf_jump > 4.0 {
-                self.lpf_l.reset();
-                self.lpf_r.reset();
-                self.lpf2_l.reset();
-                self.lpf2_r.reset();
+                state.lpf_l.reset();
+                state.lpf_r.reset();
+                state.lpf2_l.reset();
+                state.lpf2_r.reset();
             }
-            self.cached_hpf_freq = hpf_f;
-            self.cached_lpf_freq = lpf_f;
-            self.cached_cut_slope = cut_slope_val;
+            state.cached_hpf_freq = hpf_f;
+            state.cached_lpf_freq = lpf_f;
+            state.cached_cut_slope = cut_slope_val;
             const Q1: f32 = 0.541_196_1;
             const Q2: f32 = 1.306_563;
             if cut_slope_val >= 1 {
-                self.hpf_l.set_butterworth_hp_q(hpf_f, Q1, sample_rate);
-                self.hpf_r.set_butterworth_hp_q(hpf_f, Q1, sample_rate);
-                self.hpf2_l.set_butterworth_hp_q(hpf_f, Q2, sample_rate);
-                self.hpf2_r.set_butterworth_hp_q(hpf_f, Q2, sample_rate);
-                self.lpf_l.set_butterworth_lp_q(lpf_f, Q1, sample_rate);
-                self.lpf_r.set_butterworth_lp_q(lpf_f, Q1, sample_rate);
-                self.lpf2_l.set_butterworth_lp_q(lpf_f, Q2, sample_rate);
-                self.lpf2_r.set_butterworth_lp_q(lpf_f, Q2, sample_rate);
+                state.hpf_l.set_butterworth_hp_q(hpf_f, Q1, sample_rate);
+                state.hpf_r.set_butterworth_hp_q(hpf_f, Q1, sample_rate);
+                state.hpf2_l.set_butterworth_hp_q(hpf_f, Q2, sample_rate);
+                state.hpf2_r.set_butterworth_hp_q(hpf_f, Q2, sample_rate);
+                state.lpf_l.set_butterworth_lp_q(lpf_f, Q1, sample_rate);
+                state.lpf_r.set_butterworth_lp_q(lpf_f, Q1, sample_rate);
+                state.lpf2_l.set_butterworth_lp_q(lpf_f, Q2, sample_rate);
+                state.lpf2_r.set_butterworth_lp_q(lpf_f, Q2, sample_rate);
             } else {
-                self.hpf_l.set_butterworth_hp(hpf_f, sample_rate);
-                self.hpf_r.set_butterworth_hp(hpf_f, sample_rate);
-                self.lpf_l.set_butterworth_lp(lpf_f, sample_rate);
-                self.lpf_r.set_butterworth_lp(lpf_f, sample_rate);
-                self.hpf2_l.set_identity();
-                self.hpf2_r.set_identity();
-                self.lpf2_l.set_identity();
-                self.lpf2_r.set_identity();
+                state.hpf_l.set_butterworth_hp(hpf_f, sample_rate);
+                state.hpf_r.set_butterworth_hp(hpf_f, sample_rate);
+                state.lpf_l.set_butterworth_lp(lpf_f, sample_rate);
+                state.lpf_r.set_butterworth_lp(lpf_f, sample_rate);
+                state.hpf2_l.set_identity();
+                state.hpf2_r.set_identity();
+                state.lpf2_l.set_identity();
+                state.lpf2_r.set_identity();
             }
         }
 
-        if bass_gain_val != self.cached_bass_gain
-            || bass_slope_val != self.cached_bass_slope
-            || eq_f1 != self.cached_eq_freq_1
+        if bass_gain_val != state.cached_bass_gain
+            || bass_slope_val != state.cached_bass_slope
+            || eq_f1 != state.cached_eq_freq_1
             || coef_dirty
         {
-            self.cached_bass_gain = bass_gain_val;
-            self.cached_bass_slope = bass_slope_val;
-            self.cached_eq_freq_1 = eq_f1;
+            state.cached_bass_gain = bass_gain_val;
+            state.cached_bass_slope = bass_slope_val;
+            state.cached_eq_freq_1 = eq_f1;
             let bass_slope = slope_val(bass_slope_val);
-            self.bass_l
+            state.bass_l
                 .set_low_shelf(eq_f1, bass_gain_val, bass_slope, sample_rate);
-            self.bass_r
+            state.bass_r
                 .set_low_shelf(eq_f1, bass_gain_val, bass_slope, sample_rate);
         }
 
-        if lo_mid_gain_val != self.cached_lo_mid_gain
-            || lo_mid_slope_val != self.cached_lo_mid_slope
-            || eq_f2 != self.cached_eq_freq_2
+        if lo_mid_gain_val != state.cached_lo_mid_gain
+            || lo_mid_slope_val != state.cached_lo_mid_slope
+            || eq_f2 != state.cached_eq_freq_2
             || coef_dirty
         {
-            self.cached_lo_mid_gain = lo_mid_gain_val;
-            self.cached_lo_mid_slope = lo_mid_slope_val;
-            self.cached_eq_freq_2 = eq_f2;
+            state.cached_lo_mid_gain = lo_mid_gain_val;
+            state.cached_lo_mid_slope = lo_mid_slope_val;
+            state.cached_eq_freq_2 = eq_f2;
             let lo_mid_q = q_val(lo_mid_slope_val);
-            self.lo_mid_l
+            state.lo_mid_l
                 .set_peaking_eq(eq_f2, lo_mid_gain_val, lo_mid_q, sample_rate);
-            self.lo_mid_r
+            state.lo_mid_r
                 .set_peaking_eq(eq_f2, lo_mid_gain_val, lo_mid_q, sample_rate);
         }
 
-        if mid_gain_val != self.cached_mid_gain
-            || mid_slope_val != self.cached_mid_slope
-            || eq_f3 != self.cached_eq_freq_3
+        if mid_gain_val != state.cached_mid_gain
+            || mid_slope_val != state.cached_mid_slope
+            || eq_f3 != state.cached_eq_freq_3
             || coef_dirty
         {
-            self.cached_mid_gain = mid_gain_val;
-            self.cached_mid_slope = mid_slope_val;
-            self.cached_eq_freq_3 = eq_f3;
+            state.cached_mid_gain = mid_gain_val;
+            state.cached_mid_slope = mid_slope_val;
+            state.cached_eq_freq_3 = eq_f3;
             let mid_q = q_val(mid_slope_val);
-            self.mid_l
+            state.mid_l
                 .set_peaking_eq(eq_f3, mid_gain_val, mid_q, sample_rate);
-            self.mid_r
+            state.mid_r
                 .set_peaking_eq(eq_f3, mid_gain_val, mid_q, sample_rate);
         }
 
-        if high_gain_val != self.cached_high_gain
-            || high_slope_val != self.cached_high_slope
-            || eq_f4 != self.cached_eq_freq_4
+        if high_gain_val != state.cached_high_gain
+            || high_slope_val != state.cached_high_slope
+            || eq_f4 != state.cached_eq_freq_4
             || coef_dirty
         {
-            self.cached_high_gain = high_gain_val;
-            self.cached_high_slope = high_slope_val;
-            self.cached_eq_freq_4 = eq_f4;
+            state.cached_high_gain = high_gain_val;
+            state.cached_high_slope = high_slope_val;
+            state.cached_eq_freq_4 = eq_f4;
             let high_q = q_val(high_slope_val);
-            self.high_l
+            state.high_l
                 .set_peaking_eq(eq_f4, high_gain_val, high_q, sample_rate);
-            self.high_r
+            state.high_r
                 .set_peaking_eq(eq_f4, high_gain_val, high_q, sample_rate);
         }
 
-        if excite_gain_val != self.cached_excite_gain
-            || excite_slope_val != self.cached_excite_slope
-            || eq_f5 != self.cached_eq_freq_5
+        if excite_gain_val != state.cached_excite_gain
+            || excite_slope_val != state.cached_excite_slope
+            || eq_f5 != state.cached_eq_freq_5
             || coef_dirty
         {
-            self.cached_excite_gain = excite_gain_val;
-            self.cached_excite_slope = excite_slope_val;
-            self.cached_eq_freq_5 = eq_f5;
+            state.cached_excite_gain = excite_gain_val;
+            state.cached_excite_slope = excite_slope_val;
+            state.cached_eq_freq_5 = eq_f5;
             let excite_slope = slope_val(excite_slope_val);
-            self.excite_l
+            state.excite_l
                 .set_high_shelf(eq_f5, excite_gain_val, excite_slope, sample_rate);
-            self.excite_r
+            state.excite_r
                 .set_high_shelf(eq_f5, excite_gain_val, excite_slope, sample_rate);
         }
 
-        if tilt_db != self.cached_tilt_gain || coef_dirty {
-            self.cached_tilt_gain = tilt_db;
-            self.tilt_l.set(1000.0, tilt_db, sample_rate);
-            self.tilt_r.set(1000.0, tilt_db, sample_rate);
+        if tilt_db != state.cached_tilt_gain || coef_dirty {
+            state.cached_tilt_gain = tilt_db;
+            state.tilt_l.set(1000.0, tilt_db, sample_rate);
+            state.tilt_r.set(1000.0, tilt_db, sample_rate);
         }
 
-        if excite_freq != self.cached_excite_freq || coef_dirty {
-            self.cached_excite_freq = excite_freq;
-            self.excite_hp_l
+        if excite_freq != state.cached_excite_freq || coef_dirty {
+            state.cached_excite_freq = excite_freq;
+            state.excite_hp_l
                 .set_butterworth_hp(excite_freq, sample_rate);
-            self.excite_hp_r
+            state.excite_hp_r
                 .set_butterworth_hp(excite_freq, sample_rate);
         }
 
         // Reset peak
-        if self.params.shared.reset_peak.swap(false, Ordering::Release) {
-            self.peak_hold_value = -90.0;
-            self.peak_hold_l_value = -90.0;
-            self.peak_hold_r_value = -90.0;
+        if params.shared.reset_peak.swap(false, Ordering::Release) {
+            state.peak_hold_value = -90.0;
+            state.peak_hold_l_value = -90.0;
+            state.peak_hold_r_value = -90.0;
         }
 
         // Smoothed parameter values (per-block reads via value(), truce pattern)
-        let warmth_drive_db = self.params.warmth_drive.value();
-        let warmth_mix_pct = self.params.warmth_mix.value();
-        let excite_amt = self.params.excite_amount.value();
-        let excite_blend = self.params.excite_blend.value();
-        let comp_t = self.params.comp_threshold.value();
-        let comp_m = self.params.comp_mix.value();
-        let comp_att = self.params.comp_attack.value();
-        let comp_rel = self.params.comp_release.value();
-        let ratio = self.params.comp_character.value();
+        let warmth_drive_db = params.warmth_drive.value();
+        let warmth_mix_pct = params.warmth_mix.value();
+        let excite_amt = params.excite_amount.value();
+        let excite_blend = params.excite_blend.value();
+        let comp_t = params.comp_threshold.value();
+        let comp_m = params.comp_mix.value();
+        let comp_att = params.comp_attack.value();
+        let comp_rel = params.comp_release.value();
+        let ratio = params.comp_character.value();
         let knee = (1.0 - (ratio - 1.5) / 2.5) * 6.0;
-        let comp_makeup_gain = db_to_gain(self.params.comp_makeup.value());
+        let comp_makeup_gain = db_to_gain(params.comp_makeup.value());
 
-        let inflate_effect = self.params.inflate_effect.value() / 100.0;
-        let inflate_curve = self.params.inflate_curve.value();
-        let inflate_band_split = self.params.inflate_band_split.value();
-        let inflate_clip = self.params.inflate_clip.value();
+        let inflate_effect = params.inflate_effect.value() / 100.0;
+        let inflate_curve = params.inflate_curve.value();
+        let inflate_band_split = params.inflate_band_split.value();
+        let inflate_clip = params.inflate_clip.value();
 
-        let width = self.params.stereo_width.value() / 100.0;
-        let pan = self.params.pan.value();
-        let out_gain = db_to_gain(self.params.output_gain.value());
+        let width = params.stereo_width.value() / 100.0;
+        let pan = params.pan.value();
+        let out_gain = db_to_gain(params.output_gain.value());
 
-        let mut snap_phase = self.params.shared.snap_phase.load(Ordering::Acquire);
+        let mut snap_phase = params.shared.snap_phase.load(Ordering::Acquire);
         let mono = match snap_phase {
             2 => true,
             3 => false,
-            _ => self.params.mono_active.value(),
+            _ => params.mono_active.value(),
         };
         let delta = match snap_phase {
             3 => true,
-            _ => self.params.delta_active.value(),
+            _ => params.delta_active.value(),
         };
 
         let mut max_out_peak = 0.0f32;
@@ -1002,17 +1112,16 @@ impl PluginLogic for Meridian {
 
         let mut gr_db = 0.0f32;
         let mut max_gr_db = 0.0f32;
-        let is_measuring = self
-            .params
+        let is_measuring = params
             .shared
             .auto_loud_measuring
             .load(Ordering::Acquire);
 
         // Feed input LUFS
         if is_measuring {
-            self.auto_loud_in.feed(buffer.input(0), buffer.input(1));
-            self.pre_sat_buf_l.clear();
-            self.pre_sat_buf_r.clear();
+            state.auto_loud_in.feed(buffer.input(0), buffer.input(1));
+            state.pre_sat_buf_l.clear();
+            state.pre_sat_buf_r.clear();
         }
 
         // Raw pointer setup for output
@@ -1039,37 +1148,37 @@ impl PluginLogic for Meridian {
             let in_r = buffer.input(1)[i];
 
             // HPF & LPF
-            let mut x_l = self.lpf2_l.process(
-                self.lpf_l
-                    .process(self.hpf2_l.process(self.hpf_l.process(in_l))),
+            let mut x_l = state.lpf2_l.process(
+                state.lpf_l
+                    .process(state.hpf2_l.process(state.hpf_l.process(in_l))),
             );
-            let mut x_r = self.lpf2_r.process(
-                self.lpf_r
-                    .process(self.hpf2_r.process(self.hpf_r.process(in_r))),
+            let mut x_r = state.lpf2_r.process(
+                state.lpf_r
+                    .process(state.hpf2_r.process(state.hpf_r.process(in_r))),
             );
 
             // Series EQ
-            x_l = self.excite_l.process(
-                self.high_l.process(
-                    self.mid_l
-                        .process(self.lo_mid_l.process(self.bass_l.process(x_l))),
+            x_l = state.excite_l.process(
+                state.high_l.process(
+                    state.mid_l
+                        .process(state.lo_mid_l.process(state.bass_l.process(x_l))),
                 ),
             );
-            x_r = self.excite_r.process(
-                self.high_r.process(
-                    self.mid_r
-                        .process(self.lo_mid_r.process(self.bass_r.process(x_r))),
+            x_r = state.excite_r.process(
+                state.high_r.process(
+                    state.mid_r
+                        .process(state.lo_mid_r.process(state.bass_r.process(x_r))),
                 ),
             );
 
             // Tilt
-            x_l = self.tilt_l.process(x_l);
-            x_r = self.tilt_r.process(x_r);
+            x_l = state.tilt_l.process(x_l);
+            x_r = state.tilt_r.process(x_r);
 
             // Exciter
             if excite_amt > 0.0 || excite_blend > 0.0 {
-                let high_l = self.excite_hp_l.process(x_l);
-                let high_r = self.excite_hp_r.process(x_r);
+                let high_l = state.excite_hp_l.process(x_l);
+                let high_r = state.excite_hp_r.process(x_r);
                 let drive = 1.0 + (excite_amt / 30.0) * 59.0;
                 let sat_high_l = soft_clip(high_l * drive);
                 let sat_high_r = soft_clip(high_r * drive);
@@ -1079,7 +1188,7 @@ impl PluginLogic for Meridian {
             }
 
             // Compressor
-            let (mut comp_l, mut comp_r) = self.compressor.process(
+            let (mut comp_l, mut comp_r) = state.compressor.process(
                 x_l, x_r, comp_t, comp_m, comp_att, comp_rel, ratio, knee, &mut gr_db,
             );
             max_gr_db = max_gr_db.max(gr_db);
@@ -1088,8 +1197,8 @@ impl PluginLogic for Meridian {
 
             // Pre-sat LUFS
             if is_measuring {
-                self.pre_sat_buf_l.push(comp_l);
-                self.pre_sat_buf_r.push(comp_r);
+                state.pre_sat_buf_l.push(comp_l);
+                state.pre_sat_buf_r.push(comp_r);
             }
 
             // Warmth
@@ -1113,10 +1222,10 @@ impl PluginLogic for Meridian {
                     inflate_shape(v, inflate_curve)
                 };
                 let (wet_l, wet_r) = if inflate_band_split {
-                    let (lo_l, hi_l) = self.xo_inflate_lo_l.process(comp_l);
-                    let (mid_l, top_l) = self.xo_inflate_hi_l.process(hi_l);
-                    let (lo_r, hi_r) = self.xo_inflate_lo_r.process(comp_r);
-                    let (mid_r, top_r) = self.xo_inflate_hi_r.process(hi_r);
+                    let (lo_l, hi_l) = state.xo_inflate_lo_l.process(comp_l);
+                    let (mid_l, top_l) = state.xo_inflate_hi_l.process(hi_l);
+                    let (lo_r, hi_r) = state.xo_inflate_lo_r.process(comp_r);
+                    let (mid_r, top_r) = state.xo_inflate_hi_r.process(hi_r);
                     (
                         shape_one(lo_l) + shape_one(mid_l) + shape_one(top_l),
                         shape_one(lo_r) + shape_one(mid_r) + shape_one(top_r),
@@ -1174,18 +1283,18 @@ impl PluginLogic for Meridian {
             processed_r = processed_r.clamp(-1.0, 1.0);
 
             // Crossover analysis for visualizer
-            let (low_group_l, high_group_l) = self.xo_bass_mid_l.process(processed_l);
-            let (band1_l, band2_l) = self.xo_low_bass_l.process(low_group_l);
-            let (mid_group_l, super_high_group_l) = self.xo_mid_high_l.process(high_group_l);
+            let (low_group_l, high_group_l) = state.xo_bass_mid_l.process(processed_l);
+            let (band1_l, band2_l) = state.xo_low_bass_l.process(low_group_l);
+            let (mid_group_l, super_high_group_l) = state.xo_mid_high_l.process(high_group_l);
             let (band3_l, band4_l) = (mid_group_l, super_high_group_l);
-            let (band4_l_split, band5_l) = self.xo_highmid_high_l.process(band4_l);
+            let (band4_l_split, band5_l) = state.xo_highmid_high_l.process(band4_l);
             let band4_l = band4_l_split;
 
-            let (low_group_r, high_group_r) = self.xo_bass_mid_r.process(processed_r);
-            let (band1_r, band2_r) = self.xo_low_bass_r.process(low_group_r);
-            let (mid_group_r, super_high_group_r) = self.xo_mid_high_r.process(high_group_r);
+            let (low_group_r, high_group_r) = state.xo_bass_mid_r.process(processed_r);
+            let (band1_r, band2_r) = state.xo_low_bass_r.process(low_group_r);
+            let (mid_group_r, super_high_group_r) = state.xo_mid_high_r.process(high_group_r);
             let (band3_r, band4_r) = (mid_group_r, super_high_group_r);
-            let (band4_r_split, band5_r) = self.xo_highmid_high_r.process(band4_r);
+            let (band4_r_split, band5_r) = state.xo_highmid_high_r.process(band4_r);
             let band4_r = band4_r_split;
 
             let bands_l = [band1_l, band2_l, band3_l, band4_l, band5_l];
@@ -1211,16 +1320,16 @@ impl PluginLogic for Meridian {
             let corr_lr = meter_l * meter_r;
             let corr_l2 = meter_l * meter_l;
             let corr_r2 = meter_r * meter_r;
-            self.corr_avg_lr = (1.0 - self.correlation_decay_coef) * self.corr_avg_lr
-                + self.correlation_decay_coef * corr_lr;
-            self.corr_avg_l2 = (1.0 - self.correlation_decay_coef) * self.corr_avg_l2
-                + self.correlation_decay_coef * corr_l2;
-            self.corr_avg_r2 = (1.0 - self.correlation_decay_coef) * self.corr_avg_r2
-                + self.correlation_decay_coef * corr_r2;
+            state.corr_avg_lr = (1.0 - state.correlation_decay_coef) * state.corr_avg_lr
+                + state.correlation_decay_coef * corr_lr;
+            state.corr_avg_l2 = (1.0 - state.correlation_decay_coef) * state.corr_avg_l2
+                + state.correlation_decay_coef * corr_l2;
+            state.corr_avg_r2 = (1.0 - state.correlation_decay_coef) * state.corr_avg_r2
+                + state.correlation_decay_coef * corr_r2;
         }
 
         // Gain reduction
-        self.params
+        params
             .shared
             .gain_reduction
             .store(max_gr_db, Ordering::Release);
@@ -1230,20 +1339,20 @@ impl PluginLogic for Meridian {
         let buf_coef = 1.0 - (-(num_samples as f32) / (0.1 * sample_rate)).exp();
         for (b, &band_power) in block_band_power.iter().enumerate() {
             let average_band_power = band_power * sample_weight;
-            self.smoothed_band_power[b] =
-                (1.0 - buf_coef) * self.smoothed_band_power[b] + buf_coef * average_band_power;
-            let band_db = gain_to_db(self.smoothed_band_power[b].sqrt());
-            self.params.shared.band_levels[b].store(band_db, Ordering::Release);
+            state.smoothed_band_power[b] =
+                (1.0 - buf_coef) * state.smoothed_band_power[b] + buf_coef * average_band_power;
+            let band_db = gain_to_db(state.smoothed_band_power[b].sqrt());
+            params.shared.band_levels[b].store(band_db, Ordering::Release);
         }
 
         // Correlation
-        let denom = (self.corr_avg_l2 * self.corr_avg_r2).sqrt();
+        let denom = (state.corr_avg_l2 * state.corr_avg_r2).sqrt();
         let corr = if denom > 1e-6 {
-            self.corr_avg_lr / denom
+            state.corr_avg_lr / denom
         } else {
             1.0
         };
-        self.params
+        params
             .shared
             .phase_correlation
             .store(corr, Ordering::Release);
@@ -1252,72 +1361,72 @@ impl PluginLogic for Meridian {
         let peak_db = gain_to_db(max_out_peak);
         let peak_l_db = gain_to_db(max_out_peak_l);
         let peak_r_db = gain_to_db(max_out_peak_r);
-        self.params
+        params
             .shared
             .output_peak
             .store(peak_db, Ordering::Release);
-        self.params
+        params
             .shared
             .output_peak_l
             .store(peak_l_db, Ordering::Release);
-        self.params
+        params
             .shared
             .output_peak_r
             .store(peak_r_db, Ordering::Release);
-        self.peak_hold_value = self.peak_hold_value.max(peak_db);
-        self.peak_hold_l_value = self.peak_hold_l_value.max(peak_l_db);
-        self.peak_hold_r_value = self.peak_hold_r_value.max(peak_r_db);
-        self.params
+        state.peak_hold_value = state.peak_hold_value.max(peak_db);
+        state.peak_hold_l_value = state.peak_hold_l_value.max(peak_l_db);
+        state.peak_hold_r_value = state.peak_hold_r_value.max(peak_r_db);
+        params
             .shared
             .peak_hold
-            .store(self.peak_hold_value, Ordering::Release);
-        self.params
+            .store(state.peak_hold_value, Ordering::Release);
+        params
             .shared
             .peak_hold_l
-            .store(self.peak_hold_l_value, Ordering::Release);
-        self.params
+            .store(state.peak_hold_l_value, Ordering::Release);
+        params
             .shared
             .peak_hold_r
-            .store(self.peak_hold_r_value, Ordering::Release);
+            .store(state.peak_hold_r_value, Ordering::Release);
 
         // Balance
-        let rms_l = self.corr_avg_l2.sqrt();
-        let rms_r = self.corr_avg_r2.sqrt();
+        let rms_l = state.corr_avg_l2.sqrt();
+        let rms_r = state.corr_avg_r2.sqrt();
         let sum_lr = rms_l + rms_r;
         let balance = if sum_lr > 1e-6 {
             (rms_l - rms_r) / sum_lr
         } else {
             0.0
         };
-        self.params.shared.balance.store(balance, Ordering::Release);
+        params.shared.balance.store(balance, Ordering::Release);
 
         // FFT Spectrum
         {
             let n = num_samples;
-            let fft_size = self.fft_input.len();
+            let fft_size = state.fft_input.len();
             for i in 0..n {
-                self.fft_input[self.fft_write_pos] = (out0[i] + out1[i]) * 0.5;
-                self.fft_write_pos += 1;
-                if self.fft_write_pos >= fft_size {
+                state.fft_input[state.fft_write_pos] = (out0[i] + out1[i]) * 0.5;
+                state.fft_write_pos += 1;
+                if state.fft_write_pos >= fft_size {
                     let half = fft_size / 2;
                     for j in 0..half {
-                        self.fft_input[j] = self.fft_input[j + half];
+                        state.fft_input[j] = state.fft_input[j + half];
                     }
-                    self.fft_write_pos = half;
+                    state.fft_write_pos = half;
 
                     for i in 0..fft_size {
-                        self.fft_windowed[i] = self.fft_input[i] * self.fft_hann[i];
+                        state.fft_windowed[i] = state.fft_input[i] * state.fft_hann[i];
                     }
-                    let fft = self.fft_planner.plan_fft_forward(fft_size);
-                    fft.process(&mut self.fft_windowed, &mut self.fft_output_cache)
+                    let fft = state.fft_planner.plan_fft_forward(fft_size);
+                    fft.process(&mut state.fft_windowed, &mut state.fft_output_cache)
                         .ok();
                 }
             }
 
             // Compute and write spectrum after each buffer
-            if let Ok(mut spectrum_frame) = self.params.shared.spectrum_bins.try_lock() {
+            if let Ok(mut spectrum_frame) = params.shared.spectrum_bins.try_lock() {
                 shared_analysis::compute_spectrum_bins(
-                    &self.fft_output_cache,
+                    &state.fft_output_cache,
                     &mut spectrum_frame,
                     fft_size,
                     sample_rate,
@@ -1325,8 +1434,8 @@ impl PluginLogic for Meridian {
             }
 
             // Update spectrum_avg (EMA) from spectrum_bins
-            if let Ok(mut avg) = self.params.shared.spectrum_avg.try_lock()
-                && let Ok(bins) = self.params.shared.spectrum_bins.try_lock()
+            if let Ok(mut avg) = params.shared.spectrum_avg.try_lock()
+                && let Ok(bins) = params.shared.spectrum_bins.try_lock()
             {
                 let n_bins = SPECTRUM_BINS;
                 // Energy-gating: only update EMA if signal above -80 dB
@@ -1335,7 +1444,7 @@ impl PluginLogic for Meridian {
                 let gate = energy_db > -80.0;
 
                 if !gate {
-                    for sample in self.fft_input.iter_mut() {
+                    for sample in state.fft_input.iter_mut() {
                         *sample = 0.0;
                     }
                 }
@@ -1364,37 +1473,37 @@ impl PluginLogic for Meridian {
                     }
                     _ => 0.0,
                 };
-                if self.snap_fft.push_sample(sample) {
-                    let frame = self.snap_fft.compute_fft(sample_rate);
+                if state.snap_fft.push_sample(sample) {
+                    let frame = state.snap_fft.compute_fft(sample_rate);
                     let threshold = if snap_phase == 2 || snap_phase == 3 {
                         30
                     } else {
                         60
                     };
-                    if self.snap_fft.accumulate_snap(&frame, snap_phase, threshold) {
+                    if state.snap_fft.accumulate_snap(&frame, snap_phase, threshold) {
                         let mode = match snap_phase {
                             1 => SnapMode::Stereo,
                             2 => SnapMode::Mono,
                             _ => SnapMode::Delta,
                         };
-                        let snapshot = self.snap_fft.read_snapshot(mode);
+                        let snapshot = state.snap_fft.read_snapshot(mode);
                         if let Ok(mut buf) = match mode {
-                            SnapMode::Stereo => self.params.shared.snap_stereo_snap.try_lock(),
-                            SnapMode::Mono => self.params.shared.snap_mono_snap.try_lock(),
-                            SnapMode::Delta => self.params.shared.snap_delta_snap.try_lock(),
+                            SnapMode::Stereo => params.shared.snap_stereo_snap.try_lock(),
+                            SnapMode::Mono => params.shared.snap_mono_snap.try_lock(),
+                            SnapMode::Delta => params.shared.snap_delta_snap.try_lock(),
                         } {
                             buf.copy_from_slice(&snapshot);
                         }
                         let next_phase = if snap_phase < 3 { snap_phase + 1 } else { 0 };
                         if next_phase == 0 {
-                            self.params
+                            params
                                 .shared
                                 .snap_active
                                 .store(false, Ordering::Release);
                         } else {
-                            self.snap_fft.reset_snapshots();
+                            state.snap_fft.reset_snapshots();
                         }
-                        self.params
+                        params
                             .shared
                             .snap_phase
                             .store(next_phase, Ordering::Release);
@@ -1405,39 +1514,39 @@ impl PluginLogic for Meridian {
         }
 
         // AUTO LOUD
-        if self.params.shared.auto_loud_trigger.load(Ordering::Acquire) {
-            self.params
+        if params.shared.auto_loud_trigger.load(Ordering::Acquire) {
+            params
                 .shared
                 .auto_loud_trigger
                 .store(false, Ordering::Release);
-            self.params
+            params
                 .shared
                 .auto_loud_measuring
                 .store(true, Ordering::Release);
-            self.auto_loud_in.reset();
-            self.auto_loud_pre_sat.reset();
-            self.auto_loud_out.reset();
+            state.auto_loud_in.reset();
+            state.auto_loud_pre_sat.reset();
+            state.auto_loud_out.reset();
         }
         if is_measuring {
-            if !self.pre_sat_buf_l.is_empty() {
-                self.auto_loud_pre_sat
-                    .feed(&self.pre_sat_buf_l, &self.pre_sat_buf_r);
+            if !state.pre_sat_buf_l.is_empty() {
+                state.auto_loud_pre_sat
+                    .feed(&state.pre_sat_buf_l, &state.pre_sat_buf_r);
             }
-            self.auto_loud_out.feed(out0, out1);
+            state.auto_loud_out.feed(out0, out1);
             let target_samples = (5.0 * sample_rate as f64) as u64;
-            if self.auto_loud_out.sample_count() >= target_samples {
-                let in_lufs = self.auto_loud_in.loudness_db();
-                let _pre_lufs = self.auto_loud_pre_sat.loudness_db();
-                let out_lufs = self.auto_loud_out.loudness_db();
-                let out_tp = self.auto_loud_out.true_peak_db();
+            if state.auto_loud_out.sample_count() >= target_samples {
+                let in_lufs = state.auto_loud_in.loudness_db();
+                let _pre_lufs = state.auto_loud_pre_sat.loudness_db();
+                let out_lufs = state.auto_loud_out.loudness_db();
+                let out_tp = state.auto_loud_out.true_peak_db();
                 let lufs_offset = in_lufs - out_lufs;
                 let peak_limit = DBTP_CEILING - out_tp;
                 let offset_clamped = lufs_offset.clamp(-24.0, peak_limit);
-                self.params
+                params
                     .shared
                     .auto_loud_gain_offset
                     .store(offset_clamped, Ordering::Release);
-                self.params
+                params
                     .shared
                     .auto_loud_measuring
                     .store(false, Ordering::Release);
@@ -1446,8 +1555,8 @@ impl PluginLogic for Meridian {
 
         // Goniometer scope buffer
         {
-            let start_pos = self.params.shared.scope_write_pos.load(Ordering::Acquire);
-            if let Ok(mut scope) = self.params.shared.scope_samples.try_lock() {
+            let start_pos = params.shared.scope_write_pos.load(Ordering::Acquire);
+            if let Ok(mut scope) = params.shared.scope_samples.try_lock() {
                 let buf_len = SCOPE_BUFFER_LEN;
                 let n = num_samples.min(buf_len);
                 let block_peak = (0..n)
@@ -1456,13 +1565,13 @@ impl PluginLogic for Meridian {
                     .max(1e-9);
                 let att = 1.0 - (-(n as f32) / (0.005 * sample_rate)).exp();
                 let rel = 1.0 - (-(n as f32) / (0.300 * sample_rate)).exp();
-                if block_peak > self.scope_vis_envelope {
-                    self.scope_vis_envelope += att * (block_peak - self.scope_vis_envelope);
+                if block_peak > state.scope_vis_envelope {
+                    state.scope_vis_envelope += att * (block_peak - state.scope_vis_envelope);
                 } else {
-                    self.scope_vis_envelope += rel * (block_peak - self.scope_vis_envelope);
+                    state.scope_vis_envelope += rel * (block_peak - state.scope_vis_envelope);
                 }
-                let vis_gain = if self.scope_vis_envelope > 1e-5 {
-                    (0.9 / self.scope_vis_envelope).min(20.0)
+                let vis_gain = if state.scope_vis_envelope > 1e-5 {
+                    (0.9 / state.scope_vis_envelope).min(20.0)
                 } else {
                     0.0
                 };
@@ -1470,7 +1579,7 @@ impl PluginLogic for Meridian {
                     let pos = (start_pos + i) % buf_len;
                     scope[pos] = [out0[i] * vis_gain, out1[i] * vis_gain];
                 }
-                self.params
+                params
                     .shared
                     .scope_write_pos
                     .store((start_pos + n) % buf_len, Ordering::Release);
@@ -1480,63 +1589,19 @@ impl PluginLogic for Meridian {
         ProcessStatus::Normal
     }
 
-    fn save_state(&self) -> Vec<u8> {
+    fn snapshot_into(_state: &MeridianDspState, _buf: &mut Vec<u8>) -> bool {
+        false
+    }
+    fn save_state(_state: &MeridianDspState) -> Vec<u8> {
         Vec::new()
     }
-    fn load_state(&mut self, data: &[u8]) -> Result<(), StateLoadError> {
-        if let Some(params) = state_migration::try_parse_niceplug_state(data) {
-            for (name, value) in params {
-                match name.as_str() {
-                    "hpf_freq" => self.params.hpf_freq.set_value(value),
-                    "lpf_freq" => self.params.lpf_freq.set_value(value),
-                    "cut_slope" => self.params.cut_slope.set_value(value as i64),
-                    "bass_gain" => self.params.bass_gain.set_value(value),
-                    "bass_slope" => self.params.bass_slope.set_value(value as i64),
-                    "lo_mid_gain" => self.params.lo_mid_gain.set_value(value),
-                    "lo_mid_slope" => self.params.lo_mid_slope.set_value(value as i64),
-                    "mid_gain" => self.params.mid_gain.set_value(value),
-                    "mid_slope" => self.params.mid_slope.set_value(value as i64),
-                    "high_gain" => self.params.high_gain.set_value(value),
-                    "high_slope" => self.params.high_slope.set_value(value as i64),
-                    "excite_gain" => self.params.excite_gain.set_value(value),
-                    "excite_slope" => self.params.excite_slope.set_value(value as i64),
-                    "eq_freq_1" => self.params.eq_freq_1.set_value(value),
-                    "eq_freq_2" => self.params.eq_freq_2.set_value(value),
-                    "eq_freq_3" => self.params.eq_freq_3.set_value(value),
-                    "eq_freq_4" => self.params.eq_freq_4.set_value(value),
-                    "eq_freq_5" => self.params.eq_freq_5.set_value(value),
-                    "tilt_gain" => self.params.tilt_gain.set_value(value),
-                    "warmth_drive" => self.params.warmth_drive.set_value(value),
-                    "warmth_mix" => self.params.warmth_mix.set_value(value),
-                    "excite_amount" => self.params.excite_amount.set_value(value),
-                    "excite_blend" => self.params.excite_blend.set_value(value),
-                    "excite_freq" => self.params.excite_freq.set_value(value),
-                    "comp_threshold" => self.params.comp_threshold.set_value(value),
-                    "comp_mix" => self.params.comp_mix.set_value(value),
-                    "comp_attack" => self.params.comp_attack.set_value(value),
-                    "comp_release" => self.params.comp_release.set_value(value),
-                    // Field was renamed comp_ratio -> comp_character after
-                    // the last nice-plug build; old sessions still say
-                    // "comp_ratio" on the wire.
-                    "comp_ratio" | "comp_character" => self.params.comp_character.set_value(value),
-                    "comp_makeup" => self.params.comp_makeup.set_value(value),
-                    "inflate_effect" => self.params.inflate_effect.set_value(value),
-                    "inflate_curve" => self.params.inflate_curve.set_value(value),
-                    "inflate_band_split" => self.params.inflate_band_split.set_value(value != 0.0),
-                    "inflate_clip" => self.params.inflate_clip.set_value(value != 0.0),
-                    "stereo_width" => self.params.stereo_width.set_value(value),
-                    "pan" => self.params.pan.set_value(value),
-                    "output_gain" => self.params.output_gain.set_value(value),
-                    "mono_active" => self.params.mono_active.set_value(value != 0.0),
-                    "delta_active" => self.params.delta_active.set_value(value != 0.0),
-                    "bypass_active" => self.params.bypass_active.set_value(value != 0.0),
-                    _ => {}
-                }
-            }
-        }
+    fn load_state(_state: &mut MeridianDspState, _data: &[u8]) -> Result<(), StateLoadError> {
+        // NicePlug legacy migration removed in 6.1.2: load_state no longer
+        // has mutable access to params. Use migrate_state(ForeignState) if
+        // legacy session recovery is needed later.
         Ok(())
     }
-    fn state_changed(&mut self) {}
+    fn state_changed(_state: &mut MeridianDspState, _params: &MeridianParams) {}
 
     fn editor(params: Arc<Self::Params>) -> Box<dyn Editor> {
         let shared = params.shared.clone();
@@ -1548,3 +1613,13 @@ impl PluginLogic for Meridian {
 }
 
 truce::plugin! { logic: Meridian, params: MeridianParams }
+
+#[cfg(test)]
+mod tests {
+    use crate::Plugin;
+
+    #[test]
+    fn state_round_trips() {
+        truce_test::assert_state_round_trip::<Plugin>();
+    }
+}

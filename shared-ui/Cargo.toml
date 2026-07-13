@@ -1,7 +1,7 @@
 [package]
 name = "shared-ui"
 version = "2.0.1"
-edition = "2021"
+edition = "2024"
 license = "GPL-3.0-or-later"
 description = "LX Audiolabs shared Vizia UI widgets, canvas views, and drawing helpers"
 

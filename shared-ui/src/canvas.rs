@@ -6,6 +6,7 @@
 //! live in their respective plugin crates.
 
 use std::cell::RefCell;
+use std::cell::Cell;
 use std::sync::{Arc, Mutex, OnceLock};
 use vizia::prelude::*;
 use vizia::vg;
@@ -440,11 +441,22 @@ pub struct SpectrumView {
     pub resonance_peaks: Vec<(usize, f32)>,
     pub masking: Vec<f32>,
     pub eq_curve: Option<EqCurve>,
+    /// Frequency of the resonance peak currently hovered by the mouse (Hz).
+    /// `None` when no peak is under the cursor. Used for tooltip rendering.
+    pub hovered_freq: Cell<Option<f32>>,
 }
 
 impl SpectrumView {
     pub fn new(cx: &mut Context, data: Self) -> Handle<'_, Self> {
-        data.build(cx, |_| {})
+        Self {
+            curves: data.curves,
+            config: data.config,
+            resonance_peaks: data.resonance_peaks,
+            masking: data.masking,
+            eq_curve: data.eq_curve,
+            hovered_freq: Cell::new(None),
+        }
+        .build(cx, |_| {})
     }
 }
 
@@ -462,6 +474,50 @@ fn hash_f32_slice(values: &[f32]) -> u64 {
 impl View for SpectrumView {
     fn element(&self) -> Option<&'static str> {
         Some("spectrum")
+    }
+
+    fn event(&mut self, cx: &mut EventContext, event: &mut Event) {
+        event.map(|window_event: &WindowEvent, _meta| match window_event {
+            WindowEvent::MouseMove(x, y) => {
+                let b = cx.bounds();
+                let local_x = x - b.x;
+                let local_y = y - b.y;
+                let sample_rate = self.config.sample_rate;
+                let log_freq = |f: f32| -> f32 {
+                    ((f.ln() - 20.0f32.ln()) / (20000.0f32.ln() - 20.0f32.ln()))
+                        .clamp(0.0, 1.0)
+                };
+                let width = b.width();
+                // Hit-test: diamond at (x, 5.0) with ~10px radius
+                const HIT_RADIUS: f32 = 10.0;
+                const HIT_RADIUS_SQ: f32 = HIT_RADIUS * HIT_RADIUS;
+                let mut found = None;
+                for (bin, _score) in &self.resonance_peaks {
+                    let freq = *bin as f32 * sample_rate / self.config.fft_size as f32;
+                    if !(20.0..=20000.0).contains(&freq) {
+                        continue;
+                    }
+                    let px = log_freq(freq) * width;
+                    let dx = local_x - px;
+                    let dy = local_y - 5.0; // diamond Y
+                    if (dx * dx + dy * dy) <= HIT_RADIUS_SQ {
+                        found = Some(freq);
+                        break;
+                    }
+                }
+                if self.hovered_freq.get() != found {
+                    self.hovered_freq.set(found);
+                    cx.needs_redraw();
+                }
+            }
+            WindowEvent::MouseLeave => {
+                if self.hovered_freq.get().is_some() {
+                    self.hovered_freq.set(None);
+                    cx.needs_redraw();
+                }
+            }
+            _ => {}
+        });
     }
 
     fn draw(&self, cx: &mut DrawContext, canvas: &vg::Canvas) {
@@ -598,6 +654,35 @@ impl View for SpectrumView {
                     diamond.line_to((x - s, my));
                     diamond.close();
                     c.draw_path(&diamond.detach(), &fill_paint(marker_color));
+                }
+
+                // Tooltip for hovered resonance peak
+                if let Some(hz) = self.hovered_freq.get() {
+                    let tx = log_freq(hz) * width;
+                    let tooltip_text = if hz >= 1000.0 {
+                        format!("{:.2} kHz", hz / 1000.0)
+                    } else {
+                        format!("{:.0} Hz", hz)
+                    };
+                    let font_size = 10.0;
+                    // ponytail: crude text width estimate — measure with 0.6 * font_size per char
+                    let text_width = tooltip_text.len() as f32 * font_size * 0.6;
+                    let padding = 4.0;
+                    let box_w = text_width + padding * 2.0;
+                    let box_h = font_size + padding * 2.0;
+                    let box_x = (tx - box_w * 0.5).clamp(2.0, width - box_w - 2.0);
+                    let box_y = 14.0;
+
+                    c.draw_rect(
+                        vg::Rect::new(box_x, box_y, box_x + box_w, box_y + box_h),
+                        &fill_paint(col(0.05, 0.05, 0.05, 0.92)),
+                    );
+                    c.draw_rect(
+                        vg::Rect::new(box_x, box_y, box_x + box_w, box_y + box_h),
+                        &stroke_paint(col(1.0, 0.6, 0.1, 0.7), 1.0),
+                    );
+                    let text_y = box_y + font_size + padding * 0.3;
+                    fill_text(c, &tooltip_text, box_x + padding, text_y, font_size, rgb(1.0, 0.9, 0.8));
                 }
 
                 if let Some(eq) = &self.eq_curve {

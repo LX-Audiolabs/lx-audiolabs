@@ -3,8 +3,9 @@
 //! Vizia is retained-mode + fine-grained reactive. `Binding::new(cx, signal, |cx| {...})`
 //! rebuilds its subtree whenever `signal` changes. So telemetry (input peak,
 //! preset refresh) lives in a `Signal<Telemetry>` updated by the `Ticker` View
-//! every ~33ms. EQ text inputs and KnobViews are built once outside any Binding,
-//! so typing and dragging survive across ticks.
+//! every ~33ms. EQ text inputs stay outside tick-driven `Binding`s so typing
+//! survives across ticks; knobs bind to `ParamLens::value_signal` so
+//! `truce-vizia`'s `refresh_params` idle poll repaints host automation.
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -1289,42 +1290,49 @@ fn build_band_column(
 fn build_blend_reset(
     cx: &mut Context,
     lens: &ParamLens<AetherParams>,
-    params: &Arc<AetherParams>,
+    _params: &Arc<AetherParams>,
     ui_gen: Signal<u32>,
     bypass_sig: Signal<f32>,
 ) {
     let l = lens.clone();
-    let p = params.clone();
     VStack::new(cx, move |cx| {
         Label::new(cx, "HARMAN BLEND")
             .font_size(9.0)
             .color(col(0.7, 0.7, 0.7, 1.0));
-        let blend_display = Signal::new(p.blend.raw_target() as f32);
-        let l1 = l.clone();
-        KnobView::new(
-            cx,
-            p.blend.raw_target() as f32 / 100.0,
-            1.0,
-            0.0,
-            100.0,
-            false,
-            move |_cx, g| {
-                if let Gesture::Change(v) = g {
-                    l1.automate(
-                        AetherParamsParamId::Blend,
-                        (v / 100.0).clamp(0.0, 1.0) as f64,
-                    );
-                    blend_display.set(v.clamp(0.0, 100.0));
-                }
-            },
-        )
-        .width(Pixels(40.0))
-        .height(Pixels(40.0));
-        Binding::new(cx, blend_display, move |cx| {
-            let v = blend_display.get();
-            Label::new(cx, format!("{v:.0}%"))
-                .font_size(9.0)
-                .color(col(0.8, 0.8, 0.8, 1.0));
+        Binding::new(cx, l.value_signal(AetherParamsParamId::Blend), {
+            let l = l.clone();
+            move |cx| {
+                let blend = l.get_plain(AetherParamsParamId::Blend);
+                let blend_display = Signal::new(blend);
+                let l1 = l.clone();
+                KnobView::new(
+                    cx,
+                    blend / 100.0,
+                    1.0,
+                    0.0,
+                    100.0,
+                    false,
+                    move |_cx, g| match g {
+                        Gesture::Start => l1.begin_edit(AetherParamsParamId::Blend),
+                        Gesture::Change(v) => {
+                            l1.set(
+                                AetherParamsParamId::Blend,
+                                (v / 100.0).clamp(0.0, 1.0) as f64,
+                            );
+                            blend_display.set(v.clamp(0.0, 100.0));
+                        }
+                        Gesture::End => l1.end_edit(AetherParamsParamId::Blend),
+                    },
+                )
+                .width(Pixels(40.0))
+                .height(Pixels(40.0));
+                Binding::new(cx, blend_display, move |cx| {
+                    let v = blend_display.get();
+                    Label::new(cx, format!("{v:.0}%"))
+                        .font_size(9.0)
+                        .color(col(0.8, 0.8, 0.8, 1.0));
+                });
+            }
         });
         Element::new(cx).height(Pixels(60.0));
 
@@ -1354,13 +1362,10 @@ fn build_blend_reset(
     .alignment(Alignment::Center);
 }
 
-fn build_crossfeed(cx: &mut Context, lens: &ParamLens<AetherParams>, params: &Arc<AetherParams>) {
+fn build_crossfeed(cx: &mut Context, lens: &ParamLens<AetherParams>, _params: &Arc<AetherParams>) {
     let l1 = lens.clone();
-    let p1 = params.clone();
     let l2 = lens.clone();
-    let p2 = params.clone();
     let l3 = lens.clone();
-    let p3 = params.clone();
     VStack::new(cx, move |cx| {
         Label::new(cx, "CROSSFEED")
             .font_size(10.0)
@@ -1370,32 +1375,40 @@ fn build_crossfeed(cx: &mut Context, lens: &ParamLens<AetherParams>, params: &Ar
                 Label::new(cx, "ANGLE")
                     .font_size(10.0)
                     .color(col(0.7, 0.7, 0.7, 1.0));
-                let angle_display = Signal::new(p1.cf_angle.raw_target() as f32);
-                let la = l1.clone();
-                KnobView::new(
-                    cx,
-                    (p1.cf_angle.raw_target() as f32 - 30.0) / 45.0,
-                    (60.0 - 30.0) / 45.0,
-                    30.0,
-                    75.0,
-                    false,
-                    move |_cx, g| {
-                        if let Gesture::Change(v) = g {
-                            la.automate(
-                                AetherParamsParamId::CfAngle,
-                                ((v - 30.0) / 45.0).clamp(0.0, 1.0) as f64,
-                            );
-                            angle_display.set(v.clamp(30.0, 75.0));
-                        }
-                    },
-                )
-                .width(Pixels(40.0))
-                .height(Pixels(40.0));
-                Binding::new(cx, angle_display, move |cx| {
-                    let v = angle_display.get();
-                    Label::new(cx, format!("{v:.0}°"))
-                        .font_size(9.0)
-                        .color(col(0.8, 0.8, 0.8, 1.0));
+                Binding::new(cx, l1.value_signal(AetherParamsParamId::CfAngle), {
+                    let l1 = l1.clone();
+                    move |cx| {
+                        let angle = l1.get_plain(AetherParamsParamId::CfAngle);
+                        let angle_display = Signal::new(angle);
+                        let la = l1.clone();
+                        KnobView::new(
+                            cx,
+                            (angle - 30.0) / 45.0,
+                            (60.0 - 30.0) / 45.0,
+                            30.0,
+                            75.0,
+                            false,
+                            move |_cx, g| match g {
+                                Gesture::Start => la.begin_edit(AetherParamsParamId::CfAngle),
+                                Gesture::Change(v) => {
+                                    la.set(
+                                        AetherParamsParamId::CfAngle,
+                                        ((v - 30.0) / 45.0).clamp(0.0, 1.0) as f64,
+                                    );
+                                    angle_display.set(v.clamp(30.0, 75.0));
+                                }
+                                Gesture::End => la.end_edit(AetherParamsParamId::CfAngle),
+                            },
+                        )
+                        .width(Pixels(40.0))
+                        .height(Pixels(40.0));
+                        Binding::new(cx, angle_display, move |cx| {
+                            let v = angle_display.get();
+                            Label::new(cx, format!("{v:.0}°"))
+                                .font_size(9.0)
+                                .color(col(0.8, 0.8, 0.8, 1.0));
+                        });
+                    }
                 });
             })
             .width(Auto)
@@ -1406,32 +1419,40 @@ fn build_crossfeed(cx: &mut Context, lens: &ParamLens<AetherParams>, params: &Ar
                 Label::new(cx, "AMOUNT")
                     .font_size(10.0)
                     .color(col(0.7, 0.7, 0.7, 1.0));
-                let amount_display = Signal::new(p2.cf_amount.raw_target() as f32);
-                let lb = l2.clone();
-                KnobView::new(
-                    cx,
-                    p2.cf_amount.raw_target() as f32 / 100.0,
-                    0.0,
-                    0.0,
-                    100.0,
-                    false,
-                    move |_cx, g| {
-                        if let Gesture::Change(v) = g {
-                            lb.automate(
-                                AetherParamsParamId::CfAmount,
-                                (v / 100.0).clamp(0.0, 1.0) as f64,
-                            );
-                            amount_display.set(v.clamp(0.0, 100.0));
-                        }
-                    },
-                )
-                .width(Pixels(40.0))
-                .height(Pixels(40.0));
-                Binding::new(cx, amount_display, move |cx| {
-                    let v = amount_display.get();
-                    Label::new(cx, format!("{v:.0}%"))
-                        .font_size(9.0)
-                        .color(col(0.8, 0.8, 0.8, 1.0));
+                Binding::new(cx, l2.value_signal(AetherParamsParamId::CfAmount), {
+                    let l2 = l2.clone();
+                    move |cx| {
+                        let amount = l2.get_plain(AetherParamsParamId::CfAmount);
+                        let amount_display = Signal::new(amount);
+                        let lb = l2.clone();
+                        KnobView::new(
+                            cx,
+                            amount / 100.0,
+                            0.0,
+                            0.0,
+                            100.0,
+                            false,
+                            move |_cx, g| match g {
+                                Gesture::Start => lb.begin_edit(AetherParamsParamId::CfAmount),
+                                Gesture::Change(v) => {
+                                    lb.set(
+                                        AetherParamsParamId::CfAmount,
+                                        (v / 100.0).clamp(0.0, 1.0) as f64,
+                                    );
+                                    amount_display.set(v.clamp(0.0, 100.0));
+                                }
+                                Gesture::End => lb.end_edit(AetherParamsParamId::CfAmount),
+                            },
+                        )
+                        .width(Pixels(40.0))
+                        .height(Pixels(40.0));
+                        Binding::new(cx, amount_display, move |cx| {
+                            let v = amount_display.get();
+                            Label::new(cx, format!("{v:.0}%"))
+                                .font_size(9.0)
+                                .color(col(0.8, 0.8, 0.8, 1.0));
+                        });
+                    }
                 });
             })
             .width(Auto)
@@ -1444,23 +1465,26 @@ fn build_crossfeed(cx: &mut Context, lens: &ParamLens<AetherParams>, params: &Ar
 
         Element::new(cx).height(Pixels(10.0));
 
-        let realism_signal = Signal::new(p3.cf_realism.value_i32());
-        Button::new(cx, move |cx| {
-            Label::new(
-                cx,
-                Memo::new(move |_| crate::realism_label(realism_signal.get())),
-            )
-            .font_size(9.0)
-        })
-        .on_press(move |_cx| {
-            let n = (realism_signal.get() + 1) % 3;
-            l3.automate(AetherParamsParamId::CfRealism, n as f64 / 2.0);
-            realism_signal.set(n);
-        })
-        .width(Pixels(110.0))
-        .height(Pixels(shared_ui::BUTTON_HEIGHT))
-        .class("lx-btn")
-        .toggle_class("active", Memo::new(move |_| realism_signal.get() != 0));
+        let realism_signal = l3.value_signal(AetherParamsParamId::CfRealism);
+        Binding::new(cx, realism_signal, {
+            let l3 = l3.clone();
+            move |cx| {
+                let n = (l3.get_plain(AetherParamsParamId::CfRealism) * 2.0).round() as i32;
+                let l3_press = l3.clone();
+                Button::new(cx, move |cx| {
+                    Label::new(cx, crate::realism_label(n)).font_size(9.0)
+                })
+                .on_press(move |_cx| {
+                    let next = (n + 1) % 3;
+                    l3_press.automate(AetherParamsParamId::CfRealism, next as f64 / 2.0);
+                    realism_signal.set(next as f32 / 2.0);
+                })
+                .width(Pixels(110.0))
+                .height(Pixels(shared_ui::BUTTON_HEIGHT))
+                .class("lx-btn")
+                .toggle_class("active", n != 0);
+            }
+        });
     })
     .width(Pixels(131.0))
     .height(Auto)
@@ -1472,10 +1496,9 @@ fn build_io_section(
     cx: &mut Context,
     telemetry: Signal<Telemetry>,
     lens: &ParamLens<AetherParams>,
-    params: &Arc<AetherParams>,
+    _params: &Arc<AetherParams>,
 ) {
     let l = lens.clone();
-    let p = params.clone();
     VStack::new(cx, move |cx| {
         Binding::new(cx, telemetry, move |cx| {
             let t = telemetry.get();
@@ -1508,32 +1531,40 @@ fn build_io_section(
         Label::new(cx, "GAIN")
             .font_size(14.0)
             .color(col(0.7, 0.7, 0.7, 1.0));
-        let gain_display = Signal::new(p.gain.raw_target() as f32);
-        let l1 = l.clone();
-        KnobView::new(
-            cx,
-            (p.gain.raw_target() as f32 + 12.0) / 24.0,
-            0.5,
-            -12.0,
-            12.0,
-            true,
-            move |_cx, g| {
-                if let Gesture::Change(v) = g {
-                    l1.automate(
-                        AetherParamsParamId::Gain,
-                        ((v + 12.0) / 24.0).clamp(0.0, 1.0) as f64,
-                    );
-                    gain_display.set(v.clamp(-12.0, 12.0));
-                }
-            },
-        )
-        .width(Pixels(40.0))
-        .height(Pixels(40.0));
-        Binding::new(cx, gain_display, move |cx| {
-            let v = gain_display.get();
-            Label::new(cx, format!("{v:.1} dB"))
-                .font_size(9.0)
-                .color(col(0.8, 0.8, 0.8, 1.0));
+        Binding::new(cx, l.value_signal(AetherParamsParamId::Gain), {
+            let l = l.clone();
+            move |cx| {
+                let gain = l.get_plain(AetherParamsParamId::Gain);
+                let gain_display = Signal::new(gain);
+                let l1 = l.clone();
+                KnobView::new(
+                    cx,
+                    (gain + 12.0) / 24.0,
+                    0.5,
+                    -12.0,
+                    12.0,
+                    true,
+                    move |_cx, g| match g {
+                        Gesture::Start => l1.begin_edit(AetherParamsParamId::Gain),
+                        Gesture::Change(v) => {
+                            l1.set(
+                                AetherParamsParamId::Gain,
+                                ((v + 12.0) / 24.0).clamp(0.0, 1.0) as f64,
+                            );
+                            gain_display.set(v.clamp(-12.0, 12.0));
+                        }
+                        Gesture::End => l1.end_edit(AetherParamsParamId::Gain),
+                    },
+                )
+                .width(Pixels(40.0))
+                .height(Pixels(40.0));
+                Binding::new(cx, gain_display, move |cx| {
+                    let v = gain_display.get();
+                    Label::new(cx, format!("{v:.1} dB"))
+                        .font_size(9.0)
+                        .color(col(0.8, 0.8, 0.8, 1.0));
+                });
+            }
         });
     })
     .width(Pixels(106.0))
