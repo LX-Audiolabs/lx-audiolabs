@@ -80,7 +80,7 @@ cargo truce validate --clap -p equilibrium
 
 ## Tech Stack
 
-- **Language:** Rust (Edition 2021)
+- **Language:** Rust (Edition 2024)
 - **Framework:** [LX-Audiolabs/truce](https://github.com/LX-Audiolabs/truce) (`upgrade/v6.1.4-local-patches`) + truce-vizia (Skia/OpenGL)
 - **Formats:** CLAP, VST3, LV2
 - **Validator:** [LX-Audiolabs/clap-validator](https://github.com/LX-Audiolabs/clap-validator)
