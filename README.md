@@ -37,14 +37,18 @@ This workspace pins [truce](https://github.com/LX-Audiolabs/truce) on branch `up
 # Install cargo-truce from the same pinned fork/branch
 cargo install --git https://github.com/LX-Audiolabs/truce --branch upgrade/v6.1.4-local-patches cargo-truce
 
-# Build all plugins
+# Build all plugins (CLAP)
 cargo truce build --clap
 
 # Build a specific plugin
 cargo truce build --clap -p equilibrium
+
+# VST3 — no extra dependencies, truce bundles the SDK
+cargo truce build --vst3
+cargo truce build --vst3 -p equilibrium
 ```
 
-Output: `target/bundles/<PluginName>.clap`
+Output: `target/bundles/<PluginName>.clap` or `target/bundles/<PluginName>.vst3`
 
 ### CLAP validation
 
@@ -71,7 +75,7 @@ cargo truce validate --clap -p equilibrium
 
 - **Language:** Rust (Edition 2021)
 - **Framework:** [LX-Audiolabs/truce](https://github.com/LX-Audiolabs/truce) (`upgrade/v6.1.4-local-patches`) + truce-vizia (Skia/OpenGL)
-- **Format:** CLAP
+- **Formats:** CLAP, VST3
 - **Validator:** [LX-Audiolabs/clap-validator](https://github.com/LX-Audiolabs/clap-validator)
 
 ## License
