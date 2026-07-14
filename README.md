@@ -9,6 +9,9 @@ Open-source audio effect plugins in [CLAP](https://cleveraudio.org/) format, bui
 | **Equilibrium** | 5-Band Spectral Balancer | Master Bus — precision band correction | Stable |
 | **Meridian** | Group Track Sculptor | Tracks & Buses — EQ, compressor, saturation | Stable |
 | **Aether** | Headphone Correction | Monitoring FX — Harman target curve + crossover | Stable |
+| **Aurum** | All-In-One Mastering | Mastering desk — SHAPE, COLOR, LIMIT | Pre-production |
+| **Lucent** | FFT Analyzer | Spectrum analysis with SHM relay | Pre-production |
+| **Lucent Relay** | SHM Relay | Companion for Lucent — shared memory IPC | Pre-production |
 
 ## Download
 
@@ -46,9 +49,13 @@ cargo truce build --clap -p equilibrium
 # VST3 — no extra dependencies, truce bundles the SDK
 cargo truce build --vst3
 cargo truce build --vst3 -p equilibrium
+
+# LV2 — no extra dependencies, truce bundles the SDK
+cargo truce build --lv2
+cargo truce build --lv2 -p equilibrium
 ```
 
-Output: `target/bundles/<PluginName>.clap` or `target/bundles/<PluginName>.vst3`
+Output: `target/bundles/<PluginName>.clap`, `.vst3`, or `.lv2`
 
 ### CLAP validation
 
@@ -75,7 +82,7 @@ cargo truce validate --clap -p equilibrium
 
 - **Language:** Rust (Edition 2021)
 - **Framework:** [LX-Audiolabs/truce](https://github.com/LX-Audiolabs/truce) (`upgrade/v6.1.4-local-patches`) + truce-vizia (Skia/OpenGL)
-- **Formats:** CLAP, VST3
+- **Formats:** CLAP, VST3, LV2
 - **Validator:** [LX-Audiolabs/clap-validator](https://github.com/LX-Audiolabs/clap-validator)
 
 ## License

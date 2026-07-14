@@ -20,6 +20,7 @@ truce-core      = { git = "https://github.com/LX-Audiolabs/truce", branch = "upg
 truce-params    = { git = "https://github.com/LX-Audiolabs/truce", branch = "upgrade/v6.1.4-local-patches" }
 truce-clap      = { git = "https://github.com/LX-Audiolabs/truce", branch = "upgrade/v6.1.4-local-patches" }
 truce-vst3      = { git = "https://github.com/LX-Audiolabs/truce", branch = "upgrade/v6.1.4-local-patches" }
+truce-lv2       = { git = "https://github.com/LX-Audiolabs/truce", branch = "upgrade/v6.1.4-local-patches" }
 truce-loader    = { git = "https://github.com/LX-Audiolabs/truce", branch = "upgrade/v6.1.4-local-patches" }
 truce-test      = { git = "https://github.com/LX-Audiolabs/truce", branch = "upgrade/v6.1.4-local-patches" }
 truce-vizia     = { git = "https://github.com/LX-Audiolabs/truce", branch = "upgrade/v6.1.4-local-patches" }
