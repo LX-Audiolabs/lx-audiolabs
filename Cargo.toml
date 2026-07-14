@@ -15,15 +15,15 @@ members = [
 resolver = "3"
 
 [workspace.dependencies]
-truce           = { git = "https://github.com/LX-Audiolabs/truce", branch = "upgrade/v6.1.4-local-patches", default-features = false }
-truce-core      = { git = "https://github.com/LX-Audiolabs/truce", branch = "upgrade/v6.1.4-local-patches" }
-truce-params    = { git = "https://github.com/LX-Audiolabs/truce", branch = "upgrade/v6.1.4-local-patches" }
-truce-clap      = { git = "https://github.com/LX-Audiolabs/truce", branch = "upgrade/v6.1.4-local-patches" }
-truce-vst3      = { git = "https://github.com/LX-Audiolabs/truce", branch = "upgrade/v6.1.4-local-patches" }
-truce-lv2       = { git = "https://github.com/LX-Audiolabs/truce", branch = "upgrade/v6.1.4-local-patches" }
-truce-loader    = { git = "https://github.com/LX-Audiolabs/truce", branch = "upgrade/v6.1.4-local-patches" }
-truce-test      = { git = "https://github.com/LX-Audiolabs/truce", branch = "upgrade/v6.1.4-local-patches" }
-truce-vizia     = { git = "https://github.com/LX-Audiolabs/truce", branch = "upgrade/v6.1.4-local-patches" }
+truce           = { git = "https://github.com/LX-Audiolabs/truce", branch = "main", default-features = false }
+truce-core      = { git = "https://github.com/LX-Audiolabs/truce", branch = "main" }
+truce-params    = { git = "https://github.com/LX-Audiolabs/truce", branch = "main" }
+truce-clap      = { git = "https://github.com/LX-Audiolabs/truce", branch = "main" }
+truce-vst3      = { git = "https://github.com/LX-Audiolabs/truce", branch = "main" }
+truce-lv2       = { git = "https://github.com/LX-Audiolabs/truce", branch = "main" }
+truce-loader    = { git = "https://github.com/LX-Audiolabs/truce", branch = "main" }
+truce-test      = { git = "https://github.com/LX-Audiolabs/truce", branch = "main" }
+truce-vizia     = { git = "https://github.com/LX-Audiolabs/truce", branch = "main" }
 clap-sys        = "0.5"
 
 [profile.release]
