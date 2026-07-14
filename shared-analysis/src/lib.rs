@@ -9,8 +9,8 @@ pub use snap_fft::{SnapFFT, SnapMode};
 // Re-export shm-hub transparently so existing callers keep working
 pub use shm_hub as shm;
 pub use shm_hub::{
-    display_name, now_ms, relay_hub, RelayHub, EQ_BANDS, MAX_CONSUMERS, MAX_NAME_LEN, MAX_SLOTS,
-    SPECTRUM_BINS, STALE_MS,
+    display_name, now_ms, relay_hub, resolve_relay_target, RelayHub, EQ_BANDS, MAX_CONSUMERS,
+    MAX_NAME_LEN, MAX_SLOTS, SPECTRUM_BINS, STALE_MS,
 };
 
 // Re-export vault/preset/config types so existing callers don't need to change imports
@@ -21,6 +21,30 @@ pub use shared_vault::{
 };
 
 pub const SCOPE_BUFFER_LEN: usize = 4096;
+
+/// Raw dB above which display tilt is applied in [`compute_spectrum_bins`].
+/// Sub-threshold bins stay at the noise floor so silence is not boosted.
+pub const SPECTRUM_TILT_RAW_GATE_DB: f32 = -80.0;
+
+/// 4.5 dB/octave display tilt at `freq` (0 below 20 Hz).
+#[inline]
+pub fn spectrum_tilt_db(freq: f32) -> f32 {
+    if freq > 20.0 {
+        4.5 * (freq / 1000.0).log2()
+    } else {
+        0.0
+    }
+}
+
+/// Physical (pre-tilt) dB underlying a display bin — undoes tilt when applied.
+#[inline]
+pub fn spectrum_physical_db(displayed_db: f32, freq: f32) -> f32 {
+    if displayed_db > SPECTRUM_TILT_RAW_GATE_DB {
+        (displayed_db - spectrum_tilt_db(freq)).max(-90.0)
+    } else {
+        displayed_db
+    }
+}
 
 /// Compute display-ready spectrum bins from raw FFT output.
 /// Applies 4.5 dB/octave tilt compensation so pink noise appears flat.
@@ -42,8 +66,8 @@ pub fn compute_spectrum_bins(
             -90.0
         };
         let freq = k as f32 * sample_rate / fft_size as f32;
-        let tilt = if freq > 20.0 {
-            4.5 * (freq / 1000.0).log2()
+        let tilt = if db > SPECTRUM_TILT_RAW_GATE_DB {
+            spectrum_tilt_db(freq)
         } else {
             0.0
         };
@@ -89,6 +113,32 @@ pub struct SharedState {
     /// Input peak (max |L|,|R| per block, dBFS) — for Aether's input reader. Fast
     /// value here; the editor latches the peak-hold (like Meridian's GR display).
     pub input_peak: Arc<AtomicF32>,
+    /// Pre-clipper block peak (dBFS) — Aurum clipper waveform display.
+    pub clip_pre_peak: Arc<AtomicF32>,
+    /// Amount shaved above ceiling this block (dB) — Aurum clipper display fill.
+    pub clip_shave_db: Arc<AtomicF32>,
+    /// FFT EMA after clipper, Mid channel — Aurum Shape tab.
+    pub spectrum_mid_avg: Arc<Mutex<Vec<f32>>>,
+    /// FFT EMA after clipper, Side channel — Aurum Shape tab.
+    pub spectrum_side_avg: Arc<Mutex<Vec<f32>>>,
+    /// 2-band comp Lo-band GR (dB, block max) — Aurum Color tab.
+    pub comp_gr_lo: Arc<AtomicF32>,
+    /// 2-band comp Hi-band GR (dB, block max) — Aurum Color tab.
+    pub comp_gr_hi: Arc<AtomicF32>,
+    /// FFT EMA after sweetening, (L+R)*0.5 — Aurum Color tab.
+    pub spectrum_sweet_avg: Arc<Mutex<Vec<f32>>>,
+    /// MB limiter Mid-Lo GR (dB, positive) — Aurum Limit tab.
+    pub mb_gr_mid_lo: Arc<AtomicF32>,
+    /// MB limiter Mid-Hi GR (dB, positive) — Aurum Limit tab.
+    pub mb_gr_mid_hi: Arc<AtomicF32>,
+    /// MB limiter Side GR (dB, positive) — Aurum Limit tab.
+    pub mb_gr_side: Arc<AtomicF32>,
+    /// Integrated LUFS post-TP — Aurum Limit delivery meter.
+    pub lufs_integrated: Arc<AtomicF32>,
+    /// True-peak hold (dBTP) post-TP — Aurum Limit delivery meter.
+    pub true_peak_dbtp: Arc<AtomicF32>,
+    /// Loudness range LRA (LU) post-TP — Aurum Limit delivery meter. −1 = not ready.
+    pub lra_lu: Arc<AtomicF32>,
     pub output_peak_l: Arc<AtomicF32>,
     pub output_peak_r: Arc<AtomicF32>,
     pub peak_hold_l: Arc<AtomicF32>,
@@ -137,6 +187,9 @@ pub struct SharedState {
     /// longer holds the slot, so the GUI-tick heartbeat refresh doesn't keep
     /// a dead claim alive and fighting the new owner.
     pub shm_generation: Arc<AtomicU32>,
+    /// Per-relay enable mask keyed by SHM publisher slot (bit `i` = slot `i` active).
+    /// `0` means "no UI preference — treat all relays as active" (editor closed).
+    pub relay_active_mask: Arc<AtomicU32>,
 }
 
 impl Default for SharedState {
@@ -196,6 +249,19 @@ impl Default for SharedState {
             output_peak: Arc::new(AtomicF32::new(-90.0)),
             peak_hold: Arc::new(AtomicF32::new(-90.0)),
             input_peak: Arc::new(AtomicF32::new(-90.0)),
+            clip_pre_peak: Arc::new(AtomicF32::new(-90.0)),
+            clip_shave_db: Arc::new(AtomicF32::new(0.0)),
+            spectrum_mid_avg: Arc::new(Mutex::new(vec![-90.0; SPECTRUM_BINS])),
+            spectrum_side_avg: Arc::new(Mutex::new(vec![-90.0; SPECTRUM_BINS])),
+            comp_gr_lo: Arc::new(AtomicF32::new(0.0)),
+            comp_gr_hi: Arc::new(AtomicF32::new(0.0)),
+            spectrum_sweet_avg: Arc::new(Mutex::new(vec![-90.0; SPECTRUM_BINS])),
+            mb_gr_mid_lo: Arc::new(AtomicF32::new(0.0)),
+            mb_gr_mid_hi: Arc::new(AtomicF32::new(0.0)),
+            mb_gr_side: Arc::new(AtomicF32::new(0.0)),
+            lufs_integrated: Arc::new(AtomicF32::new(-70.0)),
+            true_peak_dbtp: Arc::new(AtomicF32::new(-100.0)),
+            lra_lu: Arc::new(AtomicF32::new(-1.0)),
             output_peak_l: Arc::new(AtomicF32::new(-90.0)),
             output_peak_r: Arc::new(AtomicF32::new(-90.0)),
             peak_hold_l: Arc::new(AtomicF32::new(-90.0)),
@@ -221,6 +287,39 @@ impl Default for SharedState {
             masking_map: Arc::new(Mutex::new(vec![-90.0; SPECTRUM_BINS])),
             shm_slot: Arc::new(AtomicI32::new(-1)),
             shm_generation: Arc::new(AtomicU32::new(0)),
+            relay_active_mask: Arc::new(AtomicU32::new(0)),
         }
+    }
+}
+
+/// Filter relay feeds by the editor's per-slot active mask.
+/// When `mask == 0` (editor not driving toggles), all feeds pass through.
+#[inline]
+pub fn filter_relays_by_mask(
+    mask: u32,
+    feeds: Vec<(u8, String, Vec<f32>)>,
+) -> Vec<(String, Vec<f32>)> {
+    feeds
+        .into_iter()
+        .filter(|(slot, _, _)| mask == 0 || mask & (1u32 << slot) != 0)
+        .map(|(_, name, spec)| (name, spec))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filter_relays_by_mask_respects_bits() {
+        let feeds = vec![
+            (0, "A".into(), vec![]),
+            (2, "B".into(), vec![]),
+        ];
+        let all = filter_relays_by_mask(0, feeds.clone());
+        assert_eq!(all.len(), 2);
+        let one = filter_relays_by_mask(1 << 2, feeds);
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].0, "B");
     }
 }

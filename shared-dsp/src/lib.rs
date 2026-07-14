@@ -776,6 +776,90 @@ impl AutoLoudMeter {
 }
 
 // =============================================================================
+// Mastering Meter — integrated LUFS + true-peak readout (no auto-gain)
+// =============================================================================
+
+/// Passive EBU R128 meter for mastering delivery checks.
+/// Integrated (gated) loudness, LRA, and ITU true-peak hold since last [`reset`].
+pub struct MasteringMeter {
+    analyzer: EbuR128,
+    fed_samples: u64,
+    true_peak_hold: f32,
+}
+
+impl MasteringMeter {
+    pub fn new(sample_rate: f32) -> Self {
+        let mut analyzer = EbuR128::new(
+            2,
+            sample_rate as u32,
+            Mode::I | Mode::LRA | Mode::TRUE_PEAK,
+        )
+        .expect("ebur128: failed to create MasteringMeter");
+        let _ = analyzer.set_max_window(120_000);
+        Self {
+            analyzer,
+            fed_samples: 0,
+            true_peak_hold: -100.0,
+        }
+    }
+
+    #[inline]
+    pub fn feed(&mut self, left: &[f32], right: &[f32]) {
+        let n = left.len().min(right.len());
+        if n == 0 {
+            return;
+        }
+        let _ = self.analyzer.add_frames_planar_f32(&[left, right]);
+        self.fed_samples += n as u64;
+        let tp = self.true_peak_instant_db();
+        if tp > self.true_peak_hold {
+            self.true_peak_hold = tp;
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.analyzer.reset();
+        self.fed_samples = 0;
+        self.true_peak_hold = -100.0;
+    }
+
+    /// Gated integrated loudness (LUFS) — export reference.
+    pub fn loudness_integrated_db(&self) -> f32 {
+        self.analyzer.loudness_global().unwrap_or(-70.0) as f32
+    }
+
+    /// True-peak hold (dBTP) since last reset.
+    pub fn true_peak_db(&self) -> f32 {
+        self.true_peak_hold
+    }
+
+    /// EBU R128 loudness range (LRA) in LU — needs enough programme audio.
+    pub fn loudness_range_lu(&self) -> Option<f32> {
+        self.analyzer
+            .loudness_range()
+            .ok()
+            .map(|v| v as f32)
+    }
+
+    fn true_peak_instant_db(&self) -> f32 {
+        let tp = self
+            .analyzer
+            .true_peak(0)
+            .unwrap_or(0.0)
+            .max(self.analyzer.true_peak(1).unwrap_or(0.0)) as f32;
+        if tp < 1e-10 {
+            -100.0
+        } else {
+            20.0 * tp.log10()
+        }
+    }
+
+    pub fn sample_count(&self) -> u64 {
+        self.fed_samples
+    }
+}
+
+// =============================================================================
 // Simple RMS Loudness Meter — for Auto Loud
 // =============================================================================
 
