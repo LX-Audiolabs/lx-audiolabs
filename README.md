@@ -32,7 +32,7 @@ Output: `target/bundles/<PluginName>.clap`
 ## Tech Stack
 
 - **Language:** Rust (Edition 2024)
-- **Framework:** truce 3.1.2 + truce-vizia (Skia/OpenGL)
+- **Framework:** truce 6.1.4 + truce-vizia (Skia/OpenGL)
 - **Format:** CLAP
 
 ## License
