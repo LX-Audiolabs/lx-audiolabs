@@ -16,9 +16,26 @@ Pre-built CLAP binaries: [lx-audiolabs.github.io](https://lx-audiolabs.github.io
 
 ## Build from Source
 
+### Prerequisites
+
+Install [Rust](https://rustup.rs/) first (`rustup` ships `cargo` and the toolchain this repo expects). On Windows, use the MSVC toolchain and have the Visual Studio C++ build tools available.
+
 ```bash
-# Install cargo-truce
-cargo install --git https://github.com/truce-audio/truce cargo-truce
+# Linux / macOS
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Windows: download and run rustup-init.exe from https://rustup.rs/
+rustc --version
+cargo --version
+```
+
+### Build
+
+This workspace pins [truce](https://github.com/LX-Audiolabs/truce) on branch `upgrade/v6.1.4-local-patches` (see `Cargo.toml`). Use that fork for reproducible builds — upstream truce moves quickly and may not match these plugins yet.
+
+```bash
+# Install cargo-truce from the same pinned fork/branch
+cargo install --git https://github.com/LX-Audiolabs/truce --branch upgrade/v6.1.4-local-patches cargo-truce
 
 # Build all plugins
 cargo truce build --clap
@@ -29,15 +46,37 @@ cargo truce build --clap -p equilibrium
 
 Output: `target/bundles/<PluginName>.clap`
 
+### CLAP validation
+
+`cargo truce validate` runs [clap-validator](https://github.com/LX-Audiolabs/clap-validator) against installed `.clap` bundles. Use our maintained fork (not upstream `free-audio/clap-validator`) — it includes fixes and extra lifecycle tests relevant to these plugins.
+
+Requires Rust (same `rustup` setup as above). Install the validator once:
+
+```bash
+cargo install --git https://github.com/LX-Audiolabs/clap-validator --locked
+clap-validator --version
+```
+
+Then build, install, and validate a plugin:
+
+```bash
+cargo truce build --clap -p equilibrium
+cargo truce install --clap -p equilibrium
+cargo truce validate --clap -p equilibrium
+```
+
+`cargo truce doctor` reports whether `clap-validator` is on `PATH` or in `~/.cargo/bin`. To point at a custom binary: `CLAP_VALIDATOR=/path/to/clap-validator`.
+
 ## Tech Stack
 
-- **Language:** Rust (Edition 2024)
-- **Framework:** truce 6.1.4 + truce-vizia (Skia/OpenGL)
+- **Language:** Rust (Edition 2021)
+- **Framework:** [LX-Audiolabs/truce](https://github.com/LX-Audiolabs/truce) (`upgrade/v6.1.4-local-patches`) + truce-vizia (Skia/OpenGL)
 - **Format:** CLAP
+- **Validator:** [LX-Audiolabs/clap-validator](https://github.com/LX-Audiolabs/clap-validator)
 
 ## License
 
-[GNU General Public License v3.0 or later](LICENSE) — Copyright 2024–2026 LX AudioLabs
+[GNU General Public License v3.0](LICENSE) — Copyright 2024–2026 LX AudioLabs
 
 ## Contributing
 
