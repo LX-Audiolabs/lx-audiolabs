@@ -1,6 +1,6 @@
 # LX AudioLabs — CLAP Audio Plugins
 
-Open-source audio effect plugins in [CLAP](https://cleveraudio.org/) format, built with [truce](https://github.com/truce-audio/truce) and Rust.
+Open-source audio effect plugins in [CLAP](https://cleveraudio.org/) format, built with [truce](https://github.com/LX-Audiolabs/truce) and Rust.
 
 ## Plugins
 
@@ -9,9 +9,6 @@ Open-source audio effect plugins in [CLAP](https://cleveraudio.org/) format, bui
 | **Equilibrium** | 5-Band Spectral Balancer | Master Bus — precision band correction | Stable |
 | **Meridian** | Group Track Sculptor | Tracks & Buses — EQ, compressor, saturation | Stable |
 | **Aether** | Headphone Correction | Monitoring FX — Harman target curve + crossover | Stable |
-| **Aurum** | All-In-One Mastering | Mastering desk — SHAPE, COLOR, LIMIT | Pre-production |
-| **Lucent** | FFT Analyzer | Spectrum analysis with SHM relay | Pre-production |
-| **Lucent Relay** | SHM Relay | Companion for Lucent — shared memory IPC | Pre-production |
 
 ## Download
 
@@ -34,10 +31,10 @@ cargo --version
 
 ### Build
 
-This workspace pins [truce](https://github.com/LX-Audiolabs/truce) on branch `main` (see `Cargo.toml`). Use that fork for reproducible builds — upstream truce moves quickly and may not match these plugins yet.
+This workspace pins [LX-Audiolabs/truce](https://github.com/LX-Audiolabs/truce) on branch `main` (suite patches + truce-vizia ↔ [vizia-audio](https://github.com/LX-Audiolabs/vizia-audio)). Use that fork — not upstream `truce-audio/truce`.
 
 ```bash
-# Install cargo-truce from the same pinned fork/branch
+# Install cargo-truce from the same fork
 cargo install --git https://github.com/LX-Audiolabs/truce --branch main cargo-truce
 
 # Build all plugins (CLAP)
@@ -81,7 +78,8 @@ cargo truce validate --clap -p equilibrium
 ## Tech Stack
 
 - **Language:** Rust (Edition 2024)
-- **Framework:** [LX-Audiolabs/truce](https://github.com/LX-Audiolabs/truce) (`main`) + truce-vizia (Skia/OpenGL)
+- **Framework:** [LX-Audiolabs/truce](https://github.com/LX-Audiolabs/truce) (`main`) + truce-vizia
+- **GUI:** [LX-Audiolabs/vizia-audio](https://github.com/LX-Audiolabs/vizia-audio) (Skia/OpenGL, baseview)
 - **Formats:** CLAP, VST3, LV2
 - **Validator:** [LX-Audiolabs/clap-validator](https://github.com/LX-Audiolabs/clap-validator)
 

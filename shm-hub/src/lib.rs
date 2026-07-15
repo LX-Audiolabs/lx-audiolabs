@@ -1102,3 +1102,25 @@ pub fn relay_hub() -> Option<&'static RelayHub> {
     static HUB: OnceLock<Option<RelayHub>> = OnceLock::new();
     HUB.get_or_init(RelayHub::open_or_create).as_ref()
 }
+
+/// Resolve which consumer name a relay publisher should target.
+///
+/// - Empty `selected` → broadcast (`Some("")`).
+/// - Exact live consumer match → `Some(selected)`.
+/// - Exactly one live consumer (stale/wrong target) → auto-target it.
+/// - Stale target with multiple live consumers → broadcast (`Some("")`) so
+///   publish does not silently stop when a persisted name no longer exists.
+pub fn resolve_relay_target(hub: &RelayHub, selected: &str, now_ms: u64) -> Option<String> {
+    if selected.is_empty() {
+        return Some(String::new());
+    }
+    if hub.consumer_exists(selected, now_ms) {
+        return Some(selected.to_string());
+    }
+    let lucents = hub.read_consumers(now_ms);
+    if lucents.len() == 1 {
+        return Some(lucents[0].clone());
+    }
+    // ponytail: broadcast beats silent drop when the saved target is stale
+    Some(String::new())
+}
