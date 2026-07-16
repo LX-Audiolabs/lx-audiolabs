@@ -5,16 +5,14 @@ members = [
     "shared-vault",
     "shared-ui",
     "shm-hub",
-    "plugins/lucent",
-    "plugins/lucent-relay",
     "plugins/aether",
-    "plugins/aurum",
     "plugins/equilibrium",
     "plugins/meridian",
 ]
 resolver = "3"
 
 [workspace.dependencies]
+# LX fork: main = upstream + suite patches (truce-vizia ↔ vizia-audio). No PRs upstream.
 truce           = { git = "https://github.com/LX-Audiolabs/truce", branch = "main", default-features = false }
 truce-core      = { git = "https://github.com/LX-Audiolabs/truce", branch = "main" }
 truce-params    = { git = "https://github.com/LX-Audiolabs/truce", branch = "main" }
@@ -41,16 +39,5 @@ inherits = "release"
 strip = false
 debug = "full"
 
-[patch.crates-io]
-# baseview-truce-local removed — no longer in dependency graph
-# (was for truce-egui/truce-iced stack, which we no longer use).
-
-[patch."https://github.com/truce-audio/truce"]
-# All truce crates come from the lxndrbe/truce fork (v6.1.4 with local patches).
-# truce-gui / truce-gpu local vendors removed — no plugin uses them anymore.
-
-[patch."https://github.com/vizia/baseview.git"]
-# DPI-Guard: SetProcessDpiAwarenessContext only for top-level windows,
-# never for embedded WS_CHILD (plugin) windows. Prevents host hang/crash
-# on repeated editor open-close cycles.
-baseview = { path = "baseview-local" }
+# truce-vizia and plugins/shared-ui all pin LX-Audiolabs/vizia-audio (same source).
+# baseview DPI guard lives inside vizia-audio — no baseview-local patch needed.
