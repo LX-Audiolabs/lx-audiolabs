@@ -39,3 +39,4 @@ check.log
 node_modules/
 .cargo-tools/
 .venv/
+AGENTS.md
