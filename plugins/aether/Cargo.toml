@@ -26,7 +26,7 @@ truce-lv2    = { workspace = true, optional = true }
 truce-loader = { workspace = true }
 truce-vizia  = { workspace = true }
 # Same source as truce-vizia (LX-Audiolabs/vizia-audio) — one package identity.
-vizia        = { git = "https://github.com/LX-Audiolabs/vizia-audio", branch = "main", default-features = false, features = ["baseview"] }
+vizia        = { workspace = true }
 clap-sys     = { workspace = true, optional = true }
 
 shared-dsp      = { path = "../../shared-dsp" }

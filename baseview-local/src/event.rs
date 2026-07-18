@@ -1,10 +1,9 @@
+use dpi::PhysicalPosition;
+use keyboard_types::{KeyboardEvent, Modifiers};
 use std::path::PathBuf;
 
-use keyboard_types::{KeyboardEvent, Modifiers};
-
-use crate::{Point, WindowInfo};
-
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum MouseButton {
     Left,
     Middle,
@@ -35,11 +34,12 @@ pub enum ScrollDelta {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum MouseEvent {
     /// The mouse cursor was moved
     CursorMoved {
         /// The logical coordinates of the mouse position
-        position: Point,
+        position: PhysicalPosition<f64>,
         /// The modifiers that were held down just before the event.
         modifiers: Modifiers,
     },
@@ -80,7 +80,7 @@ pub enum MouseEvent {
 
     DragEntered {
         /// The logical coordinates of the mouse position
-        position: Point,
+        position: PhysicalPosition<f64>,
         /// The modifiers that were held down just before the event.
         modifiers: Modifiers,
         /// Data being dragged
@@ -89,7 +89,7 @@ pub enum MouseEvent {
 
     DragMoved {
         /// The logical coordinates of the mouse position
-        position: Point,
+        position: PhysicalPosition<f64>,
         /// The modifiers that were held down just before the event.
         modifiers: Modifiers,
         /// Data being dragged
@@ -100,7 +100,7 @@ pub enum MouseEvent {
 
     DragDropped {
         /// The logical coordinates of the mouse position
-        position: Point,
+        position: PhysicalPosition<f64>,
         /// The modifiers that were held down just before the event.
         modifiers: Modifiers,
         /// Data being dragged
@@ -109,20 +109,22 @@ pub enum MouseEvent {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum WindowEvent {
-    Resized(WindowInfo),
     Focused,
     Unfocused,
     WillClose,
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Event {
     Mouse(MouseEvent),
     Keyboard(KeyboardEvent),
     Window(WindowEvent),
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DropEffect {
     Copy,
@@ -131,6 +133,7 @@ pub enum DropEffect {
     Scroll,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum DropData {
     None,
@@ -146,6 +149,7 @@ pub enum DropData {
 /// or it isn't obviously useful. Currently, only [`Event::Keyboard`] variants
 /// are supported.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub enum EventStatus {
     /// Event was handled by your window and will not be sent back to the
     /// platform for further processing.

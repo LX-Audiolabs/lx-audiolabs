@@ -1,19 +1,10 @@
-use std::marker::PhantomData;
-
-use raw_window_handle::{
-    HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle, RawWindowHandle,
-};
-
-use crate::event::{Event, EventStatus};
+use crate::context::WindowContext;
+use crate::handler::WindowHandler;
+use crate::platform;
 use crate::window_open_options::WindowOpenOptions;
-use crate::{MouseCursor, Size};
-
-#[cfg(target_os = "macos")]
-use crate::macos as platform;
-#[cfg(target_os = "windows")]
-use crate::win as platform;
-#[cfg(target_os = "linux")]
-use crate::x11 as platform;
+use dpi::{LogicalSize, PhysicalSize, Pixel};
+use raw_window_handle::HasWindowHandle;
+use std::marker::PhantomData;
 
 pub struct WindowHandle {
     window_handle: platform::WindowHandle,
@@ -27,7 +18,7 @@ impl WindowHandle {
     }
 
     /// Close the window
-    pub fn close(&mut self) {
+    pub fn close(&self) {
         self.window_handle.close();
     }
 
@@ -38,94 +29,73 @@ impl WindowHandle {
     }
 }
 
-unsafe impl HasRawWindowHandle for WindowHandle {
-    fn raw_window_handle(&self) -> RawWindowHandle {
-        self.window_handle.raw_window_handle()
-    }
+pub struct Window {
+    _private: (),
 }
 
-pub trait WindowHandler {
-    fn on_frame(&mut self, window: &mut Window);
-    fn on_event(&mut self, window: &mut Window, event: Event) -> EventStatus;
-}
-
-pub struct Window<'a> {
-    window: platform::Window<'a>,
-
-    // so that Window is !Send on all platforms
-    phantom: PhantomData<*mut ()>,
-}
-
-impl<'a> Window<'a> {
-    #[cfg(target_os = "windows")]
-    pub(crate) fn new(window: platform::Window<'a>) -> Window<'a> {
-        Window { window, phantom: PhantomData }
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    pub(crate) fn new(window: platform::Window) -> Window {
-        Window { window, phantom: PhantomData }
-    }
-
-    pub fn open_parented<P, H, B>(parent: &P, options: WindowOpenOptions, build: B) -> WindowHandle
-    where
-        P: HasRawWindowHandle,
-        H: WindowHandler + 'static,
-        B: FnOnce(&mut Window) -> H,
-        B: Send + 'static,
-    {
-        let window_handle = platform::Window::open_parented::<P, H, B>(parent, options, build);
+impl Window {
+    pub fn open_parented<H: WindowHandler>(
+        parent: &impl HasWindowHandle, options: WindowOpenOptions,
+        build: impl FnOnce(WindowContext) -> H + Send + 'static,
+    ) -> WindowHandle {
+        let window_handle = platform::Window::open_parented(parent, options, build);
         WindowHandle::new(window_handle)
     }
 
-    pub fn open_blocking<H, B>(options: WindowOpenOptions, build: B)
-    where
-        H: WindowHandler + 'static,
-        B: FnOnce(&mut Window) -> H,
-        B: Send + 'static,
-    {
-        platform::Window::open_blocking::<H, B>(options, build)
-    }
-
-    /// Close the window
-    pub fn close(&mut self) {
-        self.window.close();
-    }
-
-    /// Resize the window to the given size. The size is always in logical pixels. DPI scaling will
-    /// automatically be accounted for.
-    pub fn resize(&mut self, size: Size) {
-        self.window.resize(size);
-    }
-
-    pub fn set_mouse_cursor(&mut self, cursor: MouseCursor) {
-        self.window.set_mouse_cursor(cursor);
-    }
-
-    pub fn has_focus(&mut self) -> bool {
-        self.window.has_focus()
-    }
-
-    pub fn focus(&mut self) {
-        self.window.focus()
-    }
-
-    /// If provided, then an OpenGL context will be created for this window. You'll be able to
-    /// access this context through [crate::Window::gl_context].
-    #[cfg(feature = "opengl")]
-    pub fn gl_context(&self) -> Option<&crate::gl::GlContext> {
-        self.window.gl_context()
+    pub fn open_blocking<H: WindowHandler>(
+        options: WindowOpenOptions, build: impl FnOnce(WindowContext) -> H + Send + 'static,
+    ) {
+        platform::Window::open_blocking(options, build)
     }
 }
 
-unsafe impl<'a> HasRawWindowHandle for Window<'a> {
-    fn raw_window_handle(&self) -> RawWindowHandle {
-        self.window.raw_window_handle()
+/// A window's size, which can be read in either logical or physical pixels.
+///
+/// Methods that produce this type in baseview guarantee that either the physical or the logical
+/// size is directly from the underlying platform API.
+///
+/// This means that for either of the size types, there is at most only one conversion performed,
+/// which minimizes errors that may occur due to rounding.
+#[derive(Debug, Copy, Clone)]
+pub struct WindowSize {
+    /// The window's size in physical pixels
+    pub physical: PhysicalSize<u32>,
+    /// The window's size in logical pixels
+    pub logical: LogicalSize<f64>,
+    /// The backing scale factor of the window.
+    ///
+    /// This is the value used to convert between the physical and logical sizes.
+    pub scale_factor: f64,
+}
+
+impl WindowSize {
+    /// Constructs a [`WindowSize`] from a given [`PhysicalSize`] and `scale_factor`.
+    ///
+    /// The [`LogicalSize`] is converted from the given physical size, using the given scale factor.
+    #[inline]
+    pub fn from_physical(physical: PhysicalSize<u32>, scale_factor: f64) -> Self {
+        Self { physical, logical: physical.to_logical(scale_factor), scale_factor }
+    }
+
+    /// Constructs a [`WindowSize`] from a given [`LogicalSize`] and `scale_factor`.
+    ///
+    /// The [`PhysicalSize`] is converted from the given physical size, using the given scale factor.
+    #[inline]
+    pub fn from_logical(logical: LogicalSize<f64>, scale_factor: f64) -> Self {
+        Self { physical: logical.to_physical(scale_factor), logical, scale_factor }
     }
 }
 
-unsafe impl<'a> HasRawDisplayHandle for Window<'a> {
-    fn raw_display_handle(&self) -> RawDisplayHandle {
-        self.window.raw_display_handle()
+impl<P: Pixel> From<WindowSize> for PhysicalSize<P> {
+    #[inline]
+    fn from(size: WindowSize) -> Self {
+        size.physical.cast()
+    }
+}
+
+impl<P: Pixel> From<WindowSize> for LogicalSize<P> {
+    #[inline]
+    fn from(size: WindowSize) -> Self {
+        size.logical.cast()
     }
 }

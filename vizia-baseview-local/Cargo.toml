@@ -1,0 +1,25 @@
+[package]
+name = "vizia_baseview"
+version = "0.4.0"
+authors = ["George Atkinson <geomyles@yahoo.co.uk>", "Billy Messenger <BillyDM@protonmail.com>"]
+description = "Baseview backend for vizia — LX fork with parented-window fixes"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/vizia/vizia"
+rust-version = "1.85"
+
+# ponytail: only crate forked from upstream vizia. Parented-window fixes for DAW plugins:
+# 1. GlConfig { vsync: false } — DAW hosts drive UI thread
+# 2. is_parented flag — skips resize trick during init (WM_SIZE re-entrancy)
+# 3. FocusIn handler — Textbox keystroke delivery in child windows
+# 4. Scale factor defaults to 1.0 — avoids mis-scaling on 100% displays
+
+[dependencies]
+vizia_core = { git = "https://github.com/vizia/vizia", branch = "main", default-features = false }
+vizia_input = { git = "https://github.com/vizia/vizia", branch = "main" }
+vizia_id = { git = "https://github.com/vizia/vizia", branch = "main" }
+
+baseview = { version = "0.2.2", features = ["opengl"] }
+raw-window-handle = "0.6"
+gl-rs = { package = "gl", version = "0.14" }
+skia-safe = { version = "0.99", features = ["gl", "textlayout", "svg"] }

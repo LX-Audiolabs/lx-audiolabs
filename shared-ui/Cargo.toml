@@ -7,4 +7,4 @@ description = "LX Audiolabs shared Vizia UI widgets, canvas views, and drawing h
 
 [dependencies]
 # Must match truce-vizia + plugins (LX-Audiolabs/vizia-audio main).
-vizia = { git = "https://github.com/LX-Audiolabs/vizia-audio", branch = "main", default-features = false, features = ["baseview"] }
+vizia = { workspace = true }

@@ -1,5 +1,7 @@
 [workspace]
 members = [
+    "baseview-local",
+    "vizia-baseview-local",
     "shared-dsp",
     "shared-analysis",
     "shared-vault",
@@ -12,7 +14,7 @@ members = [
 resolver = "3"
 
 [workspace.dependencies]
-# LX fork: main = upstream + suite patches (truce-vizia ↔ vizia-audio). No PRs upstream.
+# LX fork: main = upstream + suite patches. No PRs upstream.
 truce           = { git = "https://github.com/LX-Audiolabs/truce", branch = "main", default-features = false }
 truce-core      = { git = "https://github.com/LX-Audiolabs/truce", branch = "main" }
 truce-params    = { git = "https://github.com/LX-Audiolabs/truce", branch = "main" }
@@ -22,6 +24,7 @@ truce-lv2       = { git = "https://github.com/LX-Audiolabs/truce", branch = "mai
 truce-loader    = { git = "https://github.com/LX-Audiolabs/truce", branch = "main" }
 truce-test      = { git = "https://github.com/LX-Audiolabs/truce", branch = "main" }
 truce-vizia     = { git = "https://github.com/LX-Audiolabs/truce", branch = "main" }
+vizia           = { git = "https://github.com/vizia/vizia", branch = "main", default-features = false, features = ["baseview"] }
 clap-sys        = "0.5"
 
 [profile.release]
@@ -39,5 +42,10 @@ inherits = "release"
 strip = false
 debug = "full"
 
-# truce-vizia and plugins/shared-ui all pin LX-Audiolabs/vizia-audio (same source).
-# baseview DPI guard lives inside vizia-audio — no baseview-local patch needed.
+# Replace upstream vizia_baseview with our fork (parented-window fixes).
+[patch."https://github.com/vizia/vizia"]
+vizia_baseview = { path = "vizia-baseview-local" }
+
+# Replace crates.io baseview with vendored copy (new_parented() REAPER fix).
+[patch.crates-io]
+baseview = { path = "baseview-local" }

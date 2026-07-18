@@ -1,0 +1,574 @@
+use crate::window::ViziaWindow;
+use crate::window::create_surface;
+use baseview::{WindowContext, WindowHandle, WindowScalePolicy};
+use gl_rs as gl;
+use gl_rs::types::GLint;
+use raw_window_handle::HasWindowHandle;
+use skia_safe::gpu::gl::FramebufferInfo;
+use vizia_core::events::EventManager;
+
+use crate::proxy::queue_get;
+use vizia_core::backend::*;
+use vizia_core::prelude::*;
+
+#[derive(Debug)]
+pub enum ApplicationError {}
+
+///Creating a new application creates a root `Window` and a `Context`. Views declared within the closure passed to the `Application::new()` are added to the context and rendered into the root window.
+///
+/// # Example
+/// ```no_run
+/// # use vizia_core::prelude::*;
+/// # use vizia_baseview::Application;
+///
+/// Application::new(|cx|{
+///    // Content goes here
+/// })
+/// .run();
+///```
+/// Calling `run()` on the `Application` causes the program to enter the event loop and for the main window to display.
+pub struct Application<F>
+where
+    F: Fn(&mut Context) + Send + 'static,
+{
+    app: F,
+    window_description: WindowDescription,
+    window_scale_policy: WindowScalePolicy,
+    on_idle: Option<Box<dyn Fn(&mut Context) + Send>>,
+    ignore_default_theme: bool,
+}
+
+impl<F> Application<F>
+where
+    F: Fn(&mut Context),
+    F: 'static + Send,
+{
+    pub fn new(app: F) -> Self {
+        Self {
+            app,
+            window_description: WindowDescription::new(),
+            window_scale_policy: WindowScalePolicy::SystemScaleFactor,
+            on_idle: None,
+            ignore_default_theme: false,
+        }
+    }
+
+    /// Sets the default built-in theming to be ignored.
+    pub fn ignore_default_theme(mut self) -> Self {
+        self.ignore_default_theme = true;
+        self
+    }
+
+    /// Change the window's scale policy. Not part of [`new()`][Self::new] to keep the same
+    /// signature as the winit backend. This should only be used for HiDPI scaling, use
+    /// [`WindowDescription::scale_factor`] to set a separate arbitrary scale factor.
+    pub fn with_scale_policy(mut self, scale_policy: WindowScalePolicy) -> Self {
+        self.window_scale_policy = scale_policy;
+        self
+    }
+
+    /// Sets the window title from a value that can be localized.
+    ///
+    /// Unlike the winit backend this resolves the title once during application setup.
+    pub fn title<T: ToStringLocalized>(mut self, title: impl Res<T>) -> Self {
+        let cx = Context::default();
+        self.window_description.title = title.get_value(&cx).to_string_local(&cx);
+
+        self
+    }
+
+    pub fn inner_size(mut self, size: impl Into<WindowSize>) -> Self {
+        self.window_description.inner_size = size.into();
+
+        self
+    }
+
+    /// A scale factor applied on top of any DPI scaling, defaults to 1.0.
+    pub fn user_scale_factor(mut self, factor: f64) -> Self {
+        self.window_description.user_scale_factor = factor;
+
+        self
+    }
+
+    /// Open a new window that blocks the current thread until the window is destroyed.
+    ///
+    /// Do **not** use this in the context of audio plugins, unless it is compiled as a
+    /// standalone application.
+    ///
+    /// * `app` - The Vizia application builder.
+    pub fn run(self) -> Result<(), ApplicationError> {
+        ViziaWindow::open_blocking(
+            self.window_description,
+            self.window_scale_policy,
+            self.app,
+            self.on_idle,
+            self.ignore_default_theme,
+        );
+
+        Ok(())
+    }
+
+    /// Open a new child window.
+    ///
+    /// This function does **not** block the current thread. This is only to be
+    /// used in the context of audio plugins.
+    ///
+    /// * `parent` - The parent window.
+    /// * `app` - The Vizia application builder.
+    pub fn open_parented<P: HasWindowHandle>(self, parent: &P) -> WindowHandle {
+        ViziaWindow::open_parented(
+            parent,
+            self.window_description,
+            self.window_scale_policy,
+            self.app,
+            self.on_idle,
+            self.ignore_default_theme,
+        )
+    }
+
+    /// Takes a closure which will be called at the end of every loop of the application.
+    ///
+    /// The callback provides a place to run 'idle' processing and happens at the end of each loop but before drawing.
+    /// If the callback pushes events into the queue in context then the event loop will re-run. Care must be taken not to
+    /// push events into the queue every time the callback runs unless this is intended.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use vizia_core::prelude::*;
+    /// # use vizia_baseview::Application;
+    /// Application::new(|cx|{
+    ///     // Build application here
+    /// })
+    /// .on_idle(|cx|{
+    ///     // Code here runs at the end of every event loop after OS and vizia events have been handled
+    /// })
+    /// .run();
+    /// ```
+    pub fn on_idle<I: 'static + Fn(&mut Context) + Send>(mut self, callback: I) -> Self {
+        self.on_idle = Some(Box::new(callback));
+
+        self
+    }
+}
+
+pub(crate) struct ApplicationRunner {
+    cx: BackendContext,
+    event_manager: EventManager,
+    pub gr_context: skia_safe::gpu::DirectContext,
+    should_redraw: bool,
+
+    /// If this is set to `true`, then `window_scale_factor` will be updated during
+    /// resize events in accordance to the system's reported DPI. This can change at
+    /// runtime when the window is dragged between displays. Otherwise
+    /// `window_scale_factor` will not change.
+    use_system_scaling: bool,
+    /// The scale factor for the window itself. This is either determined by either the operating
+    /// system or explicitly overridden by the creator of the window. In some cases window resize
+    /// events may change this scaling policy. This value is only used when translating logical
+    /// mouse coordinates to physical window coordinates. For any other use within VIZIA itself this
+    /// always needs to be multiplied by `user_scale_factor`.
+    window_scale_factor: f64,
+    pub surface: skia_safe::Surface,
+    pub dirty_surface: skia_safe::Surface,
+    window_description: WindowDescription,
+    is_initialized: bool,
+    /// `true` when the underlying baseview window was opened via
+    /// [`Window::open_parented`] (i.e. the vizia application is embedded
+    /// inside a host such as a DAW). Gates lifecycle decisions that
+    /// should be left to the host: when parented, vizia_baseview must
+    /// not interpret Cmd+Q as a close request, because closing the
+    /// child window without the host's knowledge leaves the host with
+    /// an empty plug-in shell.
+    is_parented: bool,
+    /// Handle to the baseview window, used for GL context access, resizing,
+    /// and focus requests.
+    window_context: WindowContext,
+}
+
+impl ApplicationRunner {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        cx: BackendContext,
+        gr_context: skia_safe::gpu::DirectContext,
+        use_system_scaling: bool,
+        window_scale_factor: f64,
+        surface: skia_safe::Surface,
+        dirty_surface: skia_safe::Surface,
+        window_description: WindowDescription,
+        is_parented: bool,
+        window_context: WindowContext,
+    ) -> Self {
+        ApplicationRunner {
+            should_redraw: true,
+            gr_context,
+            event_manager: EventManager::new(),
+            use_system_scaling,
+            window_scale_factor,
+            cx,
+            surface,
+            dirty_surface,
+            window_description,
+            is_initialized: false,
+            is_parented,
+            window_context,
+        }
+    }
+
+    /// Apply a new user scale factor: resize the embedded window,
+    /// update vizia's tracked DPI factor + root viewport bounds, and
+    /// recreate the Skia render surfaces at the new physical size.
+    fn apply_user_scale(&mut self, new_user_scale: f64) {
+        self.window_description.user_scale_factor = new_user_scale;
+
+        let base_logical_w = self.window_description.inner_size.width as f64;
+        let base_logical_h = self.window_description.inner_size.height as f64;
+        let scaled_logical_w = base_logical_w * new_user_scale;
+        let scaled_logical_h = base_logical_h * new_user_scale;
+        self.window_context.resize(baseview::dpi::LogicalSize {
+            width: scaled_logical_w,
+            height: scaled_logical_h,
+        });
+
+        let new_dpi_factor = self.window_scale_factor * new_user_scale;
+        self.cx.set_scale_factor(new_dpi_factor);
+
+        let new_physical_w = (scaled_logical_w * self.window_scale_factor) as f32;
+        let new_physical_h = (scaled_logical_h * self.window_scale_factor) as f32;
+        self.cx.set_window_size(Entity::root(), new_physical_w, new_physical_h);
+
+        if new_physical_w > 0.0 && new_physical_h > 0.0 {
+            let fb_info = {
+                let mut fboid: GLint = 0;
+                unsafe { gl::GetIntegerv(gl::FRAMEBUFFER_BINDING, &mut fboid) };
+
+                FramebufferInfo {
+                    fboid: fboid.try_into().unwrap(),
+                    format: skia_safe::gpu::gl::Format::RGBA8.into(),
+                    ..Default::default()
+                }
+            };
+
+            self.surface = create_surface(
+                (new_physical_w as i32, new_physical_h as i32),
+                fb_info,
+                &mut self.gr_context,
+            );
+
+            self.dirty_surface = self
+                .surface
+                .new_surface_with_dimensions((
+                    new_physical_w.max(1.0) as i32,
+                    new_physical_h.max(1.0) as i32,
+                ))
+                .unwrap();
+        }
+
+        self.cx.needs_refresh(Entity::root());
+    }
+
+    /// Handle all reactivity within a frame.
+    pub fn on_frame_update(&mut self) {
+        Runtime::drain_pending_work();
+
+        while let Some(event) = queue_get() {
+            self.cx.send_event(event.into_event());
+        }
+
+        let mut pending_user_scale: Option<f64> = None;
+        self.event_manager.flush_events(self.cx.context(), |window_event| {
+            match window_event {
+                WindowEvent::FocusIn => {
+                    // Need OS focus so WM_CHAR/KEY* (and baseview's keyboard
+                    // hook) reach this child HWND — otherwise Textbox gets
+                    // vizia focus but no keystrokes in the DAW. Re-entrancy
+                    // from SetFocus is absorbed by try_borrow_mut in WindowHandler.
+                    #[cfg(not(target_os = "linux"))]
+                    if !self.window_context.has_focus() {
+                        self.window_context.focus();
+                    }
+                }
+                WindowEvent::SetUserScale(factor) => {
+                    pending_user_scale = Some(*factor);
+                }
+                _ => {}
+            }
+        });
+
+        if let Some(new_user_scale) = pending_user_scale {
+            self.apply_user_scale(new_user_scale);
+        }
+
+        if !self.is_initialized {
+            // Standalone only: the +1/-1 resize forces a first layout. In a
+            // DAW child window, SetWindowPos from on_frame re-enters WM_SIZE
+            // → resized() → second RefCell borrow → panic / host freeze.
+            if !self.is_parented {
+                self.window_context.resize(baseview::dpi::LogicalSize {
+                    width: self.window_description.inner_size.width as f64 + 1.0,
+                    height: self.window_description.inner_size.height as f64 + 1.0,
+                });
+
+                self.window_context.resize(baseview::dpi::LogicalSize {
+                    width: self.window_description.inner_size.width as f64,
+                    height: self.window_description.inner_size.height as f64,
+                });
+            } else {
+                self.cx.needs_refresh(Entity::root());
+            }
+            self.is_initialized = true;
+        }
+
+        self.cx.process_style_updates();
+        self.cx.process_animations();
+        self.cx.process_visual_updates();
+        self.cx.process_timers();
+
+        if self.cx.0.windows.iter().any(|(_, window_state)| !window_state.redraw_list.is_empty()) {
+            self.should_redraw = true;
+        }
+    }
+
+    pub fn render(&mut self) {
+        if self.should_redraw {
+            let context = self
+                .window_context
+                .gl_context()
+                .expect("Window was created without OpenGL support");
+            unsafe { context.make_current() };
+            self.cx.draw(Entity::root(), &mut self.surface, &mut self.dirty_surface);
+            self.gr_context.flush_and_submit();
+            self.should_redraw = false;
+            context.swap_buffers();
+            unsafe { context.make_not_current() };
+        }
+    }
+
+    /// Handle a resize reported by baseview.
+    pub fn handle_resized(&mut self, new_size: baseview::WindowSize) {
+        let fb_info = {
+            let mut fboid: GLint = 0;
+            unsafe { gl::GetIntegerv(gl::FRAMEBUFFER_BINDING, &mut fboid) };
+
+            FramebufferInfo {
+                fboid: fboid.try_into().unwrap(),
+                format: skia_safe::gpu::gl::Format::RGBA8.into(),
+                ..Default::default()
+            }
+        };
+
+        self.surface = create_surface(
+            (new_size.physical.width as i32, new_size.physical.height as i32),
+            fb_info,
+            &mut self.gr_context,
+        );
+
+        self.dirty_surface = self
+            .surface
+            .new_surface_with_dimensions((
+                new_size.physical.width as i32,
+                new_size.physical.height as i32,
+            ))
+            .unwrap();
+
+        if self.use_system_scaling {
+            self.window_scale_factor = new_size.scale_factor;
+        }
+
+        self.cx.set_scale_factor(
+            self.window_scale_factor * self.window_description.user_scale_factor,
+        );
+
+        self.cx.set_window_size(
+            Entity::root(),
+            new_size.physical.width as f32,
+            new_size.physical.height as f32,
+        );
+
+        self.cx.needs_refresh(Entity::root());
+    }
+
+    pub fn handle_event(&mut self, event: baseview::Event, should_quit: &mut bool) {
+        if requests_exit(&event, self.is_parented) {
+            self.cx.send_event(Event::new(WindowEvent::WindowClose));
+            *should_quit = true;
+        }
+
+        let mut update_modifiers = |modifiers: vizia_input::KeyboardModifiers| {
+            self.cx
+                .modifiers()
+                .set(Modifiers::SHIFT, modifiers.contains(vizia_input::KeyboardModifiers::SHIFT));
+            self.cx
+                .modifiers()
+                .set(Modifiers::CTRL, modifiers.contains(vizia_input::KeyboardModifiers::CONTROL));
+            self.cx
+                .modifiers()
+                .set(Modifiers::SUPER, modifiers.contains(vizia_input::KeyboardModifiers::META));
+            self.cx
+                .modifiers()
+                .set(Modifiers::ALT, modifiers.contains(vizia_input::KeyboardModifiers::ALT));
+        };
+
+        match event {
+            baseview::Event::Mouse(event) => match event {
+                baseview::MouseEvent::CursorMoved { position, modifiers } => {
+                    update_modifiers(modifiers);
+
+                    // baseview 0.2.x already delivers *physical* client coords
+                    // (Win/X11: raw event pixels; macOS: to_physical(scale)).
+                    // Multiplying by window_scale_factor again double-scales hit
+                    // tests — knobs/sliders only respond when the cursor is
+                    // offset up/left of the drawn control.
+                    let cursor_x = position.x as f32;
+                    let cursor_y = position.y as f32;
+                    self.cx.emit_origin(WindowEvent::MouseMove(cursor_x, cursor_y));
+                }
+                baseview::MouseEvent::ButtonPressed { button, modifiers } => {
+                    update_modifiers(modifiers);
+
+                    // Clicking a field must pull OS keyboard focus into the
+                    // plugin child (hosts otherwise keep keys for themselves).
+                    #[cfg(not(target_os = "linux"))]
+                    if self.is_parented && !self.window_context.has_focus() {
+                        self.window_context.focus();
+                    }
+
+                    let b = translate_mouse_button(button);
+                    self.cx.emit_origin(WindowEvent::MouseDown(b));
+                }
+                baseview::MouseEvent::ButtonReleased { button, modifiers } => {
+                    update_modifiers(modifiers);
+
+                    let b = translate_mouse_button(button);
+                    self.cx.emit_origin(WindowEvent::MouseUp(b));
+                }
+                baseview::MouseEvent::WheelScrolled { delta, modifiers } => {
+                    update_modifiers(modifiers);
+
+                    let (lines_x, lines_y) = match delta {
+                        baseview::ScrollDelta::Lines { x, y } => (x, y),
+                        baseview::ScrollDelta::Pixels { x, y } => (
+                            if x < 0.0 {
+                                -1.0
+                            } else if x > 1.0 {
+                                1.0
+                            } else {
+                                0.0
+                            },
+                            if y < 0.0 {
+                                -1.0
+                            } else if y > 1.0 {
+                                1.0
+                            } else {
+                                0.0
+                            },
+                        ),
+                    };
+
+                    self.cx.emit_origin(WindowEvent::MouseScroll(lines_x, lines_y));
+                }
+
+                baseview::MouseEvent::CursorEntered => {
+                    self.cx.emit_origin(WindowEvent::MouseEnter);
+                }
+
+                baseview::MouseEvent::CursorLeft => {
+                    self.cx.emit_origin(WindowEvent::MouseLeave);
+                }
+
+                _ => {}
+            },
+            baseview::Event::Keyboard(event) => {
+                let (s, pressed) = match event.state {
+                    vizia_input::KeyState::Down => (MouseButtonState::Pressed, true),
+                    vizia_input::KeyState::Up => (MouseButtonState::Released, false),
+                };
+
+                match event.code {
+                    Code::ShiftLeft | Code::ShiftRight => {
+                        self.cx.modifiers().set(Modifiers::SHIFT, pressed)
+                    }
+                    Code::ControlLeft | Code::ControlRight => {
+                        self.cx.modifiers().set(Modifiers::CTRL, pressed)
+                    }
+                    Code::AltLeft | Code::AltRight => {
+                        self.cx.modifiers().set(Modifiers::ALT, pressed)
+                    }
+                    Code::MetaLeft | Code::MetaRight => {
+                        self.cx.modifiers().set(Modifiers::SUPER, pressed)
+                    }
+                    _ => (),
+                }
+
+                match s {
+                    MouseButtonState::Pressed => {
+                        if let vizia_input::Key::Character(written) = &event.key {
+                            for chr in written.chars() {
+                                self.cx.emit_origin(WindowEvent::CharInput(chr));
+                            }
+                        }
+
+                        self.cx.emit_origin(WindowEvent::KeyDown(event.code, Some(event.key)));
+                    }
+
+                    MouseButtonState::Released => {
+                        self.cx.emit_origin(WindowEvent::KeyUp(event.code, Some(event.key)));
+                    }
+                }
+            }
+            baseview::Event::Window(event) => match event {
+                baseview::WindowEvent::Focused => self.cx.needs_refresh(Entity::root()),
+                baseview::WindowEvent::WillClose => {
+                    self.cx.send_event(Event::new(WindowEvent::WindowClose));
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    pub fn handle_idle(&mut self, on_idle: &Option<Box<dyn Fn(&mut Context) + Send>>) {
+        if let Some(idle_callback) = on_idle {
+            self.cx.set_current(Entity::root());
+            (idle_callback)(self.cx.context());
+        }
+    }
+
+    /// Element name of the view that currently has keyboard focus.
+    pub fn focused_element(&self) -> Option<&'static str> {
+        self.cx.focused_element()
+    }
+}
+
+/// Returns true if the provided event should cause an [`Application`] to exit.
+pub fn requests_exit(
+    event: &baseview::Event,
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))] is_parented: bool,
+) -> bool {
+    match event {
+        baseview::Event::Window(baseview::WindowEvent::WillClose) => true,
+        #[cfg(target_os = "macos")]
+        baseview::Event::Keyboard(event) if !is_parented => {
+            if event.code == vizia_input::Code::KeyQ
+                && event.modifiers == vizia_input::KeyboardModifiers::META
+                && event.state == vizia_input::KeyState::Down
+            {
+                return true;
+            }
+
+            false
+        }
+        _ => false,
+    }
+}
+
+fn translate_mouse_button(button: baseview::MouseButton) -> MouseButton {
+    match button {
+        baseview::MouseButton::Left => MouseButton::Left,
+        baseview::MouseButton::Right => MouseButton::Right,
+        baseview::MouseButton::Middle => MouseButton::Middle,
+        baseview::MouseButton::Other(id) => MouseButton::Other(id as u16),
+        baseview::MouseButton::Back => MouseButton::Other(4),
+        baseview::MouseButton::Forward => MouseButton::Other(5),
+        _ => MouseButton::Other(6),
+    }
+}
