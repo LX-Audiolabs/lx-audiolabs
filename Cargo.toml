@@ -26,6 +26,7 @@ truce-test      = { git = "https://github.com/LX-Audiolabs/truce", branch = "mai
 truce-vizia     = { git = "https://github.com/LX-Audiolabs/truce", branch = "main" }
 vizia           = { git = "https://github.com/vizia/vizia", branch = "main", default-features = false, features = ["baseview"] }
 clap-sys        = "0.5"
+time            = ">=0.3.47"
 
 [profile.release]
 opt-level = 3
