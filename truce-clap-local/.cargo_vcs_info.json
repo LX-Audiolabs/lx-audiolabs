@@ -1,7 +1,0 @@
-{
-  "git": {
-    "sha1": "6ad272c4b4bc73d12fbc9f324e76e494014c98db",
-    "dirty": true
-  },
-  "path_in_vcs": "crates/truce-clap"
-}

@@ -1,11 +1,11 @@
 //! Equilibrium-specific 5-band spectrum view.
-//! Generic views (Goniometer, StereoMeter, Spectrum) live in shared-ui.
+//! Generic views (Goniometer, StereoMeter, Spectrum) live in lx-ui.
 
-use shared_ui::{col, fill_paint, line, rgb};
+use lx_ui::{col, fill_paint, line, rgb};
 use vizia::prelude::*;
 use vizia::vg;
 
-shared_ui::declare_layer_cache!(EQ_SPECTRUM_CACHE);
+lx_ui::declare_layer_cache!(EQ_SPECTRUM_CACHE);
 
 pub struct EqSpectrumView {
     pub band_levels: [f32; 5],
@@ -75,7 +75,7 @@ impl View for EqSpectrumView {
             height - (norm * height)
         };
 
-        shared_ui::layer_cache::draw_cached_layer(
+        lx_ui::layer_cache::draw_cached_layer(
             &EQ_SPECTRUM_CACHE,
             cx,
             canvas,

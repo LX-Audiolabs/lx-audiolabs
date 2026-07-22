@@ -1,13 +1,13 @@
 //! Meridian-specific compressor gain-reduction mini-graph.
-//! Generic views (Goniometer, StereoMeter, Spectrum) live in shared-ui.
+//! Generic views (Goniometer, StereoMeter, Spectrum) live in lx-ui.
 
 use std::cell::RefCell;
 
-use shared_ui::{col, fill_paint, line, rgb, stroke_paint};
+use lx_ui::{col, fill_paint, line, rgb, stroke_paint};
 use vizia::prelude::*;
 use vizia::vg;
 
-shared_ui::declare_layer_cache!(COMPRESSOR_ENVELOPE_CACHE);
+lx_ui::declare_layer_cache!(COMPRESSOR_ENVELOPE_CACHE);
 
 thread_local! {
     /// Reusable point buffer for CompressorEnvelopeView to avoid per-frame allocations.
@@ -45,7 +45,7 @@ impl View for CompressorEnvelopeView {
         let x_step = (w - margin * 2.0) / (n - 1).max(1) as f32;
         let val_to_y = |val: f32| h - margin - (val / max_gr).clamp(0.0, 1.0) * (h - margin * 2.0);
 
-        shared_ui::layer_cache::draw_cached_layer(
+        lx_ui::layer_cache::draw_cached_layer(
             &COMPRESSOR_ENVELOPE_CACHE,
             cx,
             canvas,

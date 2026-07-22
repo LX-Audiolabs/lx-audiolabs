@@ -25,14 +25,14 @@ use std::time::{Duration, Instant};
 use vizia::prelude::*;
 use vizia::vg;
 
-use shared_analysis::SharedState;
-use shared_dsp::Biquad;
+use lx_analysis::SharedState;
+use lx_dsp::Biquad;
 use truce::prelude::{FloatParam, IntParam};
 use truce_vizia::ParamLens;
 
 use crate::vizia_canvas::CompressorEnvelopeView;
 use crate::{MeridianParams, MeridianParamsParamId as K};
-use shared_ui::{
+use lx_ui::{
     EqCurve, Gesture, GoniometerView, HSliderView, KnobView, SpectrumConfig, SpectrumCurve,
     SpectrumView, StereoMeterView, fmt_db, format_knob_value, rgb as vg_rgb,
 };
@@ -253,7 +253,7 @@ impl Default for MeridianProfile {
 fn list_meridian_presets(vault_path: Option<&str>) -> Vec<(String, PathBuf, MeridianProfile)> {
     let mut presets = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    let local_dir = shared_analysis::get_plugin_dir("Meridian").join("presets");
+    let local_dir = lx_analysis::get_plugin_dir("Meridian").join("presets");
     let _ = std::fs::create_dir_all(&local_dir);
     let mut scan = |dir: &std::path::Path| {
         if let Ok(entries) = std::fs::read_dir(dir) {
@@ -270,7 +270,7 @@ fn list_meridian_presets(vault_path: Option<&str>) -> Vec<(String, PathBuf, Meri
                     && seen.insert(path.clone())
                     && let Ok(content) = std::fs::read_to_string(&path)
                 {
-                    match shared_analysis::preset_plugin_name(&content).as_deref() {
+                    match lx_analysis::preset_plugin_name(&content).as_deref() {
                         Some("meridian") => {}
                         _ => continue,
                     }
@@ -292,7 +292,7 @@ fn list_meridian_presets(vault_path: Option<&str>) -> Vec<(String, PathBuf, Meri
 }
 
 fn parse_meridian_markdown(content: &str) -> Option<MeridianProfile> {
-    match shared_analysis::preset_plugin_name(content).as_deref() {
+    match lx_analysis::preset_plugin_name(content).as_deref() {
         Some("meridian") => {}
         _ => return None,
     }
@@ -1122,7 +1122,7 @@ impl View for Ticker {
                 false
             }
         };
-        let profile = shared_ui::ticker_profile_enabled();
+        let profile = lx_ui::ticker_profile_enabled();
         let t0_total = if profile { Some(Instant::now()) } else { None };
         let t0_tick = if profile && due { Some(Instant::now()) } else { None };
         let mut telemetry_changed = false;
@@ -1143,7 +1143,7 @@ impl View for Ticker {
         cx.needs_redraw();
         let total_us = t0_total.map(|t| t.elapsed().as_micros() as u64).unwrap_or(0);
         if profile {
-            shared_ui::report_ticker(tick_us, total_us);
+            lx_ui::report_ticker(tick_us, total_us);
         }
     }
 }
@@ -1160,7 +1160,7 @@ fn styled_toggle(cx: &mut Context, lens: ParamLens<MeridianParams>, id: K, label
     Binding::new(cx, sig, move |cx| {
         let active = lens.get(id) > 0.5;
         let lens = lens.clone();
-        shared_ui::toggle_button(cx, label, active, move |_cx| {
+        lx_ui::toggle_button(cx, label, active, move |_cx| {
             let now = lens.get(id) <= 0.5;
             let norm = if now { 1.0 } else { 0.0 };
             lens.automate(id, norm);
@@ -1195,7 +1195,7 @@ fn slope_selector(
                 let is_sel = current == s;
                 let lens = lens.clone();
                 let norm = step_norms[s as usize];
-                shared_ui::toggle_button_small(cx, slope_char(s), is_sel, move |_cx| {
+                lx_ui::toggle_button_small(cx, slope_char(s), is_sel, move |_cx| {
                     lens.automate(id, norm);
                     sig.set(norm as f32);
                 });
@@ -1215,8 +1215,8 @@ pub fn build(
     shared: Arc<SharedState>,
     params: Arc<MeridianParams>,
 ) {
-    shared_ui::load_theme(cx);
-    let config = shared_analysis::load_config("Meridian");
+    lx_ui::load_theme(cx);
+    let config = lx_analysis::load_config("Meridian");
     let presets = list_meridian_presets(config.vault_path.as_deref());
     let selected_preset_idx = None::<usize>;
 
@@ -1657,7 +1657,7 @@ fn do_save_preset(
 
     let dir = match &acc.vault_path {
         Some(vp) if !vp.is_empty() => PathBuf::from(vp),
-        _ => shared_analysis::get_plugin_dir("Meridian").join("presets"),
+        _ => lx_analysis::get_plugin_dir("Meridian").join("presets"),
     };
     let _ = std::fs::create_dir_all(&dir);
     let safe_name = name.replace(
@@ -1707,11 +1707,11 @@ fn build_setup_form(
                     } else {
                         Some(vp.clone())
                     };
-                    let cfg = shared_analysis::PluginConfig {
+                    let cfg = lx_analysis::PluginConfig {
                         vault_path: new_path.clone(),
                         ..Default::default()
                     };
-                    if shared_analysis::save_config("Meridian", &cfg).is_ok() {
+                    if lx_analysis::save_config("Meridian", &cfg).is_ok() {
                         let mut acc = accum.lock().unwrap();
                         acc.vault_path = new_path;
                         acc.presets = list_meridian_presets(acc.vault_path.as_deref());
@@ -2426,7 +2426,7 @@ fn build_right_sidebar(
                             .auto_loud_trigger
                             .store(true, Ordering::Release)
                     })
-                    .height(Pixels(shared_ui::BUTTON_HEIGHT))
+                    .height(Pixels(lx_ui::BUTTON_HEIGHT))
                     .background_color(Memo::new(move |_| {
                         let t = telemetry.get();
                         let is_active = shared_bg
@@ -2437,9 +2437,9 @@ fn build_right_sidebar(
                         if t.auto_loud_measuring {
                             rgb(1.0, 0.8, 0.0)
                         } else if is_active {
-                            shared_ui::AMBER
+                            lx_ui::AMBER
                         } else {
-                            shared_ui::IDLE_BG
+                            lx_ui::IDLE_BG
                         }
                     }));
                 })
@@ -2464,7 +2464,7 @@ fn build_right_sidebar(
                 t.balance,
             )
             .width(Stretch(1.0))
-            .height(Pixels(shared_ui::STEREO_METER_HEIGHT));
+            .height(Pixels(lx_ui::STEREO_METER_HEIGHT));
 
             let shared_l = shared_reset.clone();
             let shared_r = shared_reset.clone();
@@ -2846,7 +2846,7 @@ fn build_footer(
 
         vsep(cx);
 
-        shared_ui::danger_button_big(cx, "RESET", move |_cx| {
+        lx_ui::danger_button_big(cx, "RESET", move |_cx| {
             reset_all(&lens, &params, &shared, &accum, params_gen, &bool_sigs)
         })
         .width(Pixels(60.0));
@@ -2878,7 +2878,7 @@ fn cut_slope_selector(
                 let is_sel = current == s;
                 let lens = lens.clone();
                 let norm = step_norms[s as usize];
-                shared_ui::toggle_button_small(cx, label, is_sel, move |_cx| {
+                lx_ui::toggle_button_small(cx, label, is_sel, move |_cx| {
                     lens.automate(id, norm);
                     sig.set(norm as f32);
                 });
@@ -2900,7 +2900,7 @@ fn styled_toggle_small(
     Binding::new(cx, sig, move |cx| {
         let active = lens.get(id) > 0.5;
         let lens = lens.clone();
-        shared_ui::toggle_button_small(cx, label, active, move |_cx| {
+        lx_ui::toggle_button_small(cx, label, active, move |_cx| {
             let now = lens.get(id) <= 0.5;
             let norm = if now { 1.0 } else { 0.0 };
             lens.automate(id, norm);

@@ -22,11 +22,11 @@ name = "aether"
 version = "1.2.7"
 dependencies = [
  "clap-sys",
+ "lx-analysis",
+ "lx-dsp",
+ "lx-ui",
  "serde",
  "serde_json",
- "shared-analysis",
- "shared-dsp",
- "shared-ui",
  "tracing",
  "truce",
  "truce-clap",
@@ -172,7 +172,7 @@ checksum = "3b43422f69d8ff38f95f1b2bb76517c91589a924d1559a0e935d7c8ce0274c11"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -201,13 +201,13 @@ checksum = "8b75356056920673b02621b35afd0f7dda9306d03c79a30f5c56c44cf256e3de"
 
 [[package]]
 name = "async-trait"
-version = "0.1.89"
+version = "0.1.91"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
+checksum = "ae36dc4177970ef04fde5178d3e2429882def40e57a451f919c098f72baa6cec"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -281,7 +281,7 @@ dependencies = [
  "regex",
  "rustc-hash",
  "shlex 1.3.0",
- "syn",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -326,9 +326,9 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
 name = "bytemuck"
-version = "1.25.1"
+version = "1.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6aedf8ae72766347502cf3cb4f41cf5e9cc37d28bee90f1fdaaae15f9cf9424"
+checksum = "95832e849adfb21180ccb6826a99da14e5d266ae5c2e668e1602cf234f153797"
 
 [[package]]
 name = "byteorder"
@@ -344,9 +344,9 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cc"
-version = "1.2.67"
+version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e17dd265a7d0f31ef544e1b20e03add05d3b45b491b633b10d67145d2acc1a38"
+checksum = "c89588d05638b5b4594a3348a2d6c20277e43a7f5c5202b05cc56888475a47b8"
 dependencies = [
  "find-msvc-tools",
  "shlex 2.0.1",
@@ -490,7 +490,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10a2a99df6e410a8ff4245aa2006499ea662245f967cc7c0a38c83ef8eb44dbf"
 dependencies = [
  "quote",
- "syn",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -535,7 +535,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rustc_version",
- "syn",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -564,7 +564,7 @@ checksum = "1ac70aa55017e108007fbaf5aa0f54b021c98f92ff8af59d42eda9da96e3dd4f"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -639,7 +639,7 @@ checksum = "67c78a4d8fdf9953a5c9d458f9efe940fd97a0cab0941c075a813ac594733827"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -647,9 +647,9 @@ name = "equilibrium"
 version = "1.6.10"
 dependencies = [
  "clap-sys",
- "shared-analysis",
- "shared-dsp",
- "shared-ui",
+ "lx-analysis",
+ "lx-dsp",
+ "lx-ui",
  "tracing",
  "truce",
  "truce-clap",
@@ -702,9 +702,9 @@ dependencies = [
 
 [[package]]
 name = "fastrand"
-version = "2.4.1"
+version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
+checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
 name = "fdeflate"
@@ -784,24 +784,24 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "futures-channel"
-version = "0.3.32"
+version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07bbe89c50d7a535e539b8c17bc0b49bdb77747034daa8087407d655f3f7cc1d"
+checksum = "262590f4fe6afeb0bc83be1daa64e52657fe185690a958af7f3ad0e92085c5ae"
 dependencies = [
  "futures-core",
 ]
 
 [[package]]
 name = "futures-core"
-version = "0.3.32"
+version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e3450815272ef58cec6d564423f6e755e25379b217b0bc688e295ba24df6b1d"
+checksum = "2cd50c473c80f6d7c3670a752354b8e569b1a7cbfdc0419ec88e5edad85e0dc7"
 
 [[package]]
 name = "futures-io"
-version = "0.3.32"
+version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cecba35d7ad927e23624b22ad55235f2239cfa44fd10428eecbeba6d6a717718"
+checksum = "4577ecaa3c4f96589d473f679a71b596316f6641bc350038b962a5daf0085d7a"
 
 [[package]]
 name = "futures-lite"
@@ -818,15 +818,15 @@ dependencies = [
 
 [[package]]
 name = "futures-task"
-version = "0.3.32"
+version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "037711b3d59c33004d3856fbdc83b99d4ff37a24768fa1be9ce3538a1cde4393"
+checksum = "b231ed28831efb4a61a08580c4bc233ec56bc009f4cd8f52da2c3cb97df0c109"
 
 [[package]]
 name = "futures-util"
-version = "0.3.32"
+version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "389ca41296e6190b48053de0321d02a77f32f8a5d2461dd38762c0593805c6d6"
+checksum = "a77a90a256fce34da66415271e30f94ee91c57b04b8a2c042d9cf3220179deaa"
 dependencies = [
  "futures-core",
  "futures-task",
@@ -898,9 +898,9 @@ dependencies = [
 
 [[package]]
 name = "glob"
-version = "0.3.3"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
+checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "hashbrown"
@@ -1032,7 +1032,7 @@ dependencies = [
  "quote",
  "rustc_version",
  "simd_cesu8",
- "syn",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -1051,7 +1051,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "38c0b942f458fe50cdac086d2f946512305e5631e720728f2a61aabcd47a6264"
 dependencies = [
  "quote",
- "syn",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -1089,9 +1089,9 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "libc"
-version = "0.2.186"
+version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
+checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "libloading"
@@ -1133,6 +1133,52 @@ name = "log"
 version = "0.4.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
+
+[[package]]
+name = "lx-analysis"
+version = "0.1.0"
+dependencies = [
+ "atomic_float",
+ "lx-shm",
+ "lx-vault",
+ "num-complex",
+ "realfft",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "lx-dsp"
+version = "0.1.1"
+dependencies = [
+ "ebur128",
+ "serde_json",
+]
+
+[[package]]
+name = "lx-shm"
+version = "0.1.0"
+dependencies = [
+ "shared_memory",
+]
+
+[[package]]
+name = "lx-ui"
+version = "2.0.1"
+dependencies = [
+ "vizia",
+]
+
+[[package]]
+name = "lx-vault"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "malloc_buf"
@@ -1181,10 +1227,10 @@ name = "meridian"
 version = "1.9.7"
 dependencies = [
  "clap-sys",
+ "lx-analysis",
+ "lx-dsp",
+ "lx-ui",
  "realfft",
- "shared-analysis",
- "shared-dsp",
- "shared-ui",
  "tracing",
  "truce",
  "truce-clap",
@@ -1603,7 +1649,7 @@ dependencies = [
  "phf_shared",
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -1693,7 +1739,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
 dependencies = [
  "proc-macro2",
- "syn",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -1722,18 +1768,18 @@ checksum = "dc375e1527247fe1a97d8b7156678dfe7c1af2fc075c9a4db3690ecd2a148068"
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.106"
+version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
+checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
 ]
 
 [[package]]
 name = "quote"
-version = "1.0.46"
+version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfbc457d0c7a0759a614551b11a6409e5951f6c7537be1f1b7682b9ae9230368"
+checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
 dependencies = [
  "proc-macro2",
 ]
@@ -1929,9 +1975,9 @@ checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 
 [[package]]
 name = "serde"
-version = "1.0.228"
+version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
+checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
 dependencies = [
  "serde_core",
  "serde_derive",
@@ -1939,29 +1985,29 @@ dependencies = [
 
 [[package]]
 name = "serde_core"
-version = "1.0.228"
+version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41d385c7d4ca58e59fc732af25c3983b67ac852c1a25000afe1175de458b67ad"
+checksum = "67dca2c9c51e58a4791a4b1ed58308b39c64224d349a935ab5039aa360942a48"
 dependencies = [
  "serde_derive",
 ]
 
 [[package]]
 name = "serde_derive"
-version = "1.0.228"
+version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79"
+checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 3.0.3",
 ]
 
 [[package]]
 name = "serde_json"
-version = "1.0.150"
+version = "1.0.151"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8014e44b4736ed0538adeecded0fce2a272f22dc9578a7eb6b2d9993c74cfb9"
+checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
 dependencies = [
  "itoa",
  "memchr",
@@ -1972,13 +2018,13 @@ dependencies = [
 
 [[package]]
 name = "serde_repr"
-version = "0.1.20"
+version = "0.1.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "175ee3e80ae9982737ca543e96133087cbd9a485eecc3bc4de9c1a37b47ea59c"
+checksum = "8d3b1629de253c70a0508c3899572da79ca359fdab27c7920ff00406df418906"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -2009,45 +2055,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "shared-analysis"
-version = "0.1.0"
-dependencies = [
- "atomic_float",
- "num-complex",
- "realfft",
- "serde",
- "serde_json",
- "shared-vault",
- "shm-hub",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "shared-dsp"
-version = "0.1.1"
-dependencies = [
- "ebur128",
- "serde_json",
-]
-
-[[package]]
-name = "shared-ui"
-version = "2.0.1"
-dependencies = [
- "vizia",
-]
-
-[[package]]
-name = "shared-vault"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "shared_memory"
 version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2071,13 +2078,6 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
-
-[[package]]
-name = "shm-hub"
-version = "0.1.0"
-dependencies = [
- "shared_memory",
-]
 
 [[package]]
 name = "signal-hook-registry"
@@ -2156,7 +2156,7 @@ checksum = "044dd2233c9717a74f75197f3e7f0a966db2127c0ffb5e05013b480a9b75b2c7"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -2207,6 +2207,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "syn"
+version = "3.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53e9bae58849f64dfa4f5d5ae372c8341f7305f82a3868709269343628b659a3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
 name = "sys-locale"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2241,22 +2252,22 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.18"
+version = "2.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4288b5bcbc7920c07a1149a35cf9590a2aa808e0bc1eafaade0b80947865fbc4"
+checksum = "09a43598840e33d5b0331f38c5e30d13bb11c11210a4b58f0d9b18a5a5eefcd9"
 dependencies = [
  "thiserror-impl",
 ]
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.18"
+version = "2.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ebc4ee7f67670e9b64d05fa4253e753e016c6c95ff35b89b7941d6b856dec1d5"
+checksum = "43cbfe0cf76104d42a574802844187e84a305e531ed54455f11fbde0f10541cd"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -2393,7 +2404,7 @@ checksum = "7490cfa5ec963746568740651ac6781f701c9c5ea257c58e057f3ba8cf69e8da"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -2447,8 +2458,8 @@ dependencies = [
 
 [[package]]
 name = "truce"
-version = "6.1.9"
-source = "git+https://github.com/LX-Audiolabs/truce?branch=main#f8cab31e8f792ecf2ff1d99995568f77979277a3"
+version = "6.3.0"
+source = "git+https://github.com/LX-Audiolabs/truce?branch=main#55f6318d1ea62a11bd9e37d299d541bd2363786a"
 dependencies = [
  "truce-core",
  "truce-derive",
@@ -2460,8 +2471,8 @@ dependencies = [
 
 [[package]]
 name = "truce-build"
-version = "6.1.9"
-source = "git+https://github.com/LX-Audiolabs/truce?branch=main#f8cab31e8f792ecf2ff1d99995568f77979277a3"
+version = "6.3.0"
+source = "git+https://github.com/LX-Audiolabs/truce?branch=main#55f6318d1ea62a11bd9e37d299d541bd2363786a"
 dependencies = [
  "base64",
  "serde",
@@ -2471,8 +2482,8 @@ dependencies = [
 
 [[package]]
 name = "truce-clap"
-version = "6.1.9"
-source = "git+https://github.com/LX-Audiolabs/truce?branch=main#f8cab31e8f792ecf2ff1d99995568f77979277a3"
+version = "6.3.0"
+source = "git+https://github.com/LX-Audiolabs/truce?branch=main#55f6318d1ea62a11bd9e37d299d541bd2363786a"
 dependencies = [
  "clap-sys",
  "crossbeam-queue",
@@ -2484,8 +2495,8 @@ dependencies = [
 
 [[package]]
 name = "truce-core"
-version = "6.1.9"
-source = "git+https://github.com/LX-Audiolabs/truce?branch=main#f8cab31e8f792ecf2ff1d99995568f77979277a3"
+version = "6.3.0"
+source = "git+https://github.com/LX-Audiolabs/truce?branch=main#55f6318d1ea62a11bd9e37d299d541bd2363786a"
 dependencies = [
  "crossbeam-queue",
  "crossbeam-utils",
@@ -2496,12 +2507,12 @@ dependencies = [
 
 [[package]]
 name = "truce-derive"
-version = "6.1.9"
-source = "git+https://github.com/LX-Audiolabs/truce?branch=main#f8cab31e8f792ecf2ff1d99995568f77979277a3"
+version = "6.3.0"
+source = "git+https://github.com/LX-Audiolabs/truce?branch=main#55f6318d1ea62a11bd9e37d299d541bd2363786a"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.119",
  "toml",
  "truce-build",
  "truce-params",
@@ -2510,8 +2521,8 @@ dependencies = [
 
 [[package]]
 name = "truce-driver"
-version = "6.1.9"
-source = "git+https://github.com/LX-Audiolabs/truce?branch=main#f8cab31e8f792ecf2ff1d99995568f77979277a3"
+version = "6.3.0"
+source = "git+https://github.com/LX-Audiolabs/truce?branch=main#55f6318d1ea62a11bd9e37d299d541bd2363786a"
 dependencies = [
  "truce-core",
  "truce-params",
@@ -2519,13 +2530,13 @@ dependencies = [
 
 [[package]]
 name = "truce-font"
-version = "6.1.9"
-source = "git+https://github.com/LX-Audiolabs/truce?branch=main#f8cab31e8f792ecf2ff1d99995568f77979277a3"
+version = "6.3.0"
+source = "git+https://github.com/LX-Audiolabs/truce?branch=main#55f6318d1ea62a11bd9e37d299d541bd2363786a"
 
 [[package]]
 name = "truce-gui-types"
-version = "6.1.9"
-source = "git+https://github.com/LX-Audiolabs/truce?branch=main#f8cab31e8f792ecf2ff1d99995568f77979277a3"
+version = "6.3.0"
+source = "git+https://github.com/LX-Audiolabs/truce?branch=main#55f6318d1ea62a11bd9e37d299d541bd2363786a"
 dependencies = [
  "objc2",
  "truce-core",
@@ -2533,8 +2544,8 @@ dependencies = [
 
 [[package]]
 name = "truce-gui-utils"
-version = "6.1.9"
-source = "git+https://github.com/LX-Audiolabs/truce?branch=main#f8cab31e8f792ecf2ff1d99995568f77979277a3"
+version = "6.3.0"
+source = "git+https://github.com/LX-Audiolabs/truce?branch=main#55f6318d1ea62a11bd9e37d299d541bd2363786a"
 dependencies = [
  "objc",
  "raw-window-handle 0.5.2",
@@ -2543,8 +2554,8 @@ dependencies = [
 
 [[package]]
 name = "truce-loader"
-version = "6.1.9"
-source = "git+https://github.com/LX-Audiolabs/truce?branch=main#f8cab31e8f792ecf2ff1d99995568f77979277a3"
+version = "6.3.0"
+source = "git+https://github.com/LX-Audiolabs/truce?branch=main#55f6318d1ea62a11bd9e37d299d541bd2363786a"
 dependencies = [
  "crc32fast",
  "libloading 0.9.0",
@@ -2558,8 +2569,8 @@ dependencies = [
 
 [[package]]
 name = "truce-lv2"
-version = "6.1.9"
-source = "git+https://github.com/LX-Audiolabs/truce?branch=main#f8cab31e8f792ecf2ff1d99995568f77979277a3"
+version = "6.3.0"
+source = "git+https://github.com/LX-Audiolabs/truce?branch=main#55f6318d1ea62a11bd9e37d299d541bd2363786a"
 dependencies = [
  "base64",
  "objc",
@@ -2571,16 +2582,16 @@ dependencies = [
 
 [[package]]
 name = "truce-params"
-version = "6.1.9"
-source = "git+https://github.com/LX-Audiolabs/truce?branch=main#f8cab31e8f792ecf2ff1d99995568f77979277a3"
+version = "6.3.0"
+source = "git+https://github.com/LX-Audiolabs/truce?branch=main#55f6318d1ea62a11bd9e37d299d541bd2363786a"
 dependencies = [
  "bitflags 2.13.1",
 ]
 
 [[package]]
 name = "truce-plugin"
-version = "6.1.9"
-source = "git+https://github.com/LX-Audiolabs/truce?branch=main#f8cab31e8f792ecf2ff1d99995568f77979277a3"
+version = "6.3.0"
+source = "git+https://github.com/LX-Audiolabs/truce?branch=main#55f6318d1ea62a11bd9e37d299d541bd2363786a"
 dependencies = [
  "truce-core",
  "truce-gui-types",
@@ -2589,8 +2600,8 @@ dependencies = [
 
 [[package]]
 name = "truce-test"
-version = "6.1.9"
-source = "git+https://github.com/LX-Audiolabs/truce?branch=main#f8cab31e8f792ecf2ff1d99995568f77979277a3"
+version = "6.3.0"
+source = "git+https://github.com/LX-Audiolabs/truce?branch=main#55f6318d1ea62a11bd9e37d299d541bd2363786a"
 dependencies = [
  "png",
  "toml",
@@ -2603,13 +2614,13 @@ dependencies = [
 
 [[package]]
 name = "truce-utils"
-version = "6.1.9"
-source = "git+https://github.com/LX-Audiolabs/truce?branch=main#f8cab31e8f792ecf2ff1d99995568f77979277a3"
+version = "6.3.0"
+source = "git+https://github.com/LX-Audiolabs/truce?branch=main#55f6318d1ea62a11bd9e37d299d541bd2363786a"
 
 [[package]]
 name = "truce-vizia"
-version = "6.1.9"
-source = "git+https://github.com/LX-Audiolabs/truce?branch=main#f8cab31e8f792ecf2ff1d99995568f77979277a3"
+version = "6.3.0"
+source = "git+https://github.com/LX-Audiolabs/truce?branch=main#55f6318d1ea62a11bd9e37d299d541bd2363786a"
 dependencies = [
  "log",
  "raw-window-handle 0.6.2",
@@ -2622,8 +2633,8 @@ dependencies = [
 
 [[package]]
 name = "truce-vst3"
-version = "6.1.9"
-source = "git+https://github.com/LX-Audiolabs/truce?branch=main#f8cab31e8f792ecf2ff1d99995568f77979277a3"
+version = "6.3.0"
+source = "git+https://github.com/LX-Audiolabs/truce?branch=main#55f6318d1ea62a11bd9e37d299d541bd2363786a"
 dependencies = [
  "cc",
  "crossbeam-queue",
@@ -2690,7 +2701,7 @@ checksum = "a1249a628de3ad34b821ecb1001355bca3940bcb2f88558f1a8bd82e977f75b5"
 dependencies = [
  "proc-macro-hack",
  "quote",
- "syn",
+ "syn 2.0.119",
  "unic-langid-impl",
 ]
 
@@ -2732,7 +2743,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 [[package]]
 name = "vizia"
 version = "0.4.0"
-source = "git+https://github.com/vizia/vizia?branch=main#7fa57f3213d67fc675775b522366e537b881b4b9"
+source = "git+https://github.com/vizia/vizia?branch=main#1a55cb12b522943a103ff23a0890c7cac5fadfdc"
 dependencies = [
  "skia-safe",
  "vizia_baseview",
@@ -2755,7 +2766,7 @@ dependencies = [
 [[package]]
 name = "vizia_core"
 version = "0.4.0"
-source = "git+https://github.com/vizia/vizia?branch=main#7fa57f3213d67fc675775b522366e537b881b4b9"
+source = "git+https://github.com/vizia/vizia?branch=main#1a55cb12b522943a103ff23a0890c7cac5fadfdc"
 dependencies = [
  "accesskit",
  "bitflags 2.13.1",
@@ -2785,12 +2796,12 @@ dependencies = [
 [[package]]
 name = "vizia_id"
 version = "0.4.0"
-source = "git+https://github.com/vizia/vizia?branch=main#7fa57f3213d67fc675775b522366e537b881b4b9"
+source = "git+https://github.com/vizia/vizia?branch=main#1a55cb12b522943a103ff23a0890c7cac5fadfdc"
 
 [[package]]
 name = "vizia_input"
 version = "0.4.0"
-source = "git+https://github.com/vizia/vizia?branch=main#7fa57f3213d67fc675775b522366e537b881b4b9"
+source = "git+https://github.com/vizia/vizia?branch=main#1a55cb12b522943a103ff23a0890c7cac5fadfdc"
 dependencies = [
  "bitflags 2.13.1",
  "keyboard-types",
@@ -2800,7 +2811,7 @@ dependencies = [
 [[package]]
 name = "vizia_reactive"
 version = "0.4.0"
-source = "git+https://github.com/vizia/vizia?branch=main#7fa57f3213d67fc675775b522366e537b881b4b9"
+source = "git+https://github.com/vizia/vizia?branch=main#1a55cb12b522943a103ff23a0890c7cac5fadfdc"
 dependencies = [
  "parking_lot",
  "smallvec",
@@ -2809,7 +2820,7 @@ dependencies = [
 [[package]]
 name = "vizia_storage"
 version = "0.4.0"
-source = "git+https://github.com/vizia/vizia?branch=main#7fa57f3213d67fc675775b522366e537b881b4b9"
+source = "git+https://github.com/vizia/vizia?branch=main#1a55cb12b522943a103ff23a0890c7cac5fadfdc"
 dependencies = [
  "vizia_id",
 ]
@@ -2817,7 +2828,7 @@ dependencies = [
 [[package]]
 name = "vizia_style"
 version = "0.4.0"
-source = "git+https://github.com/vizia/vizia?branch=main#7fa57f3213d67fc675775b522366e537b881b4b9"
+source = "git+https://github.com/vizia/vizia?branch=main#1a55cb12b522943a103ff23a0890c7cac5fadfdc"
 dependencies = [
  "bitflags 2.13.1",
  "cssparser",
@@ -2832,7 +2843,7 @@ dependencies = [
 [[package]]
 name = "vizia_window"
 version = "0.4.0"
-source = "git+https://github.com/vizia/vizia?branch=main#7fa57f3213d67fc675775b522366e537b881b4b9"
+source = "git+https://github.com/vizia/vizia?branch=main#1a55cb12b522943a103ff23a0890c7cac5fadfdc"
 dependencies = [
  "bitflags 2.13.1",
  "vizia_input",
@@ -2905,7 +2916,7 @@ dependencies = [
  "bumpalo",
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.119",
  "wasm-bindgen-shared",
 ]
 
@@ -3034,7 +3045,7 @@ checksum = "053e2e040ab57b9dc951b72c264860db7eb3b0200ba345b4e4c3b14f67855ddf"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -3045,7 +3056,7 @@ checksum = "3f316c4a2570ba26bbec722032c4099d8c8bc095efccdc15688708623367e358"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -3344,7 +3355,7 @@ dependencies = [
  "proc-macro-crate",
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.119",
  "zbus_names",
  "zvariant",
  "zvariant_utils",
@@ -3364,22 +3375,22 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.54"
+version = "0.8.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7cbbc0a705a0fd05cc3676525980d2bf5a9bc4adac6d6475209a7887cf59d19"
+checksum = "b5a105cd7b140f6eeec8acff2ea38135d3cab283ada58540f629fe51e46696eb"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.54"
+version = "0.8.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2e817b7b52d0c7358d3246da9d69935ebb18116b2b102b4230dac079b4862f5"
+checksum = "0fe976fb70c78cd64cccfe3a6fc142244e8a77b70959b30faf9d0ac37ee228eb"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -3427,7 +3438,7 @@ dependencies = [
  "proc-macro-crate",
  "proc-macro2",
  "quote",
- "syn",
+ "syn 2.0.119",
  "zvariant_utils",
 ]
 
@@ -3440,6 +3451,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde",
- "syn",
+ "syn 2.0.119",
  "winnow 0.7.15",
 ]

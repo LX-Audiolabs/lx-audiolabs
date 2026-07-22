@@ -17,12 +17,12 @@ use std::time::{Duration, Instant};
 use vizia::prelude::*;
 use vizia::vg;
 
-use shared_analysis::SharedState;
+use lx_analysis::SharedState;
 use truce_vizia::ParamLens;
 
 use crate::vizia_canvas::EqSpectrumView;
 use crate::{EquilibriumParams, EquilibriumParamsParamId as K};
-use shared_ui::{
+use lx_ui::{
     Gesture, GoniometerView, HSliderView, KnobView, StereoMeterView, fmt_db, format_knob_value,
 };
 
@@ -98,13 +98,13 @@ fn load_presets(vault_path: Option<&str>) -> Vec<(String, Option<PathBuf>, EqPre
             // Band power is normalized per octave in the DSP, so pink noise
             // reads flat; the Pink Noise reference target is therefore flat too.
             bands: [0.0, 0.0, 0.0, 0.0, 0.0],
-            tolerances: shared_analysis::DEFAULT_TOLERANCES,
+            tolerances: lx_analysis::DEFAULT_TOLERANCES,
             pans: [0.0; 5],
             widths: [100.0; 5],
             mono_floor_hz: 0.0,
         },
     )];
-    let custom = shared_analysis::list_custom_presets("Equilibrium", vault_path);
+    let custom = lx_analysis::list_custom_presets("Equilibrium", vault_path);
     for (name, path, profile) in custom {
         presets.push((
             name,
@@ -326,7 +326,7 @@ impl View for Ticker {
                 false
             }
         };
-        let profile = shared_ui::ticker_profile_enabled();
+        let profile = lx_ui::ticker_profile_enabled();
         let t0_total = if profile { Some(Instant::now()) } else { None };
         let t0_tick = if profile && due { Some(Instant::now()) } else { None };
         let mut telemetry_changed = false;
@@ -341,7 +341,7 @@ impl View for Ticker {
         cx.needs_redraw();
         let total_us = t0_total.map(|t| t.elapsed().as_micros() as u64).unwrap_or(0);
         if profile {
-            shared_ui::report_ticker(tick_us, total_us);
+            lx_ui::report_ticker(tick_us, total_us);
         }
     }
 }
@@ -358,7 +358,7 @@ fn styled_toggle(cx: &mut Context, lens: ParamLens<EquilibriumParams>, id: K, la
     Binding::new(cx, sig, move |cx| {
         let active = lens.get(id) > 0.5;
         let lens = lens.clone();
-        shared_ui::toggle_button(cx, label, active, move |_cx| {
+        lx_ui::toggle_button(cx, label, active, move |_cx| {
             let now = lens.get(id) <= 0.5;
             let norm = if now { 1.0 } else { 0.0 };
             lens.automate(id, norm);
@@ -384,7 +384,7 @@ fn styled_toggle_dyn(
     Binding::new(cx, sig, move |cx| {
         let active = lens.get(id) > 0.5;
         let lens = lens.clone();
-        shared_ui::toggle_button(
+        lx_ui::toggle_button(
             cx,
             if active { label_on } else { label_off },
             active,
@@ -417,13 +417,13 @@ pub fn build(
     shared: Arc<SharedState>,
     params: Arc<EquilibriumParams>,
 ) {
-    shared_ui::load_theme(cx);
-    let config = shared_analysis::load_config("Equilibrium");
+    lx_ui::load_theme(cx);
+    let config = lx_analysis::load_config("Equilibrium");
     let presets = load_presets(config.vault_path.as_deref());
     let selected_idx = Some(0usize);
 
     let mut target_levels = [0.0f32; 5];
-    let mut target_tolerances = shared_analysis::DEFAULT_TOLERANCES;
+    let mut target_tolerances = lx_analysis::DEFAULT_TOLERANCES;
     if let Some(idx) = selected_idx {
         let p = &presets[idx].2;
         target_levels = p.bands;
@@ -889,9 +889,9 @@ fn build_setup_form(
                 .on_press(move |_cx| {
                     let vp = vault_path_input.get().trim().to_string();
                     if !vp.is_empty() {
-                        let mut cfg = shared_analysis::load_config("Equilibrium");
+                        let mut cfg = lx_analysis::load_config("Equilibrium");
                         cfg.vault_path = Some(vp.clone());
-                        let _ = shared_analysis::save_config("Equilibrium", &cfg);
+                        let _ = lx_analysis::save_config("Equilibrium", &cfg);
                         let mut acc = accum.lock().unwrap();
                         acc.vault_path = Some(vp.clone());
                         acc.presets = load_presets(Some(&vp));
@@ -1119,7 +1119,7 @@ fn build_right_sidebar(
                     Binding::new(cx, sig, move |cx| {
                         let active = lens_pm.get(K::PreMasterActive) > 0.5;
                         let lens_pm = lens_pm.clone();
-                        shared_ui::toggle_button_small(cx, "PRE-MASTER", active, move |_cx| {
+                        lx_ui::toggle_button_small(cx, "PRE-MASTER", active, move |_cx| {
                             let now = lens_pm.get(K::PreMasterActive) <= 0.5;
                             let norm = if now { 1.0 } else { 0.0 };
                             lens_pm.automate(K::PreMasterActive, norm);
@@ -1196,12 +1196,12 @@ fn build_right_sidebar(
                     } else if t.auto_loud_measuring {
                         rgb(1.0, 0.8, 0.0)
                     } else if is_active {
-                        shared_ui::AMBER
+                        lx_ui::AMBER
                     } else {
-                        shared_ui::IDLE_BG
+                        lx_ui::IDLE_BG
                     }
                 }))
-                .height(Pixels(shared_ui::BUTTON_HEIGHT));
+                .height(Pixels(lx_ui::BUTTON_HEIGHT));
             })
             .width(Auto)
             .height(Auto)
@@ -1224,7 +1224,7 @@ fn build_right_sidebar(
                 t.balance,
             )
             .width(Stretch(1.0))
-            .height(Pixels(shared_ui::STEREO_METER_HEIGHT));
+            .height(Pixels(lx_ui::STEREO_METER_HEIGHT));
 
             let shared_l = shared_reset.clone();
             let shared_r = shared_reset.clone();
@@ -1305,7 +1305,7 @@ fn build_footer(
                     Binding::new(cx, sig, move |cx| {
                         let active = lens_listen.get(K::ListenActive) > 0.5;
                         let lens_listen = lens_listen.clone();
-                        shared_ui::toggle_button_big_amber_text(
+                        lx_ui::toggle_button_big_amber_text(
                             cx,
                             if active { "LISTEN ON" } else { "LISTEN" },
                             active,
@@ -1327,7 +1327,7 @@ fn build_footer(
                 // APPLY / RESET are always clickable so they give hover
                 // feedback; the actual work is gated by the current Listen
                 // state read fresh from the shared param signal.
-                shared_ui::push_button_big(cx, "APPLY ANALYSIS", move |_cx| {
+                lx_ui::push_button_big(cx, "APPLY ANALYSIS", move |_cx| {
                     if listen_sig.get() <= 0.5 {
                         return;
                     }
@@ -1343,7 +1343,7 @@ fn build_footer(
                 })
                 .width(Pixels(120.0));
 
-                shared_ui::push_button_big(cx, "RESET ANALYSIS", move |_cx| {
+                lx_ui::push_button_big(cx, "RESET ANALYSIS", move |_cx| {
                     if listen_sig.get() <= 0.5 {
                         return;
                     }
@@ -1412,7 +1412,7 @@ fn build_footer(
         .width(Auto)
         .padding(Pixels(5.0));
 
-        shared_ui::danger_button_big(cx, "RESET", move |_cx| {
+        lx_ui::danger_button_big(cx, "RESET", move |_cx| {
             reset_all(
                 &lens,
                 &shared,
@@ -1460,7 +1460,7 @@ fn do_save_preset(
 
     let dir = match &acc.vault_path {
         Some(vp) if !vp.is_empty() => std::path::PathBuf::from(vp),
-        _ => shared_analysis::get_plugin_dir("Equilibrium").join("presets"),
+        _ => lx_analysis::get_plugin_dir("Equilibrium").join("presets"),
     };
     let _ = std::fs::create_dir_all(&dir);
     let safe = name.replace(
@@ -1469,7 +1469,7 @@ fn do_save_preset(
     );
     let fp = dir.join(format!("{safe}.md"));
 
-    let prof = shared_analysis::Profile {
+    let prof = lx_analysis::Profile {
         name: name.clone(),
         bands,
         tolerances,
@@ -1488,9 +1488,9 @@ fn do_save_preset(
             lens.get_plain(K::HighWidth),
         ],
         mono_floor_hz: lens.get_plain(K::MonoFloor),
-        ..shared_analysis::Profile::default()
+        ..lx_analysis::Profile::default()
     };
-    let md = shared_analysis::export_preset_to_markdown(&prof);
+    let md = lx_analysis::export_preset_to_markdown(&prof);
     if std::fs::write(&fp, &md).is_ok() {
         acc.presets = load_presets(acc.vault_path.as_deref());
         // Drop before params_gen.update(): the preset-list Binding it
@@ -1558,7 +1558,7 @@ fn reset_all(
     let (target_levels, target_tolerances) = if let Some(prof) = acc.presets.first().map(|p| &p.2) {
         (prof.bands, prof.tolerances)
     } else {
-        ([0.0f32; 5], shared_analysis::DEFAULT_TOLERANCES)
+        ([0.0f32; 5], lx_analysis::DEFAULT_TOLERANCES)
     };
     let has_presets = !acc.presets.is_empty();
     drop(acc);

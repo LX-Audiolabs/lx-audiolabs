@@ -25,13 +25,12 @@ truce-vst3   = { workspace = true, optional = true }
 truce-lv2    = { workspace = true, optional = true }
 truce-loader = { workspace = true }
 truce-vizia  = { workspace = true }
-# Same source as truce-vizia (LX-Audiolabs/vizia-audio) — one package identity.
-vizia        = { workspace = true }
+vizia = { workspace = true }
 clap-sys     = { workspace = true, optional = true }
 
-shared-dsp      = { path = "../../shared-dsp" }
-shared-analysis = { path = "../../shared-analysis" }
-shared-ui       = { path = "../../shared-ui" }
+lx-dsp      = { path = "../../crates/lx-dsp" }
+lx-analysis = { path = "../../crates/lx-analysis" }
+lx-ui       = { path = "../../crates/lx-ui" }
 serde           = { version = "1", features = ["derive"] }
 serde_json      = "1"
 tracing         = "0.1"

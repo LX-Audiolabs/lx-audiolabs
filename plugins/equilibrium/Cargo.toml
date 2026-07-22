@@ -29,13 +29,16 @@ truce-vst3   = { workspace = true, optional = true }
 truce-lv2    = { workspace = true, optional = true }
 truce-loader = { workspace = true }
 truce-vizia  = { workspace = true }
-# Same source as truce-vizia (LX-Audiolabs/vizia-audio) — one package identity.
-vizia        = { workspace = true }
+# Same path truce-vizia + lx-ui pin (vizia-audio). Must be identical so
+# `Context`/
+# `Canvas`/etc are the same type, not just the same version number from a
+# different source (crates.io vs this git rev would be distinct types).
+vizia = { workspace = true }
 clap-sys     = { workspace = true, optional = true }
 
-shared-dsp      = { path = "../../shared-dsp" }
-shared-analysis = { path = "../../shared-analysis" }
-shared-ui       = { path = "../../shared-ui" }
+lx-dsp      = { path = "../../crates/lx-dsp" }
+lx-analysis = { path = "../../crates/lx-analysis" }
+lx-ui       = { path = "../../crates/lx-ui" }
 tracing         = "0.1"
 
 [dev-dependencies]

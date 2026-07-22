@@ -1,12 +1,12 @@
 [workspace]
 members = [
-    "baseview-local",
-    "vizia-baseview-local",
-    "shared-dsp",
-    "shared-analysis",
-    "shared-vault",
-    "shared-ui",
-    "shm-hub",
+    "vendor/baseview",
+    "vendor/vizia-baseview",
+    "crates/lx-dsp",
+    "crates/lx-analysis",
+    "crates/lx-vault",
+    "crates/lx-ui",
+    "crates/lx-shm",
     "plugins/aether",
     "plugins/equilibrium",
     "plugins/meridian",
@@ -44,8 +44,8 @@ debug = "full"
 
 # Replace upstream vizia_baseview with our fork (parented-window fixes).
 [patch."https://github.com/vizia/vizia"]
-vizia_baseview = { path = "vizia-baseview-local" }
+vizia_baseview = { path = "vendor/vizia-baseview" }
 
 # Replace crates.io baseview with vendored copy (new_parented() REAPER fix).
 [patch.crates-io]
-baseview = { path = "baseview-local" }
+baseview = { path = "vendor/baseview" }

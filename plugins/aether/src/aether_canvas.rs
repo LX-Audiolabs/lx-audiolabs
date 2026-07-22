@@ -9,7 +9,7 @@
 use vizia::prelude::*;
 use vizia::vg;
 
-use shared_ui::{col, fill_paint, fill_text, stroke_paint};
+use lx_ui::{col, fill_paint, fill_text, stroke_paint};
 
 pub struct EqCurveView {
     pub points: Vec<(f32, f32)>, // (x_norm 0..1, db) — 240 points

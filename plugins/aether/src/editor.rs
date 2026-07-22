@@ -18,13 +18,13 @@ use std::time::{Duration, Instant};
 use vizia::prelude::*;
 use vizia::vg;
 
-use shared_analysis::SharedState;
-use shared_dsp::Biquad;
+use lx_analysis::SharedState;
+use lx_dsp::Biquad;
 use truce_vizia::ParamLens;
 
 use crate::aether_canvas::EqCurveView;
 use crate::{AetherParams, AetherParamsParamId};
-use shared_ui::{Gesture, KnobView};
+use lx_ui::{Gesture, KnobView};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -225,7 +225,7 @@ fn default_presets() -> Vec<(String, Option<PathBuf>, AetherProfile)> {
 // ─── Preset parser ───────────────────────────────────────────────────────────
 
 fn parse_aether_preset(content: &str) -> Option<AetherProfile> {
-    match shared_analysis::preset_plugin_name(content).as_deref() {
+    match lx_analysis::preset_plugin_name(content).as_deref() {
         Some("aether") => {}
         _ => return None,
     }
@@ -398,7 +398,7 @@ fn apply_profile(_params: &AetherParams, lens: &ParamLens<AetherParams>, p: &Aet
 }
 
 fn last_profile_cache_path() -> PathBuf {
-    shared_analysis::get_plugin_dir("Aether").join("last_profile.json")
+    lx_analysis::get_plugin_dir("Aether").join("last_profile.json")
 }
 
 fn load_cached_last_profile() -> Option<AetherProfile> {
@@ -412,10 +412,10 @@ fn load_cached_last_profile() -> Option<AetherProfile> {
 }
 
 fn save_last_preset(vault_path: &Option<String>, profile: &AetherProfile) {
-    let mut cfg = shared_analysis::load_config("Aether");
+    let mut cfg = lx_analysis::load_config("Aether");
     cfg.vault_path = vault_path.clone();
     cfg.last_preset = Some(profile.name.clone());
-    let _ = shared_analysis::save_config("Aether", &cfg);
+    let _ = lx_analysis::save_config("Aether", &cfg);
     let path = last_profile_cache_path();
     let _ = std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")));
     if let Ok(content) = serde_json::to_string_pretty(profile) {
@@ -623,7 +623,7 @@ impl View for Ticker {
                 false
             }
         };
-        let profile = shared_ui::ticker_profile_enabled();
+        let profile = lx_ui::ticker_profile_enabled();
         let t0_total = if profile { Some(Instant::now()) } else { None };
         let t0_tick = if profile && due { Some(Instant::now()) } else { None };
         let mut telemetry_changed = false;
@@ -733,7 +733,7 @@ impl View for Ticker {
         cx.needs_redraw();
         let total_us = t0_total.map(|t| t.elapsed().as_micros() as u64).unwrap_or(0);
         if profile {
-            shared_ui::report_ticker(tick_us, total_us);
+            lx_ui::report_ticker(tick_us, total_us);
         }
     }
 }
@@ -760,8 +760,8 @@ pub fn build(
     params: Arc<AetherParams>,
     shared: Arc<SharedState>,
 ) {
-    shared_ui::load_theme(cx);
-    let config = shared_analysis::load_config("Aether");
+    lx_ui::load_theme(cx);
+    let config = lx_analysis::load_config("Aether");
     let vault_path_init = config.vault_path.clone();
     let vault_path_init_for_signal = vault_path_init.clone();
 
@@ -992,19 +992,19 @@ pub fn build(
 
             Element::new(cx).width(Pixels(6.0));
 
-            // Buttons: SAVE, SETUP, BYPASS — all from shared-ui
+            // Buttons: SAVE, SETUP, BYPASS — all from lx-ui
             let params_save = params.clone();
             let vp_save = vault_path_signal;
             let preset_opts_save = preset_opts_for_body.clone();
             let preset_cache_save = preset_cache_for_body.clone();
             let pending_presets_save = pending_presets_for_body.clone();
-            shared_ui::push_button_big(cx, "SAVE", move |_cx| {
+            lx_ui::push_button_big(cx, "SAVE", move |_cx| {
                 let name = preset_name_signal.get();
                 if !name.is_empty() {
                     let md = build_profile_md(&params_save);
                     let dir = match vp_save.get() {
                         Some(vp) if !vp.is_empty() => std::path::PathBuf::from(vp),
-                        _ => shared_analysis::get_plugin_dir("Aether").join("presets"),
+                        _ => lx_analysis::get_plugin_dir("Aether").join("presets"),
                     };
                     let _ = std::fs::create_dir_all(&dir);
                     let fp = dir.join(format!("{name}.md"));
@@ -1039,18 +1039,18 @@ pub fn build(
                 }
             });
 
-            shared_ui::push_button_big(cx, "SETUP", move |_cx| {
+            lx_ui::push_button_big(cx, "SETUP", move |_cx| {
                 show_setup.update(|v| *v = !*v);
             });
 
-            // BYPASS — standard shared-ui toggle, amber when active
+            // BYPASS — standard lx-ui toggle, amber when active
             {
                 let sig = bypass_sig;
                 let lens_bypass = lens.clone();
                 Binding::new(cx, sig, move |cx| {
                     let active = lens_bypass.get(AetherParamsParamId::Bypass) > 0.5;
                     let lens_bypass = lens_bypass.clone();
-                    shared_ui::toggle_button_big(cx, "BYPASS", active, move |_cx| {
+                    lx_ui::toggle_button_big(cx, "BYPASS", active, move |_cx| {
                         let now = lens_bypass.get(AetherParamsParamId::Bypass) <= 0.5;
                         let norm = if now { 1.0 } else { 0.0 };
                         lens_bypass.automate(AetherParamsParamId::Bypass, norm);
@@ -1119,9 +1119,9 @@ fn build_setup(
                     let p = vault_input.get().trim().to_string();
                     let new = if p.is_empty() { None } else { Some(p) };
                     vault_path.set(new.clone());
-                    let mut cfg = shared_analysis::load_config("Aether");
+                    let mut cfg = lx_analysis::load_config("Aether");
                     cfg.vault_path = new;
-                    let _ = shared_analysis::save_config("Aether", &cfg);
+                    let _ = lx_analysis::save_config("Aether", &cfg);
                     show_setup.set(false);
                 });
                 small_button(cx, "CANCEL", move |_cx| show_setup.set(false));
@@ -1232,7 +1232,7 @@ fn build_band_column(
             type_signal.set(n);
         })
         .width(Pixels(56.0))
-        .height(Pixels(shared_ui::BUTTON_HEIGHT))
+        .height(Pixels(lx_ui::BUTTON_HEIGHT))
         .class("lx-btn")
         .toggle_class("active", Memo::new(move |_| type_signal.get() != 0));
 
@@ -1337,7 +1337,7 @@ fn build_blend_reset(
         Element::new(cx).height(Pixels(60.0));
 
         let lr = l.clone();
-        shared_ui::danger_button(cx, "RESET", move |_cx| {
+        lx_ui::danger_button(cx, "RESET", move |_cx| {
             for i in 0..5 {
                 let (fd, qd, td) = BAND_DEF[i];
                 set_eq_freq(&lr, i, fd);
@@ -1480,7 +1480,7 @@ fn build_crossfeed(cx: &mut Context, lens: &ParamLens<AetherParams>, _params: &A
                     realism_signal.set(next as f32 / 2.0);
                 })
                 .width(Pixels(110.0))
-                .height(Pixels(shared_ui::BUTTON_HEIGHT))
+                .height(Pixels(lx_ui::BUTTON_HEIGHT))
                 .class("lx-btn")
                 .toggle_class("active", n != 0);
             }

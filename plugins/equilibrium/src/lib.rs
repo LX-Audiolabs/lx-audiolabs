@@ -10,7 +10,7 @@
 //   → per-band: Gain → M/S Width → Pan → Solo
 //   → sum → Mono Floor (Side HPF) → Mono/Delta → Gain → Auto Gain → clamp
 
-use shared_dsp::state_migration;
+use lx_dsp::state_migration;
 use std::f32::consts::FRAC_PI_4;
 use std::sync::Arc;
 use truce::prelude::*;
@@ -18,8 +18,8 @@ use truce_core::editor::Editor;
 use truce_core::state::StateLoadError;
 use truce_vizia::ViziaEditor;
 
-use shared_analysis::{SCOPE_BUFFER_LEN, SharedState, SnapFFT, SnapMode};
-use shared_dsp::{AutoLoudMeter, Biquad, DBTP_CEILING, FtzDazGuard, LR2Crossover};
+use lx_analysis::{SCOPE_BUFFER_LEN, SharedState, SnapFFT, SnapMode};
+use lx_dsp::{AutoLoudMeter, Biquad, DBTP_CEILING, FtzDazGuard, LR2Crossover};
 
 mod editor;
 mod vizia_canvas;
