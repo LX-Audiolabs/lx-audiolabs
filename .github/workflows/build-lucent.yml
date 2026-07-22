@@ -50,7 +50,7 @@ jobs:
           mkdir -p target/bundled
           cp target/release/liblucent.so target/bundled/Lucent.clap
           cp target/release/liblucent_relay.so target/bundled/Lucent-Relay.clap
-          echo "✓ Created: Lucent.clap, Lucent-Relay.clap"
+          echo "[OK] Created: Lucent.clap, Lucent-Relay.clap"
       - uses: actions/upload-artifact@v6
         with:
           name: lucent-v${{ steps.version.outputs.version }}-linux
@@ -85,7 +85,7 @@ jobs:
           mkdir -p target/bundled
           cp target/release/liblucent.dylib target/bundled/Lucent.clap
           cp target/release/liblucent_relay.dylib target/bundled/Lucent-Relay.clap
-          echo "✓ Created: Lucent.clap, Lucent-Relay.clap"
+          echo "[OK] Created: Lucent.clap, Lucent-Relay.clap"
       - name: Sign CLAP bundles (ad-hoc)
         run: |
           codesign --force -s - target/bundled/Lucent.clap
@@ -126,7 +126,7 @@ jobs:
           mkdir -p target/bundled
           cp target/release/lucent.dll target/bundled/Lucent.clap
           cp target/release/lucent_relay.dll target/bundled/Lucent-Relay.clap
-          echo "✓ Created: Lucent.clap, Lucent-Relay.clap"
+          echo "[OK] Created: Lucent.clap, Lucent-Relay.clap"
       - uses: actions/upload-artifact@v6
         with:
           name: lucent-v${{ steps.version.outputs.version }}-win
