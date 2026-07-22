@@ -1,15 +1,15 @@
 //! Standalone Vizia profiler for shared canvas views.
 //!
 //! Stress-tests the Phase 2 optimizations by rendering several animated views
-//! and updating them every frame.  Set `SHARED_UI_NO_LAYER_CACHE=1` to run the
+//! Set `LX_UI_NO_LAYER_CACHE=1` to run the
 //! same workload without retained layer caching for an A/B comparison.  Set
-//! `SHARED_UI_PROFILE_LAYER_CACHE=1` to print per-call breakdown of static
+//! `LX_UI_PROFILE_LAYER_CACHE=1` to print per-call breakdown of static
 //! recording vs picture replay vs dynamic overlay.
 //!
 //! Run:
-//!     cargo run --release -p shared-ui --example profile
+//!     cargo run --release -p lx-ui --example profile
 //! No cache:
-//!     SHARED_UI_NO_LAYER_CACHE=1 cargo run --release -p shared-ui --example profile
+//!     LX_UI_NO_LAYER_CACHE=1 cargo run --release -p lx-ui --example profile
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -17,7 +17,7 @@ use std::time::Instant;
 
 use vizia::prelude::*;
 
-use shared_ui::{
+use lx_ui::{
     rgb, GoniometerView, SpectrumConfig, SpectrumCurve, SpectrumView, StereoMeterView,
 };
 
@@ -38,7 +38,7 @@ struct Telemetry {
     gonio_samples: Arc<Mutex<Vec<[f32; 2]>>>,
     gonio_write_pos: usize,
     spectrum: Vec<f32>,
-    eq_curve: shared_ui::EqCurve,
+    eq_curve: lx_ui::EqCurve,
 }
 
 fn main() {
@@ -59,7 +59,7 @@ fn main() {
             gonio_samples: gonio_samples.clone(),
             gonio_write_pos: 0,
             spectrum: vec![-90.0; spectrum_bins],
-            eq_curve: shared_ui::EqCurve {
+            eq_curve: lx_ui::EqCurve {
                 points: (0..240)
                     .map(|i| {
                         let x = i as f32 / 239.0;

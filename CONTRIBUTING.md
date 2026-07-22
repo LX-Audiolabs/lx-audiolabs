@@ -38,4 +38,4 @@ By opening a pull request, you agree:
 
 - Comments explain **why**, not what.
 - Follow existing patterns in the codebase.
-- `shared-dsp`, `shared-ui` changes need more discussion — open an issue first.
+- `lx-dsp`, `lx-ui` changes need more discussion — open an issue first.
