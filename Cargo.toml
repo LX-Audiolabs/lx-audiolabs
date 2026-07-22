@@ -24,7 +24,9 @@ truce-lv2       = { git = "https://github.com/LX-Audiolabs/truce", branch = "mai
 truce-loader    = { git = "https://github.com/LX-Audiolabs/truce", branch = "main" }
 truce-test      = { git = "https://github.com/LX-Audiolabs/truce", branch = "main" }
 truce-vizia     = { git = "https://github.com/LX-Audiolabs/truce", branch = "main" }
-vizia           = { git = "https://github.com/vizia/vizia", branch = "main", default-features = false, features = ["baseview"] }
+# clipboard = copypasta via vizia_core; without it Textbox Ctrl+V/C/X is a no-op
+# (Paste/Copy arms are #[cfg(feature = "clipboard")]). Needed for vault path paste.
+vizia           = { git = "https://github.com/vizia/vizia", branch = "main", default-features = false, features = ["baseview", "clipboard"] }
 clap-sys        = "0.5"
 time            = ">=0.3.47"
 

@@ -1542,6 +1542,7 @@ fn build_sidebar(
                         name,
                         sel,
                         selected_preset,
+                        preset_name_input,
                         accum_scroll.clone(),
                         lens_scroll.clone(),
                         params_scroll.clone(),
@@ -1566,12 +1567,14 @@ fn preset_list_item(
     name: String,
     selected: Option<usize>,
     selected_preset: Signal<Option<usize>>,
+    preset_name_input: Signal<String>,
     accum: Arc<Mutex<TickAccum>>,
     lens: ParamLens<MeridianParams>,
     params: Arc<MeridianParams>,
     params_gen: Signal<u32>,
 ) {
     let is_sel = selected == Some(idx);
+    let name_for_press = name.clone();
     Button::new(cx, move |cx| {
         Label::new(cx, format!("> {name}")).font_size(13.0)
     })
@@ -1583,6 +1586,8 @@ fn preset_list_item(
         };
         drop(acc);
         selected_preset.set(Some(idx));
+        // Match Aether: fill name field so SAVE overwrites the same preset.
+        preset_name_input.set(name_for_press.clone());
         apply_profile(&lens, &params, &prof);
         params_gen.update(|g| *g = g.wrapping_add(1));
     })

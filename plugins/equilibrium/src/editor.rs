@@ -766,6 +766,7 @@ fn build_sidebar(
                             name,
                             sel,
                             selected_preset,
+                            preset_name_input,
                             accum_scroll.clone(),
                             shared_scroll.clone(),
                             lens_scroll.clone(),
@@ -784,6 +785,7 @@ fn build_sidebar(
                             name,
                             sel,
                             selected_preset,
+                            preset_name_input,
                             accum_scroll.clone(),
                             shared_scroll.clone(),
                             lens_scroll.clone(),
@@ -809,12 +811,14 @@ fn preset_list_item(
     name: String,
     selected: Option<usize>,
     selected_preset: Signal<Option<usize>>,
+    preset_name_input: Signal<String>,
     accum: Arc<Mutex<TickAccum>>,
     shared: Arc<SharedState>,
     lens: ParamLens<EquilibriumParams>,
     params_gen: Signal<u32>,
 ) {
     let is_sel = selected == Some(idx);
+    let name_for_press = name.clone();
     Button::new(cx, move |cx| {
         Label::new(cx, format!("> {name}")).font_size(13.0)
     })
@@ -827,6 +831,8 @@ fn preset_list_item(
         drop(acc);
 
         selected_preset.set(Some(idx));
+        // Match Aether: fill name field so SAVE overwrites the same preset.
+        preset_name_input.set(name_for_press.clone());
         shared.selected_preset_index.store(idx, Ordering::Release);
         for b in 0..5 {
             shared.target_levels[b].store(prof.bands[b], Ordering::Release);
