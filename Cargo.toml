@@ -26,6 +26,7 @@ truce-test      = { git = "https://github.com/LX-Audiolabs/truce", branch = "mai
 truce-vizia     = { git = "https://github.com/LX-Audiolabs/truce", branch = "main" }
 # clipboard = copypasta via vizia_core; without it Textbox Ctrl+V/C/X is a no-op
 # (Paste/Copy arms are #[cfg(feature = "clipboard")]). Needed for vault path paste.
+# Linux also needs vizia/x11 (see lx-ui target deps) so copypasta exposes ClipboardContext.
 vizia           = { git = "https://github.com/vizia/vizia", branch = "main", default-features = false, features = ["baseview", "clipboard"] }
 clap-sys        = "0.5"
 time            = ">=0.3.47"
