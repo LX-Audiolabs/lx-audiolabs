@@ -80,6 +80,8 @@ jobs:
           mkdir -p target/bundled
           cp target/release/libmeridian.dylib target/bundled/Meridian.clap
           echo "✓ Created: Meridian.clap"
+      - name: Sign CLAP bundle (ad-hoc)
+        run: codesign --force -s - target/bundled/Meridian.clap
       - uses: actions/upload-artifact@v6
         with:
           name: meridian-v${{ steps.version.outputs.version }}-macos

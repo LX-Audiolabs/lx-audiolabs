@@ -80,6 +80,8 @@ jobs:
           mkdir -p target/bundled
           cp target/release/libaether.dylib target/bundled/Aether.clap
           echo "✓ Created: Aether.clap"
+      - name: Sign CLAP bundle (ad-hoc)
+        run: codesign --force -s - target/bundled/Aether.clap
       - uses: actions/upload-artifact@v6
         with:
           name: aether-v${{ steps.version.outputs.version }}-macos

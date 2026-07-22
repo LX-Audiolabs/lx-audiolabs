@@ -80,6 +80,8 @@ jobs:
           mkdir -p target/bundled
           cp target/release/libequilibrium.dylib target/bundled/Equilibrium.clap
           echo "✓ Created: Equilibrium.clap"
+      - name: Sign CLAP bundle (ad-hoc)
+        run: codesign --force -s - target/bundled/Equilibrium.clap
       - uses: actions/upload-artifact@v6
         with:
           name: equilibrium-v${{ steps.version.outputs.version }}-macos
