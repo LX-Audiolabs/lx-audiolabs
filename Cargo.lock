@@ -1412,6 +1412,50 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
+name = "lucent"
+version = "1.0.0"
+dependencies = [
+ "clap-sys",
+ "lx-analysis",
+ "lx-dsp",
+ "lx-ui",
+ "realfft",
+ "tracing",
+ "truce",
+ "truce-clap",
+ "truce-core",
+ "truce-loader",
+ "truce-lv2",
+ "truce-params",
+ "truce-test",
+ "truce-vizia",
+ "truce-vst3",
+ "vizia",
+]
+
+[[package]]
+name = "lucent-relay"
+version = "1.0.0"
+dependencies = [
+ "clap-sys",
+ "lx-analysis",
+ "lx-dsp",
+ "lx-ui",
+ "realfft",
+ "tracing",
+ "truce",
+ "truce-clap",
+ "truce-core",
+ "truce-loader",
+ "truce-lv2",
+ "truce-params",
+ "truce-test",
+ "truce-vizia",
+ "truce-vst3",
+ "vizia",
+]
+
+[[package]]
 name = "lx-analysis"
 version = "0.1.0"
 dependencies = [

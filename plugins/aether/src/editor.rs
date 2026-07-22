@@ -939,6 +939,31 @@ pub fn build(
                                 let sel_c = sel_name;
                                 let name_for_press = name_clone.clone();
                                 let cache_c = cache_popup.clone();
+                                // on_press_down (mousedown), not on_press (mouseup): on Linux the
+                                // Popover blur/close can destroy this row before mouseup, so the
+                                // Press event never fires and the name field stays empty. Windows
+                                // event order usually still delivers mouseup. Match vizia Select/
+                                // ComboBox: act on the press that cannot race with popup teardown.
+                                let apply = move |cx: &mut EventContext| {
+                                    let n = name_for_press.clone();
+                                    let profile = {
+                                        let cache = cache_c.lock().unwrap();
+                                        cache
+                                            .iter()
+                                            .find(|(name, _, _)| name == &n)
+                                            .map(|(_, _, p)| p.clone())
+                                    }
+                                    .or_else(|| find_profile(&n, &vp_c.get()));
+                                    if let Some(ref pf) = profile {
+                                        apply_profile(&params_c, &lens_c, pf);
+                                    }
+                                    // Drive name textbox + dropdown trigger (shared signal).
+                                    sel_c.set(n);
+                                    if let Some(pf) = profile {
+                                        save_last_preset(&vp_c.get(), &pf);
+                                    }
+                                    cx.emit(PopupEvent::Close);
+                                };
                                 HStack::new(cx, move |cx| {
                                     Label::new(cx, name_clone)
                                         .font_size(11.0)
@@ -950,22 +975,7 @@ pub fn build(
                                 .padding(Pixels(4.0))
                                 .background_color(Color::white())
                                 .alignment(Alignment::Center)
-                                .on_press(move |cx| {
-                                    let n = name_for_press.clone();
-                                    let profile = {
-                                        let cache = cache_c.lock().unwrap();
-                                        cache.iter().find(|(name, _, _)| name == &n).map(|(_, _, p)| p.clone())
-                                    }
-                                    .or_else(|| find_profile(&n, &vp_c.get()));
-                                    if let Some(ref pf) = profile {
-                                        apply_profile(&params_c, &lens_c, pf);
-                                    }
-                                    sel_c.set(n.clone());
-                                    if let Some(pf) = profile {
-                                        save_last_preset(&vp_c.get(), &pf);
-                                    }
-                                    cx.emit(PopupEvent::Close);
-                                });
+                                .on_press_down(apply);
                             }
                         })
                         .width(Auto)
@@ -987,8 +997,14 @@ pub fn build(
                 .height(Pixels(PRESET_H))
                 .padding(Pixels(4.0))
                 .font_size(11.0)
+                // Linux inherits white font from dark chrome → white-on-light textbox.
+                // Class + black color force readable text; keep light fill like other plugins.
+                .class("lx-preset-field")
+                .color(Color::black())
                 .background_color(PRESET_BG)
-                .border_color(PRESET_BORDER);
+                .border_color(PRESET_BORDER)
+                .border_width(Pixels(1.0))
+                .caret_color(Color::black());
 
             Element::new(cx).width(Pixels(6.0));
 

@@ -1,0 +1,40 @@
+[package]
+name = "lucent-relay"
+version = "1.0.0"
+edition = "2024"
+description = "LX Audiolabs — Lucent Relay (FFT sender, pure pass-through)"
+license = "GPL-3.0-or-later"
+authors = ["LX Audiolabs"]
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[features]
+# "standalone" dropped for the Vizia pilot - see plugins/lucent/Cargo.toml
+# for why (truce-standalone's "gui" feature pulls wgpu back in).
+default = ["clap"]
+clap = ["dep:truce-clap", "dep:clap-sys"]
+vst3 = ["dep:truce-vst3"]
+lv2  = ["dep:truce-lv2"]
+shell = ["truce/shell", "clap"]
+
+[dependencies]
+truce        = { workspace = true }
+truce-core   = { workspace = true }
+truce-params = { workspace = true }
+truce-clap   = { workspace = true, optional = true }
+truce-vst3   = { workspace = true, optional = true }
+truce-lv2    = { workspace = true, optional = true }
+truce-loader = { workspace = true }
+truce-vizia  = { workspace = true }
+vizia = { workspace = true }
+clap-sys     = { workspace = true, optional = true }
+
+lx-analysis = { path = "../../crates/lx-analysis" }
+lx-dsp      = { path = "../../crates/lx-dsp" }
+lx-ui       = { path = "../../crates/lx-ui" }
+tracing         = "0.1"
+realfft         = "3"
+
+[dev-dependencies]
+truce-test = { workspace = true }

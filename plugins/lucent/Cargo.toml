@@ -1,0 +1,49 @@
+[package]
+name = "lucent"
+version = "1.0.0"
+edition = "2024"
+description = "LX Audiolabs — Lucent (FFT spectrum analyser — receives relay data and displays masking)"
+license = "GPL-3.0-or-later"
+authors = ["LX Audiolabs"]
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[features]
+# "standalone" dropped for the Vizia pilot: truce-standalone's "gui"
+# feature (set workspace-wide) unconditionally pulls truce-gui -> wgpu
+# -> wgpu-hal, which is exactly the broken dependency chain this
+# migration exists to get away from. Not needed to prove out CLAP
+# embedding in a DAW. Re-add once truce-standalone offers a
+# non-wgpu/vizia-backed standalone window, or once we don't care
+# about wgpu leaking back in.
+default = ["clap"]
+clap = ["dep:truce-clap", "dep:clap-sys"]
+vst3 = ["dep:truce-vst3"]
+lv2  = ["dep:truce-lv2"]
+shell = ["truce/shell", "clap"]
+
+[dependencies]
+truce        = { workspace = true }
+truce-core   = { workspace = true }
+truce-params = { workspace = true }
+truce-clap   = { workspace = true, optional = true }
+truce-vst3   = { workspace = true, optional = true }
+truce-lv2    = { workspace = true, optional = true }
+truce-loader = { workspace = true }
+truce-vizia  = { workspace = true }
+# Same path truce-vizia + lx-ui pin (vizia-audio). Must be identical so
+# `Context`/
+# `Canvas`/etc are the same type, not just the same version number from a
+# different source (crates.io vs this git rev would be distinct types).
+vizia = { workspace = true }
+clap-sys     = { workspace = true, optional = true }
+
+lx-dsp      = { path = "../../crates/lx-dsp" }
+lx-analysis = { path = "../../crates/lx-analysis" }
+lx-ui       = { path = "../../crates/lx-ui" }
+tracing         = "0.1"
+realfft         = "3"
+
+[dev-dependencies]
+truce-test = { workspace = true }

@@ -83,6 +83,18 @@ const BUTTON_CSS: &str = r#"
 .lx-btn.disabled:hover {
     background-color: #1a1a1a;
 }
+/* Light preset name textbox (Aether) — force black text so Linux does not
+   inherit white font color from dark plugin chrome (white-on-light). */
+textbox.lx-preset-field {
+    color: #000000;
+    caret-color: #000000;
+}
+textbox.lx-preset-field:placeholder-shown {
+    color: #666666;
+}
+textbox.lx-preset-field:focus.caret {
+    caret-color: #000000;
+}
 "#;
 
 /// Add the shared button stylesheet to the current `Context`.

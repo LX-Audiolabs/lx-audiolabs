@@ -1,7 +1,7 @@
 //! Standalone Vizia profiler for shared canvas views.
 //!
 //! Stress-tests the Phase 2 optimizations by rendering several animated views
-//! Set `LX_UI_NO_LAYER_CACHE=1` to run the
+//! and updating them every frame.  Set `LX_UI_NO_LAYER_CACHE=1` to run the
 //! same workload without retained layer caching for an A/B comparison.  Set
 //! `LX_UI_PROFILE_LAYER_CACHE=1` to print per-call breakdown of static
 //! recording vs picture replay vs dynamic overlay.
